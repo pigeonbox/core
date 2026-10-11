@@ -136,12 +136,40 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 
 	cfg := &adminsvc.SystemConfig{}
 
-	// UploadEx：以当前 conf.Upload 为底稿，仅覆盖向导收集的两项
+	// UploadEx：以当前 conf.Upload 为底稿，仅覆盖向导收集的项
 	// （段级整体替换语义，缺底稿会把 open_upload 之外的上传项清成零值）
 	uploadEx := g.Upload
 	uploadEx.OpenUpload = sc.OpenUpload
 	uploadEx.UploadSize = int64(sc.UploadSizeMb) * 1024 * 1024
+
+	// 政策段（2026-10-12 扩容，全部可选：不传 = 保持底稿 yaml/内置默认）
+	if sc.IsSetAllowedExpireStyles() {
+		valid := map[string]bool{
+			"minute": true, "hour": true, "day": true, "week": true,
+			"month": true, "year": true, "forever": true,
+		}
+		styles := make([]string, 0, len(sc.AllowedExpireStyles))
+		for _, st := range sc.AllowedExpireStyles {
+			if valid[st] {
+				styles = append(styles, st)
+			}
+		}
+		uploadEx.AllowedExpireStyles = styles
+	}
+	if sc.GetMaxSaveDays() > 0 {
+		uploadEx.MaxSaveSecondsCap = int64(sc.GetMaxSaveDays()) * 24 * 60 * 60
+	}
+	if sc.IsSetAllowedExtensions() {
+		uploadEx.AllowedExtensions = normalizeExtensions(sc.AllowedExtensions)
+	}
 	cfg.UploadEx = &uploadEx
+
+	// 注册开关（User 段同为整体替换 → 以生效设置为底稿）
+	if sc.IsSetAllowRegistration() {
+		us := adminsvc.EffectiveUserSettings(ctx)
+		us.AllowUserRegistration = sc.GetAllowRegistration()
+		cfg.User = &us
+	}
 
 	// Base：站点名称/描述（向导基础段可选；携带时以向导值 + 现网端口整段写入）
 	if base := req.GetBaseConfig(); base != nil {
@@ -154,6 +182,23 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 		return err.Error()
 	}
 	return ""
+}
+
+// normalizeExtensions 扩展名归一（小写 + 点前缀 + 去空），防向导/配置面写入
+// ".JPG"/"jpg" 形态与 utils.IsAllowedExtension 的小写点前缀形态失配。
+func normalizeExtensions(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, e := range list {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // validateInitializeRequest 验证初始化请求
