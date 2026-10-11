@@ -7,6 +7,11 @@
 #     gen/router/*/middleware.go（鉴权接线）是唯一手工保留区，hz update 不会触碰。
 #   - gen/handler/ 的既有实现是手工业务代码：hz update 只会为"IDL 新增方法"创建
 #     新桩文件，既有文件最多被追加一行 model import（本脚本统一回退该噪音）。
+#   - ⚠️ 已知坑（2026-10-12）：hz 的"方法已存在"检查只看同名 service 文件，不看
+#     同包其他手写文件——admin 的 10 个 handler 实现在 admin_manage.go，全量再生成
+#     会在 admin_service.go 重复生成桩（redeclared 构建断）。症状=go build 报
+#     "X redeclared ... other declaration"；处置=git checkout -- gen/handler/<pkg>/
+#     还原被写脏的 service 文件（手写实现都在，桩是纯噪音）。
 #   - 模型不落在 core：模型真相源是 contracts（gen-model.sh 再生成到 contracts/gen/），
 #     本脚本把 hz 的模型产物写进临时目录并在结束后删除。
 #   - 路由守卫：bootstrap/routes_guard_test.go + ratelimit_bucket_test.go 以真实
@@ -68,12 +73,15 @@ rm -rf hzmodel
 # 仅摘除 hz update 追加的 hzmodel import 行（模型真相源在 contracts）。
 # 不可整文件 git checkout——会连带清掉未提交的手工 handler 实现
 # （2026-10-09 事故：用户分享组 5 个已实现 handler 被本循环整文件回退）。
-# 仅删 import 规格行(可带别名的 "…/hzmodel" 字面量独占一行);含 hzmodel
+# 仅删 import 规格行(可带别名的 "…/hzmodel[/子包]" 字面量独占一行);含 hzmodel
 # 字样的手写注释必须存活——旧 /hzmodel/d 全行匹配会误删(2026-10-10 IDL
 # 迁移实测吞掉一句手工注释)。
+# 2026-10-12 修复：正则此前只匹配 `/hzmodel/` 行尾形态，漏掉 `/hzmodel/setup`
+# 等子包 import（hz 实际产物形态），16 个 handler 被留死 import 致构建断——
+# 补 `(\/[^"]*)?` 子包段。
 git diff --name-only -- gen/handler | while read -r f; do
   if grep -q 'hzmodel' "$f"; then
-    sed -i '' -E '/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*[[:space:]]+)?"[^"]*\/hzmodel\/[[:space:]]*$/d' "$f"
+    sed -i '' -E '/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*[[:space:]]+)?"[^"]*\/hzmodel(\/[^"]*)?"[[:space:]]*$/d' "$f"
   fi
 done
 
