@@ -16,10 +16,10 @@ import (
 // 硬删/不存在的 code 恢复返回 200 静默 no-op——与 v0.11.1 修过的
 // hard-delete no-op 同构（0 行也成功，运维/集成误判已恢复）。
 func TestRestoreUserShare_NotInRecycleBin(t *testing.T) {
-	newTestDB(t)
-	svc := NewService("http://test", nil)
+	gormDB := newTestDB(t)
+	svc := NewService(gormDB, "http://test", nil)
 	ctx := context.Background()
-	repo := dao.NewFileCodeRepository()
+	repo := dao.NewFileCodeRepository(gormDB)
 
 	uid := uint(7)
 	require.NoError(t, repo.Create(ctx, &model.FileCode{Code: "RCY0001", UserID: &uid}))
@@ -41,10 +41,10 @@ func TestRestoreUserShare_NotInRecycleBin(t *testing.T) {
 }
 
 func TestRestoreUserShare_RestoresSoftDeleted(t *testing.T) {
-	newTestDB(t)
-	svc := NewService("http://test", nil)
+	gormDB := newTestDB(t)
+	svc := NewService(gormDB, "http://test", nil)
 	ctx := context.Background()
-	repo := dao.NewFileCodeRepository()
+	repo := dao.NewFileCodeRepository(gormDB)
 
 	uid := uint(7)
 	require.NoError(t, repo.Create(ctx, &model.FileCode{Code: "RCY0002", UserID: &uid}))

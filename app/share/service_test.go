@@ -12,7 +12,6 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/pkg/utils"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
 	"github.com/stretchr/testify/assert"
@@ -23,14 +22,12 @@ import (
 // =====================================================================
 // share service 单测
 //
-// 测试策略（遵循项目既有模式 notify_test.go / presign_test.go）：
-//   - Shape B service：构造函数不接受 *gorm.DB，DAO 通过 db.GetDB() 全局获取
-//   - 因此用 db.SetDatabaseInstance(sqlite内存) 注入测试 DB
+// 测试策略（注入式：构造直传 *gorm.DB，dao 去全局化终态）：
 //   - storage 用 hand-rolled mock（实现 storage.StorageInterface）
 //   - userService / notifySvc 用 hand-rolled mock（实现对应接口）
 // =====================================================================
 
-// newTestDB 构造内存 sqlite + AutoMigrate FileCode（首个使用全局注入模式的测试）。
+// newTestDB 构造内存 sqlite + AutoMigrate FileCode。
 func newTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -41,25 +38,26 @@ func newTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	// 注入到全局，使 DAO 的 db.GetDB() 指向测试库
-	db.SetDatabaseInstance(gormDB)
-	t.Cleanup(func() {
-		// 还原全局为 nil，避免污染其他测试
-		db.SetDatabaseInstance(nil)
-	})
 	return gormDB
+}
+
+// newTestServiceWithDB 同 newTestService，额外返回测试库句柄（测试直写记录用）。
+func newTestServiceWithDB(t *testing.T) (*Service, *gorm.DB, *mockStorage, *mockUserService, *mockNotifyService) {
+	t.Helper()
+	gormDB := newTestDB(t)
+	st := newMockStorage()
+	usr := newMockUserService()
+	notify := newMockNotifyService()
+	svc := NewService(gormDB, "http://localhost:12345", st)
+	svc.SetUserService(usr)
+	svc.SetNotifyService(notify)
+	return svc, gormDB, st, usr, notify
 }
 
 // newTestService 构造注入 mock 依赖的 share service。
 func newTestService(t *testing.T) (*Service, *mockStorage, *mockUserService, *mockNotifyService) {
 	t.Helper()
-	newTestDB(t)
-	st := newMockStorage()
-	usr := newMockUserService()
-	notify := newMockNotifyService()
-	svc := NewService("http://localhost:12345", st)
-	svc.SetUserService(usr)
-	svc.SetNotifyService(notify)
+	svc, _, st, usr, notify := newTestServiceWithDB(t)
 	return svc, st, usr, notify
 }
 

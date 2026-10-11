@@ -51,7 +51,7 @@ func (s *Service) GetShareMetadata(ctx context.Context, code string) (*ShareMeta
 	} else {
 		meta.Type = "file"
 		meta.Name = fc.Text // 约定：文件分享的 Text 字段存展示文件名（CreateShare 链路如此）
-		if n, cerr := s.fileRepo().CountByFileCodeID(ctx, fc.ID); cerr == nil {
+		if n, cerr := s.fileFileRepo.CountByFileCodeID(ctx, fc.ID); cerr == nil {
 			meta.FileCount = n
 		}
 	}

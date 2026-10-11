@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,10 +26,9 @@ func setCodeFold(t *testing.T, on bool) {
 }
 
 func TestGetFileByCode_CaseFold(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
+	svc, gormDB, _, _, _ := newTestServiceWithDB(t)
 	ctx := context.Background()
 
-	gormDB := db.GetDB()
 	require.NoError(t, gormDB.Create(&model.FileCode{
 		Code: "AbCd1234", Status: model.StatusNormal, ExpiredCount: -1,
 	}).Error)

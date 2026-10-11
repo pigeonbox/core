@@ -24,7 +24,6 @@ import (
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/transfer"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
@@ -34,10 +33,10 @@ const regRelPath = "uploads/2026/10/03/reg-test-uuid.txt"
 const regBody = "file-body-123"
 
 // daoTransferLogSink 测试桥：transfer.Sink 接 dao（生产由 bootstrap 注入同形实现）
-type daoTransferLogSink struct{}
+type daoTransferLogSink struct{ gormDB *gorm.DB }
 
-func (daoTransferLogSink) Create(ctx context.Context, e transfer.Entry) error {
-	return dao.NewTransferLogRepository().Create(ctx, &model.TransferLog{
+func (s daoTransferLogSink) Create(ctx context.Context, e transfer.Entry) error {
+	return dao.NewTransferLogRepository(s.gormDB).Create(ctx, &model.TransferLog{
 		Operation: e.Operation, FileCodeID: e.FileCodeID, FileCode: e.Code,
 		FileName: e.FileName, FileSize: e.FileSize, UserID: e.UserID,
 		APIKeyID: e.APIKeyID, Username: e.Username, IP: e.IP, DurationMs: e.DurationMs,
@@ -46,15 +45,13 @@ func (daoTransferLogSink) Create(ctx context.Context, e transfer.Entry) error {
 
 // newDownloadTestEnv 临时文件 DB（:memory: 多连接会各见独立库，异步日志会写不进）
 // + 临时目录存储 + 注入 handler 单例 + 关闭下载令牌
-func newDownloadTestEnv(t *testing.T) {
+func newDownloadTestEnv(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	g, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "test.db")), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.TransferLog{}))
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
-	transfer.SetSink(daoTransferLogSink{})
+	transfer.SetSink(daoTransferLogSink{gormDB: g})
 	// 先排水再撤 sink/删 TempDir：Record 异步落盘持有 DB 句柄，直删目录会竞争
 	// （历史摇摆：readonly database / TempDir RemoveAll directory not empty）
 	t.Cleanup(func() { transfer.Flush(3 * time.Second); transfer.SetSink(nil) })
@@ -66,7 +63,7 @@ func newDownloadTestEnv(t *testing.T) {
 
 	// 同包直接注入 handler 懒加载单例；关闭下载令牌（conf 零值 Enabled=false）
 	conf.SetGlobalConfig(&conf.AppConfiguration{})
-	shareSvc = shareService.NewService("http://test.local", storage.NewStorageService(&storage.StorageConfig{
+	shareSvc = shareService.NewService(g, "http://test.local", storage.NewStorageService(&storage.StorageConfig{
 		Type:     storage.StorageTypeLocal,
 		DataPath: dataPath,
 	}))
@@ -74,11 +71,12 @@ func newDownloadTestEnv(t *testing.T) {
 		shareSvc = nil
 		conf.SetGlobalConfig(nil)
 	})
+	return g
 }
 
-func insertFileCode(t *testing.T, fc *model.FileCode) {
+func insertFileCode(t *testing.T, g *gorm.DB, fc *model.FileCode) {
 	t.Helper()
-	require.NoError(t, dao.NewFileCodeRepository().Create(context.Background(), fc))
+	require.NoError(t, dao.NewFileCodeRepository(g).Create(context.Background(), fc))
 }
 
 func performDownload(t *testing.T, query string) (int, string) {
@@ -92,8 +90,8 @@ func performDownload(t *testing.T, query string) (int, string) {
 }
 
 func TestDownloadFileShare_ReturnsFileContent_NotFilename(t *testing.T) {
-	newDownloadTestEnv(t)
-	insertFileCode(t, &model.FileCode{
+	g := newDownloadTestEnv(t)
+	insertFileCode(t, g, &model.FileCode{
 		Code: "RegTest01", Text: "reg-test-uuid.txt", // 回归关键：原始文件名存于 Text
 		FilePath:     regRelPath,
 		UUIDFileName: "reg-test-uuid.txt",
@@ -105,8 +103,8 @@ func TestDownloadFileShare_ReturnsFileContent_NotFilename(t *testing.T) {
 }
 
 func TestDownloadTextShare_ReturnsText(t *testing.T) {
-	newDownloadTestEnv(t)
-	insertFileCode(t, &model.FileCode{
+	g := newDownloadTestEnv(t)
+	insertFileCode(t, g, &model.FileCode{
 		Code: "RegTest02", Text: "hello-text-body", FilePath: "", ExpiredCount: -1,
 	})
 	code, body := performDownload(t, "code=RegTest02")
@@ -115,8 +113,8 @@ func TestDownloadTextShare_ReturnsText(t *testing.T) {
 }
 
 func TestDownload_WritesTransferLog(t *testing.T) {
-	newDownloadTestEnv(t)
-	insertFileCode(t, &model.FileCode{
+	g := newDownloadTestEnv(t)
+	insertFileCode(t, g, &model.FileCode{
 		Code: "RegTest03", Text: "reg-test-uuid.txt",
 		FilePath:     regRelPath,
 		UUIDFileName: "reg-test-uuid.txt",
@@ -126,7 +124,7 @@ func TestDownload_WritesTransferLog(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		_, total, err := dao.NewTransferLogRepository().List(
+		_, total, err := dao.NewTransferLogRepository(g).List(
 			context.Background(), model.TransferLogQuery{Operation: "download"})
 		require.NoError(t, err)
 		if total >= 1 {

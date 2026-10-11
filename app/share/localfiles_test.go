@@ -31,7 +31,7 @@ func TestLocalFilesConfinement(t *testing.T) {
 	})
 	t.Cleanup(func() { conf.SetGlobalConfig(old) })
 
-	svc := NewService("", nil)
+	svc := NewService(newTestDB(t), "", nil)
 
 	// 列表：根目录与子目录
 	entries, err := svc.ListLocalFiles(0, "")

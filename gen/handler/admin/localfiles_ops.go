@@ -28,8 +28,8 @@ func SetShareService(s *shareService.Service) { shareSvc = s }
 
 func getOpsShareService() *shareService.Service {
 	if shareSvc == nil {
-		// 兜底实例仅测试/降级路径可达：与 gen/handler/share 同策略。
-		shareSvc = shareService.NewService("", nil)
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetShareService 先于服务流量）。
+		panic("share service not initialized: SetShareService must be called before serving")
 	}
 	return shareSvc
 }

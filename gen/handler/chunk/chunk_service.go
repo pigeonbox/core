@@ -58,9 +58,8 @@ func SetShareService(s *shareService.Service) {
 
 func getShareService() *shareService.Service {
 	if shareSvc == nil {
-		// 兜底实例仅测试/降级路径可达：未注入存储时由 app 层懒加载本地后端。
-		// baseURL 传空串：公开链接按请求来源动态推断（ResolveBase），不静态拼 host。
-		shareSvc = shareService.NewService("", nil)
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetShareService 先于服务流量）。
+		panic("share service not initialized: SetShareService must be called before serving")
 	}
 	return shareSvc
 }

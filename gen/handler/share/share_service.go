@@ -48,10 +48,10 @@ func SetShareService(s *shareService.Service) {
 
 func getShareService() *shareService.Service {
 	if shareSvc == nil {
-		// 兜底实例仅测试/降级路径可达：未注入存储时由 app 层懒加载本地后端。
-		// baseURL 传空串：与生产注入路径同策略，公开链接按请求来源动态推断
-		// （ResolveBase），绝不静态拼 host:port。
-		shareSvc = shareService.NewService("", nil)
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetShareService 先于
+		// 服务流量），不再静默自建裸实例——懒加载裸实例曾使配额/审核注入缺失
+		// 而形同虚设（治理 2026-10-03 回归记录）。
+		panic("share service not initialized: SetShareService must be called before serving")
 	}
 	return shareSvc
 }

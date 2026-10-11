@@ -42,7 +42,7 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 	}
 
 	// 解析子表行（需要存储相对路径；legacy 虚拟行走主表路径）
-	children, cerr := s.fileRepo().ListByFileCodeID(ctx, fc.ID)
+	children, cerr := s.fileFileRepo.ListByFileCodeID(ctx, fc.ID)
 	if cerr != nil {
 		return nil, cerr
 	}
@@ -106,7 +106,7 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 func (s *Service) singleFileStream(ctx context.Context, fc *model.FileCode, item *ShareFileItem) (io.ReadCloser, error) {
 	rel := fc.GetFilePath()
 	if item.ID != 0 {
-		if child, err := s.fileRepo().GetByID(ctx, item.ID); err == nil {
+		if child, err := s.fileFileRepo.GetByID(ctx, item.ID); err == nil {
 			rel = child.FilePath
 		}
 	}

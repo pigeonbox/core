@@ -9,7 +9,6 @@ import (
 	"github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/metrics"
-	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
 	"go.uber.org/zap"
@@ -47,14 +46,6 @@ type ShareFileItem struct {
 // maxMultiFiles 单个分享的文件数上限（防滥用；upload.max_files_per_share 可调）
 const maxMultiFiles = 100
 
-// fileCodeFileRepo 惰性子文件 DAO（share service 既有字段模式）
-func (s *Service) fileRepo() *dao.FileCodeFileRepository {
-	if s.fileFileRepo == nil {
-		s.fileFileRepo = dao.NewFileCodeFileRepository()
-	}
-	return s.fileFileRepo
-}
-
 // CreateMultiFileShare 创建多文件分享（1 个取件码 ↔ N 个文件）。
 //
 // 与单文件 CreateShare 的差异：
@@ -65,7 +56,6 @@ func (s *Service) fileRepo() *dao.FileCodeFileRepository {
 //
 // 失败时不回滚物理文件——调用方（handler）负责在 err != nil 时清理已落盘文件。
 func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) (*ShareResp, error) {
-	s.ensureRepository()
 	if len(req.Entries) == 0 {
 		return nil, errors.New("至少需要一个文件")
 	}
@@ -144,7 +134,7 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 			SortOrder:    i,
 		})
 	}
-	if err := s.fileRepo().CreateBatch(ctx, children); err != nil {
+	if err := s.fileFileRepo.CreateBatch(ctx, children); err != nil {
 		_ = s.fileCodeRepo.Delete(ctx, fileCode.ID)
 		return nil, fmt.Errorf("写入分享文件列表失败: %w", err)
 	}
@@ -188,7 +178,6 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 // ListShareFiles 取分享的文件列表（取件端展示/下载入口）。
 // 旧单文件分享无子表行：合成一条虚拟行（主表字段），保证前端统一渲染。
 func (s *Service) ListShareFiles(ctx context.Context, code string) ([]*ShareFileItem, error) {
-	s.ensureRepository()
 	fc, err := s.fileCodeRepo.GetByCode(ctx, code)
 	if err != nil {
 		return nil, err
@@ -198,7 +187,7 @@ func (s *Service) ListShareFiles(ctx context.Context, code string) ([]*ShareFile
 
 // shareFileItems 内部：FileCode → 文件项列表（子表优先，旧数据回退主表）
 func (s *Service) shareFileItems(ctx context.Context, fc *model.FileCode) ([]*ShareFileItem, error) {
-	children, err := s.fileRepo().ListByFileCodeID(ctx, fc.ID)
+	children, err := s.fileFileRepo.ListByFileCodeID(ctx, fc.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +215,6 @@ func (s *Service) shareFileItems(ctx context.Context, fc *model.FileCode) ([]*Sh
 // GetShareChild 取分享内的单个子文件（校验归属，防跨分享枚举文件 ID）。
 // legacy 虚拟行（id=0）返回主表合成的子项。
 func (s *Service) GetShareChild(ctx context.Context, code string, fileID uint) (*model.FileCode, *model.FileCodeFile, error) {
-	s.ensureRepository()
 	fc, err := s.fileCodeRepo.GetByCode(ctx, code)
 	if err != nil {
 		return nil, nil, err
@@ -234,7 +222,7 @@ func (s *Service) GetShareChild(ctx context.Context, code string, fileID uint) (
 	if fileID == 0 {
 		return fc, nil, nil // legacy：走主表字段下载
 	}
-	child, err := s.fileRepo().GetByID(ctx, fileID)
+	child, err := s.fileFileRepo.GetByID(ctx, fileID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil, errors.New("文件不存在")
@@ -250,7 +238,7 @@ func (s *Service) GetShareChild(ctx context.Context, code string, fileID uint) (
 // deletePhysicalChildren 删除分享的全部子文件（物理 + 软删子行）。
 // 物理删除失败记日志不阻断（与既有删除语义一致，孤儿由 janitor 对账）。
 func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
-	children, err := s.fileRepo().ListByFileCodeID(ctx, fileCodeID)
+	children, err := s.fileFileRepo.ListByFileCodeID(ctx, fileCodeID)
 	if err != nil {
 		logger.Warn("list children for delete failed", zap.Uint("file_code_id", fileCodeID), zap.Error(err))
 		return
@@ -267,7 +255,7 @@ func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
 				zap.String("path", c.FilePath), zap.Error(err))
 		}
 	}
-	if err := s.fileRepo().SoftDeleteByFileCodeIDs(ctx, []uint{fileCodeID}); err != nil {
+	if err := s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{fileCodeID}); err != nil {
 		logger.Warn("soft delete child rows failed", zap.Uint("file_code_id", fileCodeID), zap.Error(err))
 	}
 }

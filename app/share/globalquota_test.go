@@ -9,15 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
 // 回归：站点级全局存储配额（storage.quota）——全通道闸口 checkUploadCaps，
 // 统计口径=存活 file_codes 合计（软删除不计），quota=0 不限。
 func TestGlobalStorageQuota(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
-	gormDB := db.GetDB()
+	svc, gormDB, _, _, _ := newTestServiceWithDB(t)
 	ctx := context.Background()
 
 	setQuota := func(q int64) {

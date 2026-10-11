@@ -97,7 +97,7 @@ type PickupCodeMinter interface {
 
 type Service struct {
 	fileCodeRepo *dao.FileCodeRepository
-	fileFileRepo *dao.FileCodeFileRepository // 多文件子表 DAO（惰性初始化）
+	fileFileRepo *dao.FileCodeFileRepository // 多文件子表 DAO（构造注入）
 	userService  UserServiceInterface
 	storage      storage.StorageInterface
 	baseURL      string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
@@ -192,7 +192,6 @@ type ShareBlockedError = pkgerrors.ShareBlocked
 
 // SetShareStatus 管理员设置分享管控状态（禁用/恢复/待审），返回受影响行数。
 func (s *Service) SetShareStatus(ctx context.Context, ids []uint, status string) (int64, error) {
-	s.ensureRepository()
 	return s.fileCodeRepo.UpdateStatusByIDs(ctx, ids, status)
 }
 
@@ -202,21 +201,14 @@ func IsTextShare(fc *model.FileCode) bool {
 	return fc.IsTextShare()
 }
 
-func NewService(baseURL string, storageService storage.StorageInterface) *Service {
-	// 延迟初始化 repository，确保数据库已经准备好
+func NewService(gormDB *gorm.DB, baseURL string, storageService storage.StorageInterface) *Service {
 	return &Service{
-		fileCodeRepo: nil, // 延迟初始化
+		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
+		fileFileRepo: dao.NewFileCodeFileRepository(gormDB),
 		userService:  nil,
 		storage:      storageService,
 		baseURL:      baseURL,
 		notifySvc:    nil,
-	}
-}
-
-// ensureRepository 确保repository已初始化
-func (s *Service) ensureRepository() {
-	if s.fileCodeRepo == nil {
-		s.fileCodeRepo = dao.NewFileCodeRepository()
 	}
 }
 
@@ -264,7 +256,6 @@ func (s *Service) createWithCode(ctx context.Context, customCode string, build f
 	// 懒初始化守卫：本方法与 createWithRetry 是仅有的不经公开入口直用
 	// s.fileCodeRepo 的写库路径，此前 nil repo 靠零尺寸 struct 的 nil receiver
 	// 巧合可跑（dao 注入化改造后必炸，2026-10-10 随改造真修）。
-	s.ensureRepository()
 	if customCode == "" {
 		return s.createWithRetry(ctx, build)
 	}
@@ -301,7 +292,6 @@ func (s *Service) GenerateCode() string {
 
 // createWithRetry 通用写库重试（code 唯一冲突时换码重试，最多 5 次）。
 func (s *Service) createWithRetry(ctx context.Context, build func(code string) *model.FileCode) (*model.FileCode, error) {
-	s.ensureRepository()
 	var fc *model.FileCode
 	err := retry.Do(ctx, retry.Config{
 		Attempts:  5,
@@ -325,7 +315,6 @@ func (s *Service) createWithRetry(ctx context.Context, build func(code string) *
 
 // ShareText 分享文本
 func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp, error) {
-	s.ensureRepository()
 
 	fileCode, err := s.createWithCode(ctx, req.CustomCode, func(code string) *model.FileCode {
 		return &model.FileCode{
@@ -461,7 +450,6 @@ func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize i
 	// fail-open（配额是治理项而非安全项，不因统计异常拒绝所有上传）。
 	if cfg := conf.GetGlobalConfig(); cfg != nil && cfg.Storage.Quota > 0 {
 		quota := cfg.Storage.Quota
-		s.ensureRepository()
 		if used, err := s.fileCodeRepo.GetTotalSize(ctx); err == nil {
 			if used+totalSize > quota {
 				metrics.RecordRejected(metrics.RejectQuota)
@@ -550,7 +538,7 @@ func (s *Service) applyPending(ctx context.Context, id uint, code, reason, owner
 		target = model.StatusBlocked
 		if _, berr := s.SetShareStatus(ctx, []uint{id}, target); berr != nil {
 			logger.Error("pending fallback blocked failed, removing share", zap.String("code", code), zap.Error(berr))
-			_ = s.fileRepo().SoftDeleteByFileCodeIDs(ctx, []uint{id}) // 文本分享无子行，no-op
+			_ = s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{id}) // 文本分享无子行，no-op
 			_ = s.fileCodeRepo.Delete(ctx, id)
 			return "", &ContentRejectedError{}
 		}
@@ -569,7 +557,6 @@ func (s *Service) ShareFile(ctx context.Context, req *ShareFileReq) (*ShareResp,
 // CreateShare 创建分享记录（ShareFile 的语义化别名，便于其他 service 调用）
 // 行为：单用户上传上限检查 → 存储配额检查 → 生成 code → 写 file_codes 表 → 返回 share_code / url
 func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareResp, error) {
-	s.ensureRepository()
 
 	// 单用户单次上传上限 + 存储配额强制执行
 	if err := s.checkUploadCaps(ctx, req.UserID, req.Size); err != nil {
@@ -630,7 +617,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 				Size:         req.Size,
 				FileHash:     req.FileHash,
 			}
-			if err := s.fileRepo().CreateBatch(ctx, []*model.FileCodeFile{child}); err != nil {
+			if err := s.fileFileRepo.CreateBatch(ctx, []*model.FileCodeFile{child}); err != nil {
 				logger.Warn("write child file row failed (fallback to legacy fields)",
 					zap.String("code", fc.Code), zap.Error(err))
 			}
@@ -672,7 +659,6 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 
 // GetFileByCode 通过代码获取文件
 func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCode, error) {
-	s.ensureRepository()
 
 	fileCode, err := s.fileCodeRepo.GetByCode(ctx, code)
 	if err != nil && conf.CodeFoldEnabledOrDefault() {
@@ -699,13 +685,11 @@ func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCo
 
 // GetFilesByUserID 获取用户的文件列表
 func (s *Service) GetFilesByUserID(ctx context.Context, userID uint, page, pageSize int) ([]*model.FileCode, int64, error) {
-	s.ensureRepository()
 	return s.fileCodeRepo.GetFilesByUserIDWithPagination(ctx, userID, page, pageSize)
 }
 
 // DeleteFile 删除文件
 func (s *Service) DeleteFile(ctx context.Context, fileID uint, userID *uint) error {
-	s.ensureRepository()
 
 	// 联邦撤销需要口令,先查（best-effort:查不到跳过钩子,不影响删除本身）
 	var fedCode string
@@ -745,7 +729,6 @@ func (s *Service) DeleteFile(ctx context.Context, fileID uint, userID *uint) err
 //
 // 关键：先删 DB 再删物理，避免"物理删了但 DB 没删"的孤儿反向场景。
 func (s *Service) DeleteFileByCode(ctx context.Context, code string, userID uint) error {
-	s.ensureRepository()
 
 	// 1. 根据 code 查询文件记录
 	file, err := s.fileCodeRepo.GetByCode(ctx, code)
@@ -797,7 +780,6 @@ func (s *Service) DeleteFileByCode(ctx context.Context, code string, userID uint
 // UpdateFileUsage 原子扣减剩余次数（DB 为准，防并发超卖）。
 // 返回 ok=true 表示扣减成功（可下载）；ok=false 表示已耗尽。
 func (s *Service) UpdateFileUsage(ctx context.Context, code string) (bool, error) {
-	s.ensureRepository()
 	return s.fileCodeRepo.DecrementExpiredCount(ctx, code)
 }
 
@@ -806,7 +788,6 @@ func (s *Service) UpdateFileUsage(ctx context.Context, code string) (bool, error
 // authedByToken：调用方已校验有效下载令牌（令牌由取件查询在密码/取件校验通过后
 // 签发，等价于已认证——否则密码保护分享"凭令牌下载"还要再输一次密码，令牌失效）。
 func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP string, authedByToken bool) (*model.FileCode, error) {
-	s.ensureRepository()
 
 	fileCode, err := s.GetFileByCode(ctx, code)
 	if err != nil {
@@ -852,7 +833,6 @@ func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP
 // 通知去重：同 code 5 分钟内只通知一次（用 LastNotifiedAt 字段）。
 // 若 file_codes 找不到，静默跳过。
 func (s *Service) RecordViewerAndNotify(ctx context.Context, code, viewerIP, viewerDetail string) error {
-	s.ensureRepository()
 	if err := s.fileCodeRepo.UpdateViewer(ctx, code, viewerIP); err != nil {
 		// 文件可能不存在，记日志后跳过
 		logger.Warn("update viewer failed", zap.String("code", code), zap.Error(err))
@@ -937,7 +917,6 @@ func deletedAtToPtr(d gorm.DeletedAt) *time.Time {
 // 筛选条件收散参由本域转换，transport 无需感知 dao.UserShareFilter。
 // 返回契约生成模型（wire 形态由 idl/share.thrift 定义，handler 只组信封）。
 func (s *Service) ListUserShares(ctx context.Context, userID uint, status, search string, page, pageSize int) ([]*sharemodel.UserShareItemData, int64, error) {
-	s.ensureRepository()
 	files, total, err := s.fileCodeRepo.GetUserSharesWithFilter(ctx, userID, dao.UserShareFilter{
 		Status:   status,
 		Search:   search,
@@ -953,7 +932,7 @@ func (s *Service) ListUserShares(ctx context.Context, userID uint, status, searc
 	for _, f := range files {
 		ids = append(ids, f.ID)
 	}
-	counts, cerr := s.fileRepo().CountByFileCodeIDs(ctx, ids)
+	counts, cerr := s.fileFileRepo.CountByFileCodeIDs(ctx, ids)
 	if cerr != nil {
 		counts = nil // 计数失败降级为 0，不阻断列表
 	}
@@ -969,7 +948,6 @@ func (s *Service) ListUserShares(ctx context.Context, userID uint, status, searc
 
 // BatchDeleteUserShares 批量软删除
 func (s *Service) BatchDeleteUserShares(ctx context.Context, userID uint, codes []string) (int, error) {
-	s.ensureRepository()
 	n, err := s.fileCodeRepo.BatchSoftDeleteByCodes(ctx, userID, codes)
 	if err == nil && n > 0 {
 		// 有实际删除才撤销联邦公告；批量接口不回报实际命中的 code 子集，
@@ -983,7 +961,6 @@ func (s *Service) BatchDeleteUserShares(ctx context.Context, userID uint, codes 
 
 // BatchExtendUserShares 批量延期
 func (s *Service) BatchExtendUserShares(ctx context.Context, userID uint, codes []string, newExpireAt *time.Time) (int, error) {
-	s.ensureRepository()
 	n, err := s.fileCodeRepo.BatchExtendByCodes(ctx, userID, codes, newExpireAt)
 	if err == nil && n > 0 {
 		// 联邦重公告(延期改变公告的 expires_at;误推未延期码由心跳按 entries 重新对齐)
@@ -998,7 +975,6 @@ func (s *Service) BatchExtendUserShares(ctx context.Context, userID uint, codes 
 // 显式报错——此前 0 行也返回 nil，硬删后 restore 表现为 200 静默 no-op
 // （2026-10-08 修复；与 v0.11.1 hard-delete 同款收口）。
 func (s *Service) RestoreUserShare(ctx context.Context, userID uint, code string) error {
-	s.ensureRepository()
 	n, err := s.fileCodeRepo.RestoreByCode(ctx, userID, code)
 	if err != nil {
 		return err
@@ -1022,7 +998,6 @@ var ErrNotInRecycleBin = errors.New("分享不在回收站中（不存在或未�
 
 // HardDeleteUserShare 永久删除软删除的分享
 func (s *Service) HardDeleteUserShare(ctx context.Context, userID uint, code string) error {
-	s.ensureRepository()
 	n, err := s.fileCodeRepo.HardDeleteByCode(ctx, userID, code)
 	if err != nil {
 		return err
@@ -1037,7 +1012,6 @@ func (s *Service) HardDeleteUserShare(ctx context.Context, userID uint, code str
 // RecordViewer 记录取件人 IP / 时间（用于 owner 查看取件历史）
 // 取件流程中调用。返回 fileCode 供后续通知使用
 func (s *Service) RecordViewer(ctx context.Context, code, viewerIP string) (*model.FileCode, error) {
-	s.ensureRepository()
 	if err := s.fileCodeRepo.UpdateViewer(ctx, code, viewerIP); err != nil {
 		return nil, err
 	}

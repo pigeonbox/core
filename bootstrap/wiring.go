@@ -70,7 +70,7 @@ func initThriftIDLServices(database *gorm.DB) {
 		baseURL,
 		signingKey)
 	// 2.1 注入 share service（Complete 时写分享表）
-	shareSvc := shareService.NewService(baseURL, getBootstrapStorageService())
+	shareSvc := shareService.NewService(database, baseURL, getBootstrapStorageService())
 	presignHandler.SetShareService(presignShareAdapter{shareSvc})
 	// IDL share/chunk 路由此前未注入，走懒加载裸实例（配额/审核等注入缺失），统一共用
 	shareHandler.SetShareService(shareSvc)
