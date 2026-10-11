@@ -15,8 +15,8 @@ import (
 // CountByHealth 与 ListWithFilter(Health) 必须同源（applyHealthFilter 单点），
 // 此测试锁两接口的数字一致性——仪表盘卡与文件管理页过滤视图不能各说各话。
 func TestCountByHealth_And_ListFilter(t *testing.T) {
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	now := time.Now()

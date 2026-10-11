@@ -3,30 +3,22 @@ package dao
 import (
 	"context"
 
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 )
 
 // NotifyRepository 通知数据访问（与其他 service 的 DAO 一致，走全局 db.GetDB()）。
 type NotifyRepository struct {
-	conn *gorm.DB // nil = 走全局 db.GetDB()（兼容历史无参构造）；非 nil = 注入实例
+	conn *gorm.DB // 构造注入（去全局化终态，见 doc.go）
 }
 
-// NewNotifyRepository 构造 repository；可选注入 *gorm.DB（测试隔离/嵌入式场景），缺省走全局 db.GetDB()。注入约定见 doc.go。
-func NewNotifyRepository(gormDB ...*gorm.DB) *NotifyRepository {
-	r := &NotifyRepository{}
-	if len(gormDB) > 0 {
-		r.conn = gormDB[0]
-	}
-	return r
+// NewNotifyRepository 构造 repository；gormDB 必填（去全局化终态，无全局回退），约定见 doc.go。
+func NewNotifyRepository(gormDB *gorm.DB) *NotifyRepository {
+	return &NotifyRepository{conn: gormDB}
 }
 
 func (r *NotifyRepository) db() *gorm.DB {
-	if r != nil && r.conn != nil { // r != nil 守卫：兼容历史 nil receiver 直调，见 doc.go
-		return r.conn
-	}
-	return db.GetDB()
+	return r.conn
 }
 
 // Create 创建通知

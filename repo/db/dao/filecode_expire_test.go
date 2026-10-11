@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,14 +21,12 @@ func newExpireTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := g.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
 	return g
 }
 
 func TestDecrementExpiredCount_Limited(t *testing.T) {
-	newExpireTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newExpireTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 	require.NoError(t, repo.Create(ctx, &model.FileCode{Code: "C1", ExpiredCount: 2}))
 
@@ -44,8 +41,8 @@ func TestDecrementExpiredCount_Limited(t *testing.T) {
 }
 
 func TestDecrementExpiredCount_Exhausted(t *testing.T) {
-	newExpireTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newExpireTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 	require.NoError(t, repo.Create(ctx, &model.FileCode{Code: "C2", ExpiredCount: 1}))
 
@@ -63,8 +60,8 @@ func TestDecrementExpiredCount_Exhausted(t *testing.T) {
 }
 
 func TestDecrementExpiredCount_Unlimited(t *testing.T) {
-	newExpireTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newExpireTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 	require.NoError(t, repo.Create(ctx, &model.FileCode{Code: "C3", ExpiredCount: -1}))
 
@@ -80,8 +77,8 @@ func TestDecrementExpiredCount_Unlimited(t *testing.T) {
 }
 
 func TestDecrementExpiredCount_NotFound(t *testing.T) {
-	newExpireTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newExpireTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ok, err := repo.DecrementExpiredCount(context.Background(), "NOEXIST")
 	require.NoError(t, err)
 	assert.False(t, ok) // 不存在 → 0 行受影响 → ok=false

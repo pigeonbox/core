@@ -17,8 +17,8 @@ func uintPtr(v uint) *uint { return &v }
 // 因此 text/file 分类必须按 file_path 判定，Text != "" 不能作为文本分享依据——
 // 否则文件分享被误归文本（「文件」tab 恒空回归，2026-10-06 实测）。
 func TestGetUserSharesWithFilterTypeClassification(t *testing.T) {
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	fileShare := &model.FileCode{
@@ -66,8 +66,8 @@ func TestGetUserSharesWithFilterTypeClassification(t *testing.T) {
 // 出现「表格空态却显示共 N 条」（2026-10-08 用户报告）；后端补 viewed
 // 过滤后 total 与列表同源。
 func TestGetUserSharesWithFilterViewed(t *testing.T) {
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	viewedAt := time.Now()

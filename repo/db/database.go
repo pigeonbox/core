@@ -15,10 +15,9 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// DB 全局数据库实例。
-// 设计权衡：采用全局单例避免 service/dao 层构造期依赖注入复杂度——dao.NewXxxRepository()
-// 内部调 GetDB() 获取连接，无需每个 service 持有 *gorm.DB。测试时用 SetDatabaseInstance
-// 注入内存 sqlite。未来若迁移到 DI 容器（如 wire/fx），可改为构造注入。
+// DB 全局数据库实例——**装配层显式句柄**（dao 去全局化终态）：
+// dao 与 app/ 一律构造注入 *gorm.DB，不读全局；本句柄仅供 bootstrap 初始化
+// 结果出口（identity loader/定时任务/库式下游 fnos·qnap SSO 显式取用）。
 var DB *gorm.DB
 
 func Init(cfg *conf.DatabaseConfig) error {

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,14 +22,12 @@ func newGovernanceTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := g.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
 	return g
 }
 
 func TestUpdateStatusByIDs(t *testing.T) {
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	fc1 := &model.FileCode{Code: "AAA11111"}
@@ -65,8 +62,8 @@ func TestUpdateStatusByIDs(t *testing.T) {
 }
 
 func TestListWithFilter(t *testing.T) {
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	uid := uint(7)
@@ -123,8 +120,8 @@ func TestListWithFilter(t *testing.T) {
 
 func TestListWithFilter_ExpiredOrEscape(t *testing.T) {
 	// 回归：expired=true 的 OR 曾缺外层括号，逃逸 AND 链绕过全部过滤条件
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	uid := uint(7)
@@ -162,8 +159,8 @@ func boolPtr(b bool) *bool { return &b }
 
 func TestGetByHashAndSize_GovernanceFilter(t *testing.T) {
 	// 回归：秒传检索只命中 normal + 无密码的分享
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	fixtures := []*model.FileCode{
@@ -189,8 +186,8 @@ func TestGetByHashAndSize_SkipsExpiredPicksNewestUsable(t *testing.T) {
 	// 回归二（2026-10-10 冒烟 S11b 暴露）：同哈希的过期旧记录不得永久遮蔽
 	// 后来的有效分享——此前 First() 按 id 升序取最旧且不过滤过期，一条过期
 	// 记录在库即令该文件秒传对所有人永久失效。
-	newGovernanceTestDB(t)
-	repo := NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
 
 	expired := time.Now().Add(-24 * time.Hour)

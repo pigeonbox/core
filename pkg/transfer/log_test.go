@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
@@ -15,10 +14,10 @@ import (
 )
 
 // daoSink 测试桥：落盘能力接 dao（生产由 bootstrap 注入同形实现）。
-type daoSink struct{}
+type daoSink struct{ gormDB *gorm.DB }
 
-func (daoSink) Create(ctx context.Context, e Entry) error {
-	return dao.NewTransferLogRepository().Create(ctx, &model.TransferLog{
+func (s daoSink) Create(ctx context.Context, e Entry) error {
+	return dao.NewTransferLogRepository(s.gormDB).Create(ctx, &model.TransferLog{
 		Operation: e.Operation, FileCodeID: e.FileCodeID, FileCode: e.Code,
 		FileName: e.FileName, FileSize: e.FileSize, UserID: e.UserID,
 		APIKeyID: e.APIKeyID, Username: e.Username, IP: e.IP, DurationMs: e.DurationMs,
@@ -34,9 +33,7 @@ func TestRecord_PersistsAttribution(t *testing.T) {
 	sqlDB, err := g.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
-	SetSink(daoSink{})
+	SetSink(daoSink{gormDB: g})
 	t.Cleanup(func() { Flush(3 * time.Second); SetSink(nil) })
 
 	uid, keyID := uint(9), uint(4)
@@ -49,7 +46,7 @@ func TestRecord_PersistsAttribution(t *testing.T) {
 	var got model.TransferLog
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		items, _, err := dao.NewTransferLogRepository().List(
+		items, _, err := dao.NewTransferLogRepository(g).List(
 			context.Background(), model.TransferLogQuery{Operation: OpUpload})
 		if err == nil && len(items) > 0 {
 			got = *items[0]

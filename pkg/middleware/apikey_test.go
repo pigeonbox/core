@@ -14,7 +14,6 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
@@ -28,14 +27,14 @@ import (
 // =====================================================================
 
 // daoAPIKeyStore 测试桥：持久化能力接 dao（生产由 bootstrap 注入同形实现）。
-type daoAPIKeyStore struct{}
+type daoAPIKeyStore struct{ gormDB *gorm.DB }
 
-func (daoAPIKeyStore) FindActiveByHash(ctx context.Context, hash string) (*APIKeyPrincipal, error) {
-	key, err := dao.NewUserAPIKeyRepository().GetActiveByHash(ctx, hash)
+func (s daoAPIKeyStore) FindActiveByHash(ctx context.Context, hash string) (*APIKeyPrincipal, error) {
+	key, err := dao.NewUserAPIKeyRepository(s.gormDB).GetActiveByHash(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
-	user, err := dao.NewUserRepository().GetByID(ctx, key.UserID)
+	user, err := dao.NewUserRepository(s.gormDB).GetByID(ctx, key.UserID)
 	if err != nil || user.Status != "active" {
 		// 封禁/停用用户的 Key 视为无效 Key（同生产桥语义）
 		return nil, errInvalidAPIKey
@@ -43,11 +42,11 @@ func (daoAPIKeyStore) FindActiveByHash(ctx context.Context, hash string) (*APIKe
 	return &APIKeyPrincipal{KeyID: key.ID, UserID: user.ID, Username: user.Username, Role: user.Role}, nil
 }
 
-func (daoAPIKeyStore) TouchLastUsed(ctx context.Context, keyID uint, ip string) error {
-	return dao.NewUserAPIKeyRepository().TouchLastUsed(ctx, keyID, ip)
+func (s daoAPIKeyStore) TouchLastUsed(ctx context.Context, keyID uint, ip string) error {
+	return dao.NewUserAPIKeyRepository(s.gormDB).TouchLastUsed(ctx, keyID, ip)
 }
 
-func newAPIKeyTestEnv(t *testing.T) {
+func newAPIKeyTestEnv(t *testing.T) *gorm.DB {
 	t.Helper()
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -55,18 +54,17 @@ func newAPIKeyTestEnv(t *testing.T) {
 	sqlDB, err := g.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
-	SetAPIKeyStore(daoAPIKeyStore{})
+	SetAPIKeyStore(daoAPIKeyStore{gormDB: g})
 	t.Cleanup(func() { SetAPIKeyStore(nil) })
 	// 重置全局锁定器为纯内存实例 + 清空触碰节流/单Key限流表，测试间隔离（同包直取）
 	InitDefaultLockout(nil)
 	t.Cleanup(func() { InitDefaultLockout(nil) })
 	touchThrottle = sync.Map{}
 	perKeyLimiters = sync.Map{}
+	return g
 }
 
-func newFixtureUser(t *testing.T, status string) *model.User {
+func newFixtureUser(t *testing.T, g *gorm.DB, status string) *model.User {
 	t.Helper()
 	u := &model.User{
 		Username:     fmt.Sprintf("u_%d", time.Now().UnixNano()),
@@ -75,18 +73,18 @@ func newFixtureUser(t *testing.T, status string) *model.User {
 		Status:       status,
 		Role:         "user",
 	}
-	require.NoError(t, dao.NewUserRepository().Create(context.Background(), u))
+	require.NoError(t, dao.NewUserRepository(g).Create(context.Background(), u))
 	return u
 }
 
-func newFixtureKey(t *testing.T, userID uint, mutate func(*model.UserAPIKey)) (string, *model.UserAPIKey) {
+func newFixtureKey(t *testing.T, g *gorm.DB, userID uint, mutate func(*model.UserAPIKey)) (string, *model.UserAPIKey) {
 	t.Helper()
 	plain := apiKeyPlainPrefix + fmt.Sprintf("%032x", time.Now().UnixNano())
 	rec := &model.UserAPIKey{UserID: userID, Name: "test", Prefix: plain[:12], KeyHash: sha256Hex(plain)}
 	if mutate != nil {
 		mutate(rec)
 	}
-	require.NoError(t, dao.NewUserAPIKeyRepository().Create(context.Background(), rec))
+	require.NoError(t, dao.NewUserAPIKeyRepository(g).Create(context.Background(), rec))
 	return plain, rec
 }
 
@@ -118,18 +116,18 @@ func hdr(k, v string) ut.Header { return ut.Header{Key: k, Value: v} }
 // --- 提取规则 ---
 
 func TestOptionalAPIKey_NoKey_Anonymous(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	newFixtureKey(t, g, u.ID, nil)
 	code, body, identity, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe")
 	assert.Equal(t, 200, code, body)
 	assert.Empty(t, identity, "未携带 Key 必须匿名放行，不注入身份")
 }
 
 func TestOptionalAPIKey_QueryParamIgnored(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 	// query 传 Key 必须被无视（防日志/Referer 泄露），按匿名处理
 	code, body, identity, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe?api_key="+plain)
 	assert.Equal(t, 200, code, body)
@@ -137,9 +135,9 @@ func TestOptionalAPIKey_QueryParamIgnored(t *testing.T) {
 }
 
 func TestOptionalAPIKey_ValidKey_InjectsIdentity(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, rec := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, rec := newFixtureKey(t, g, u.ID, nil)
 
 	code, body, identity, ctx := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe",
 		hdr("X-API-Key", plain))
@@ -160,9 +158,9 @@ func TestOptionalAPIKey_ValidKey_InjectsIdentity(t *testing.T) {
 }
 
 func TestOptionalAPIKey_BearerPbSkPrefix(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 	code, body, identity, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe",
 		hdr("Authorization", "Bearer "+plain))
 	assert.Equal(t, 200, code, body)
@@ -170,9 +168,9 @@ func TestOptionalAPIKey_BearerPbSkPrefix(t *testing.T) {
 }
 
 func TestOptionalAPIKey_ApiKeyScheme(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 	code, body, identity, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe",
 		hdr("Authorization", "ApiKey "+plain))
 	assert.Equal(t, 200, code, body)
@@ -182,9 +180,9 @@ func TestOptionalAPIKey_ApiKeyScheme(t *testing.T) {
 // --- fail-closed：携带即校验 ---
 
 func TestOptionalAPIKey_InvalidKey_401(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	newFixtureKey(t, g, u.ID, nil)
 	code, body, identity, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe",
 		hdr("X-API-Key", apiKeyPlainPrefix+"wrongwrong"))
 	assert.Equal(t, 401, code)
@@ -193,9 +191,9 @@ func TestOptionalAPIKey_InvalidKey_401(t *testing.T) {
 }
 
 func TestOptionalAPIKey_ExpiredKey_401(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, func(k *model.UserAPIKey) {
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, func(k *model.UserAPIKey) {
 		past := time.Now().Add(-time.Hour)
 		k.ExpiresAt = &past
 	})
@@ -204,17 +202,17 @@ func TestOptionalAPIKey_ExpiredKey_401(t *testing.T) {
 }
 
 func TestOptionalAPIKey_RevokedKey_401(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, func(k *model.UserAPIKey) { k.Revoked = true })
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, func(k *model.UserAPIKey) { k.Revoked = true })
 	code, _, _, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe", hdr("X-API-Key", plain))
 	assert.Equal(t, 401, code)
 }
 
 func TestOptionalAPIKey_BannedUser_401(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "banned")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "banned")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 	code, _, _, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe", hdr("X-API-Key", plain))
 	assert.Equal(t, 401, code, "封禁用户的 Key 必须失效")
 }
@@ -222,13 +220,13 @@ func TestOptionalAPIKey_BannedUser_401(t *testing.T) {
 // --- 总开关 ---
 
 func TestOptionalAPIKey_DisabledSwitch_401(t *testing.T) {
-	newAPIKeyTestEnv(t)
+	g := newAPIKeyTestEnv(t)
 	conf.SetGlobalConfig(&conf.AppConfiguration{Security: conf.SecurityConfig{
 		APIToken: conf.APITokenConfig{Enabled: false},
 	}})
 	t.Cleanup(func() { conf.SetGlobalConfig(nil) })
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 	code, body, identity, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe", hdr("X-API-Key", plain))
 	assert.Equal(t, 401, code, "开关关闭后携带 Key 的请求必须 401")
 	assert.Empty(t, identity)
@@ -246,13 +244,13 @@ func TestAllowPerKey_TokenBucket(t *testing.T) {
 }
 
 func TestOptionalAPIKey_PerKeyRateLimit_429(t *testing.T) {
-	newAPIKeyTestEnv(t)
+	g := newAPIKeyTestEnv(t)
 	conf.SetGlobalConfig(&conf.AppConfiguration{Security: conf.SecurityConfig{
 		APIToken: conf.APITokenConfig{Enabled: true, PerKeyQPS: 1, PerKeyBurst: 1},
 	}})
 	t.Cleanup(func() { conf.SetGlobalConfig(nil) })
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 
 	code1, _, _, _ := performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe", hdr("X-API-Key", plain))
 	assert.Equal(t, 200, code1, "首次放行")
@@ -267,9 +265,9 @@ func TestOptionalAPIKey_PerKeyRateLimit_429(t *testing.T) {
 // --- lockout 防爆破 ---
 
 func TestOptionalAPIKey_LockoutAfterMaxFailures(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 	bad := apiKeyPlainPrefix + "notarealkey000"
 	// 默认 MaxAttempts=10：前 10 次 401，第 11 次起 429（连有效 Key 也拦）
 	for i := 0; i < 10; i++ {
@@ -295,10 +293,10 @@ func TestShouldTouchLastUsed_Throttle(t *testing.T) {
 }
 
 func TestOptionalAPIKey_TouchLastUsedThrottled(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, rec := newFixtureKey(t, u.ID, nil)
-	repo := dao.NewUserAPIKeyRepository()
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, rec := newFixtureKey(t, g, u.ID, nil)
+	repo := dao.NewUserAPIKeyRepository(g)
 	ctx := context.Background()
 
 	_, _, _, _ = performProbe(t, []app.HandlerFunc{OptionalAPIKey()}, "/probe", hdr("X-API-Key", plain))
@@ -315,10 +313,10 @@ func TestOptionalAPIKey_TouchLastUsedThrottled(t *testing.T) {
 // --- UserOrAPIKey ---
 
 func TestUserOrAPIKey_ValidJWT(t *testing.T) {
-	newAPIKeyTestEnv(t)
+	g := newAPIKeyTestEnv(t)
 	auth.SetJWTSecret("test-secret-for-apikey")
 	t.Cleanup(func() { auth.SetJWTSecret("") })
-	u := newFixtureUser(t, "active")
+	u := newFixtureUser(t, g, "active")
 	token, err := auth.GenerateToken(u.ID, u.Username, u.Role)
 	require.NoError(t, err)
 	code, body, identity, captured := performProbe(t, []app.HandlerFunc{UserOrAPIKey()}, "/probe",
@@ -331,9 +329,9 @@ func TestUserOrAPIKey_ValidJWT(t *testing.T) {
 }
 
 func TestUserOrAPIKey_ValidKey(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 	code, body, identity, _ := performProbe(t, []app.HandlerFunc{UserOrAPIKey()}, "/probe", hdr("X-API-Key", plain))
 	assert.Equal(t, 200, code, body)
 	assert.Equal(t, u.ID, identity["user_id"])
@@ -359,9 +357,9 @@ func TestUserOrAPIKey_InvalidJWT_401(t *testing.T) {
 // --- OptionalIdentity（JWT 路为既有语义：无效 JWT 降级匿名） ---
 
 func TestOptionalIdentity_MixedCredentials(t *testing.T) {
-	newAPIKeyTestEnv(t)
-	u := newFixtureUser(t, "active")
-	plain, _ := newFixtureKey(t, u.ID, nil)
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
 
 	// 有效 Key → 身份注入
 	code, _, identity, _ := performProbe(t, OptionalIdentity(), "/probe", hdr("X-API-Key", plain))

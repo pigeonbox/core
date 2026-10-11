@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,16 +25,9 @@ func newInjectTestDB(t *testing.T) *gorm.DB {
 	return g
 }
 
-// TestInjectedRepositoryWorks 示范注入消费：全局 DB 为 nil 时，
-// NewFileCodeRepository(gormDB) 注入实例仍能完整走通 Create + GetByCode，
-// 证明 repository 不触碰任何全局 DB 状态（去全局化目标）。
+// TestInjectedRepositoryWorks 注入消费走通 Create + GetByCode，
+// 证明 repository 全部读写落在注入实例（去全局化终态）。
 func TestInjectedRepositoryWorks(t *testing.T) {
-	// 显式清空全局实例，确定性复现"未初始化全局 DB"的进程环境
-	// （同包其他用例经 cleanup 恢复 nil，这里再钉一次不依赖执行顺序）。
-	db.SetDatabaseInstance(nil)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
-	require.Nil(t, db.GetDB(), "前置条件：全局 DB 必须为 nil")
-
 	g := newInjectTestDB(t)
 	repo := NewFileCodeRepository(g)
 	ctx := context.Background()
@@ -49,12 +41,8 @@ func TestInjectedRepositoryWorks(t *testing.T) {
 }
 
 // TestInjectedRepositoriesAreIsolated 注入隔离性：两个独立 :memory: 实例
-// 各自注入的 repository 互不可见对方数据（无参构造走全局，本用例全程
-// 全局为 nil——若哪个 repository 暗中回退全局会直接 panic 暴露）。
+// 各自注入的 repository 互不可见对方数据（构造必填后不存在全局回退路径）。
 func TestInjectedRepositoriesAreIsolated(t *testing.T) {
-	db.SetDatabaseInstance(nil)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
-
 	g1, g2 := newInjectTestDB(t), newInjectTestDB(t)
 	repo1, repo2 := NewFileCodeRepository(g1), NewFileCodeRepository(g2)
 	ctx := context.Background()
@@ -64,10 +52,9 @@ func TestInjectedRepositoriesAreIsolated(t *testing.T) {
 	_, err := repo2.GetByCode(ctx, "ONLYIN01")
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound, "实例 2 不得读到实例 1 的数据")
 
-	// 无参构造兼容性：全局置为 g2 后，历史无参调用与新注入路径读到同一份库
-	db.SetDatabaseInstance(g2)
-	require.NoError(t, NewFileCodeRepository().Create(ctx, &model.FileCode{Code: "GLOBAL02", Status: model.StatusNormal}))
-	got, err := repo2.GetByCode(ctx, "GLOBAL02")
+	// 同实例注入的两个 repo 读写同一份库
+	repo1b := NewFileCodeRepository(g1)
+	got, err := repo1b.GetByCode(ctx, "ONLYIN01")
 	require.NoError(t, err)
-	assert.Equal(t, "GLOBAL02", got.Code)
+	assert.Equal(t, "ONLYIN01", got.Code)
 }

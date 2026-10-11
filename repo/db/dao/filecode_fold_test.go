@@ -17,8 +17,8 @@ import (
 
 func newFoldTestDB(t *testing.T) *FileCodeRepository {
 	t.Helper()
-	newGovernanceTestDB(t)
-	return NewFileCodeRepository()
+	g := newGovernanceTestDB(t)
+	return NewFileCodeRepository(g)
 }
 
 func TestGetByCodeFolded(t *testing.T) {
