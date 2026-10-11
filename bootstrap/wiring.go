@@ -64,7 +64,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	publicSetupSvc = setupSvc
 	setupHandler.SetSetupService(setupSvc)
 
-	// 1. notify service（走 DAO，内部用全局 db.GetDB()）
+	// 1. notify service（构造注入 database）
 	notifyApp := notifyAppService.NewService(database)
 	// 1.1 注入定制路由的 notify service
 	customHandler.SetNotifyService(notifyApp)

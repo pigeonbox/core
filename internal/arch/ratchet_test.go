@@ -271,3 +271,110 @@ func TestGlobalConfigRatchet(t *testing.T) {
 		t.Errorf("发现 %d 处全局配置棘轮违规:\n%s", len(violations), strings.Join(violations, "\n"))
 	}
 }
+
+// globalDBAccessBaseline 规则 10 基线：db.GetDB()/SetDatabaseInstance 按文件计数。
+// 合法面=repo/db（定义/句柄出口）与 bootstrap（装配层显式句柄，带注释）。
+// app/、gen/、transport/、pkg/ 一律为 0（dao 去全局化终态，2026-10-11）。
+var globalDBAccessBaseline = map[string]int{
+	"bootstrap/adapters.go":      5,
+	"bootstrap/apikey_expiry.go": 2,
+	"bootstrap/database.go":      1,
+	"bootstrap/deployment.go":    1,
+	"bootstrap/routes_custom.go": 2,
+	"bootstrap/tasks.go":         1,
+	"bootstrap/wiring.go":        0,
+}
+
+// TestGlobalDBAccessRatchet 规则 10：全局 DB 句柄访问面棘轮。
+// 扫描面=全模块非测试 .go 文件，排除 repo/db（定义处）与 dao doc 注释；
+// bootstrap 计数只减不增，其余目录任何出现即红。
+func TestGlobalDBAccessRatchet(t *testing.T) {
+	root := moduleRoot(t)
+	var violations []string
+
+	walkProductionGoFiles(t, root, func(rel, abs string) {
+		if strings.HasPrefix(rel, "repo/db/") || strings.HasPrefix(rel, "internal/arch/") {
+			return
+		}
+		content, err := os.ReadFile(abs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(content)
+		n := strings.Count(body, "db.GetDB()") + strings.Count(body, "db.SetDatabaseInstance(")
+		if n == 0 {
+			return
+		}
+		base, known := globalDBAccessBaseline[rel]
+		switch {
+		case strings.HasPrefix(rel, "bootstrap/"):
+			if !known {
+				violations = append(violations, fmt.Sprintf(
+					"规则10 新增全局 DB 句柄消费面: %s（%d 处）——装配层新增须在基线登记并带「装配层显式句柄」注释", rel, n))
+			} else if n > base {
+				violations = append(violations, fmt.Sprintf(
+					"规则10 全局 DB 句柄访问点增加: %s %d → %d（棘轮只许减不许增）", rel, base, n))
+			}
+		default:
+			violations = append(violations, fmt.Sprintf(
+				"规则10 非装配层全局 DB 句柄访问: %s（%d 处）——dao/app 层必须构造注入，禁 db.GetDB/SetDatabaseInstance", rel, n))
+		}
+	})
+
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Errorf("发现 %d 处全局 DB 棘轮违规:\n%s", len(violations), strings.Join(violations, "\n"))
+	}
+}
+
+// TestDAOConstructorExplicit 规则 9：dao.New*Repository 构造调用必须带显式实参。
+// 构造签名已是必填 *gorm.DB（编译器强制），本守卫防签名被改回变参可选形态。
+func TestDAOConstructorExplicit(t *testing.T) {
+	root := moduleRoot(t)
+	var violations []string
+
+	walkProductionGoFiles(t, root, func(rel, abs string) {
+		if strings.HasPrefix(rel, "internal/arch/") {
+			return
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, abs, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			name := sel.Sel.Name
+			isRepoCtor := strings.HasPrefix(name, "New") && strings.HasSuffix(name, "Repository")
+			if !isRepoCtor {
+				return true
+			}
+			// dao 包内直接调用（无限定）或 dao. 限定调用
+			if pkgIdent.Name != "dao" && pkgIdent.Name != "dao_preview" {
+				return true
+			}
+			if len(call.Args) == 0 {
+				violations = append(violations, fmt.Sprintf(
+					"规则9 无参 dao 构造: %s:%d %s.%s()——构造必须显式注入 *gorm.DB（防变参化回潮）",
+					rel, fset.Position(call.Pos()).Line, pkgIdent.Name, name))
+			}
+			return true
+		})
+	})
+
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Errorf("发现 %d 处 dao 构造违规:\n%s", len(violations), strings.Join(violations, "\n"))
+	}
+}

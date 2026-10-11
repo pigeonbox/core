@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// NotifyRepository 通知数据访问（与其他 service 的 DAO 一致，走全局 db.GetDB()）。
+// NotifyRepository 通知数据访问（构造注入 *gorm.DB，去全局化终态）。
 type NotifyRepository struct {
 	conn *gorm.DB // 构造注入（去全局化终态，见 doc.go）
 }
