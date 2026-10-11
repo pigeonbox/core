@@ -7,7 +7,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -23,9 +22,6 @@ import (
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
-	"github.com/pigeonbox/core/pkg/resp"
-	"github.com/pigeonbox/core/repo/db/dao"
-	"github.com/pigeonbox/core/repo/db/model"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
 	customMw "github.com/pigeonbox/core/transport/http/middleware"
 )
@@ -202,50 +198,11 @@ func customizedRegister(r *server.Hertz) {
 		})
 	})
 
-	// ===== 管理端操作审计日志查询（P0-C：此前审计只写不查/没写）=====
-	// + 管理端增强：用户 CRUD / 文件管理 / 富统计（AdminMiddleware 保护）（管理面）
-	if config.ServesAdminPlane() {
-		adminAPI := r.Group("/admin", middleware.AdminMiddleware())
-		{
-			// 本地文件管理（对标上游 2.7.0 data/local；路径=root索引+白名单内相对路径）
-			adminAPI.GET("/local-files", customHandler.AdminListLocalFiles)
-			adminAPI.DELETE("/local-files", customHandler.AdminDeleteLocalFile)
-			adminAPI.POST("/local-files/import", customHandler.AdminImportLocalFile)
-			// 设置测试端点（SMTP 发信 / OIDC discovery）
-			adminAPI.POST("/notify/smtp/test", customHandler.AdminTestSMTP)
-			adminAPI.POST("/oidc/test", customHandler.AdminTestOIDC)
-			adminAPI.GET("/activities", func(ctx context.Context, c *app.RequestContext) {
-				page, pageSize := 1, 20
-				if v, err := strconv.Atoi(c.Query("page")); err == nil && v > 0 {
-					page = v
-				}
-				if v, err := strconv.Atoi(c.Query("page_size")); err == nil && v > 0 && v <= 200 {
-					pageSize = v
-				}
-				query := model.AdminOperationLogQuery{
-					Action:   c.Query("action"),
-					Actor:    c.Query("actor"),
-					Page:     page,
-					PageSize: pageSize,
-				}
-				if s := c.Query("success"); s == "true" || s == "false" {
-					b := s == "true"
-					query.Success = &b
-				}
-				repo := dao.NewAdminOperationLogRepository()
-				logs, total, err := repo.List(ctx, query)
-				if err != nil {
-					resp.NewErrorWithMessage(c, 50001, "查询审计日志失败: "+err.Error())
-					return
-				}
-				resp.Page(c, logs, total, page, pageSize)
-			})
-
-			// 管理端增强（用户 CRUD / 文件管理 / 富统计 / 传输日志 / 分享治理 /
-			// 用户配置）2026-10-10 IDL 化（idl/admin.thrift），由 gen/router/admin
-			// 注册，customHandler 手写注册摘除（wire 形态逐字段保形）。
-		}
-	}
+	// ===== 管理端增强面（用户 CRUD / 文件管理 / 富统计 / 传输日志 / 分享治理 /
+	// 用户配置 / 本地文件管理 / 设置测试端点 / 审计日志）——
+	// 2026-10-10 分两波 IDL 化（idl/admin.thrift），由 gen/router/admin 注册
+	//（standalone 走 GeneratedRegister 全量组合，admin 副本按部署模式 case 注册，
+	// AdminMiddleware 组内），customHandler 手写注册全部摘除（wire 逐字段保形）。
 
 	// ===== 前端构建产物静态资源 =====
 	// Vite 输出的 index.html 用根级绝对路径引用资源（/assets/xxx、/vite.svg），

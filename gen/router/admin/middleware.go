@@ -227,3 +227,53 @@ func _adminresetuserpasswordMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _adminactivitiesMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _admindeletelocalfileMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _adminlistlocalfilesMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _local_filesMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _adminimportlocalfileMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _notifyMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _smtpMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _admintestsmtpMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _oidcMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _admintestoidcMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

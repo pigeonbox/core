@@ -73,7 +73,7 @@ rm -rf hzmodel
 # 迁移实测吞掉一句手工注释)。
 git diff --name-only -- gen/handler | while read -r f; do
   if grep -q 'hzmodel' "$f"; then
-    sed -i '' -E '/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*[[:space:]]+)?"[^"]*hzmodel"[[:space:]]*$/d' "$f"
+    sed -i '' -E '/^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*[[:space:]]+)?"[^"]*\/hzmodel\/[[:space:]]*$/d' "$f"
   fi
 done
 

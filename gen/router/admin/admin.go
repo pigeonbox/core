@@ -19,9 +19,12 @@ func Register(r *server.Hertz) {
 	root := r.Group("/", rootMw()...)
 	{
 		_admin := root.Group("/admin", _adminMw()...)
+		_admin.GET("/activities", append(_adminactivitiesMw(), admin.AdminActivities)...)
 		_admin.GET("/config", append(_admingetconfigMw(), admin.AdminGetConfig)...)
 		_admin.PUT("/config", append(_adminupdateconfigMw(), admin.AdminUpdateConfig)...)
 		_admin.GET("/files", append(_adminlistfilesMw(), admin.AdminListFiles)...)
+		_admin.DELETE("/local-files", append(_admindeletelocalfileMw(), admin.AdminDeleteLocalFile)...)
+		_admin.GET("/local-files", append(_adminlistlocalfilesMw(), admin.AdminListLocalFiles)...)
 		_admin.POST("/login", append(_adminloginMw(), admin.AdminLogin)...)
 		_admin.GET("/stats", append(_adminstatsMw(), admin.AdminStats)...)
 		_admin.GET("/users", append(_adminlistusersMw(), admin.AdminListUsers)...)
@@ -49,8 +52,23 @@ func Register(r *server.Hertz) {
 			}
 		}
 		{
+			_local_files := _admin.Group("/local-files", _local_filesMw()...)
+			_local_files.POST("/import", append(_adminimportlocalfileMw(), admin.AdminImportLocalFile)...)
+		}
+		{
 			_logs := _admin.Group("/logs", _logsMw()...)
 			_logs.GET("/transfer", append(_admintransferlogsMw(), admin.AdminTransferLogs)...)
+		}
+		{
+			_notify := _admin.Group("/notify", _notifyMw()...)
+			{
+				_smtp := _notify.Group("/smtp", _smtpMw()...)
+				_smtp.POST("/test", append(_admintestsmtpMw(), admin.AdminTestSMTP)...)
+			}
+		}
+		{
+			_oidc := _admin.Group("/oidc", _oidcMw()...)
+			_oidc.POST("/test", append(_admintestoidcMw(), admin.AdminTestOIDC)...)
 		}
 		{
 			_stats := _admin.Group("/stats", _statsMw()...)

@@ -11,8 +11,8 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	setupmodel "github.com/pigeonbox/contracts/gen/setup"
 	adminsvc "github.com/pigeonbox/core/app/admin"
-	"github.com/pigeonbox/core/conf"
 	setupservice "github.com/pigeonbox/core/app/setup"
+	"github.com/pigeonbox/core/conf"
 )
 
 var setupService = setupservice.NewService()

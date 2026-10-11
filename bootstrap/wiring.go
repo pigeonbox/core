@@ -81,6 +81,8 @@ func initThriftIDLServices(database *gorm.DB) {
 	presignHandler.SetObjectStore(getBootstrapStorageService())
 	// 2.2 注入定制路由的 share service
 	customHandler.SetShareService(shareSvc)
+	// 2.2.1 admin gen handlers（local-files 管理等）共用同一全站实例
+	adminGenHandler.SetShareService(shareSvc)
 	// 2.3 注入 notify service（取件时给 owner 发通知）
 	shareSvc.SetNotifyService(notifyApp) // *Service 已实现 CreateForUserSimple
 	// 内容审核钩子（治理 2026-10-03）：moderation.enabled=false 或词表为空时全部放行；
