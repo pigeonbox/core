@@ -12,6 +12,7 @@ import (
 
 	notifyApp "github.com/pigeonbox/core/app/notify"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 )
 
@@ -21,8 +22,8 @@ const (
 )
 
 func startAPIKeyExpiryNotify() {
-	repo := dao.NewUserAPIKeyRepository()
-	notifySvc := notifyApp.NewService()
+	repo := dao.NewUserAPIKeyRepository(db.GetDB()) // 装配层显式句柄（dao 去全局化后合法消费点）
+	notifySvc := notifyApp.NewService(db.GetDB())   // 装配层显式句柄
 
 	run := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

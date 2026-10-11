@@ -8,6 +8,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 // InitializeSystemReq 系统初始化请求
@@ -21,9 +22,9 @@ type Service struct {
 	userRepo *dao.UserRepository
 }
 
-func NewService() *Service {
+func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
-		userRepo: dao.NewUserRepository(),
+		userRepo: dao.NewUserRepository(gormDB),
 	}
 }
 

@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -30,9 +29,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	g := newTestDB(t)
-	db.SetDatabaseInstance(g) // 注入全局，使 DAO 的 db.GetDB() 指向测试库
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
-	return NewService()
+	return NewService(g)
 }
 
 // TestCreate_CreateNotify 创建通知

@@ -15,12 +15,23 @@ import (
 	"github.com/pigeonbox/core/conf"
 )
 
-var setupService = setupservice.NewService()
+var setupService *setupservice.Service
+
+// SetSetupService 注入装配级 setup 服务（bootstrap 调用）。
+func SetSetupService(s *setupservice.Service) { setupService = s }
+
+func getSetupService() *setupservice.Service {
+	if setupService == nil {
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证先于服务流量注入）。
+		panic("setup service not initialized: SetSetupService must be called before serving")
+	}
+	return setupService
+}
 
 // CheckInitialization .
 // @router /setup/check [GET]
 func CheckInitialization(ctx context.Context, c *app.RequestContext) {
-	initialized, err := setupService.IsSystemInitialized(ctx)
+	initialized, err := getSetupService().IsSystemInitialized(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -61,7 +72,7 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 检查系统是否已初始化
-	initialized, err := setupService.IsSystemInitialized(ctx)
+	initialized, err := getSetupService().IsSystemInitialized(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -78,7 +89,7 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 调用 service 初始化系统
-	err = setupService.InitializeSystem(ctx, &setupservice.InitializeSystemReq{
+	err = getSetupService().InitializeSystem(ctx, &setupservice.InitializeSystemReq{
 		AdminUsername: req.AdminUsername,
 		AdminPassword: req.AdminPassword,
 		AdminEmail:    req.AdminEmail,

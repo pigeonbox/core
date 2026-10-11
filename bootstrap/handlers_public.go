@@ -139,8 +139,9 @@ func safeHexColor(raw string) string {
 	return ""
 }
 
-// publicSetupSvc /api/config 查询初始化状态用（无依赖，惰性安全）
-var publicSetupSvc = setupApp.NewService()
+// publicSetupSvc /api/config 查询初始化状态用（initThriftIDLServices 装配赋值；
+// 包级 var 在 InitDatabase 之前求值的自建构造已随 dao 去全局化移除）
+var publicSetupSvc *setupApp.Service
 
 // metricsHandler 暴露 Prometheus 指标（/metrics）。
 // Hertz 与标准 net/http 接口不同，不能直接用 promhttp.Handler()，

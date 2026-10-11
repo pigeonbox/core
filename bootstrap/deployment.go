@@ -37,6 +37,7 @@ import (
 	genstorage "github.com/pigeonbox/core/gen/router/storage"
 	genuser "github.com/pigeonbox/core/gen/router/user"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/redis"
 	"github.com/pigeonbox/core/storage"
 	"go.uber.org/zap"
@@ -288,7 +289,7 @@ func applyPropagatedConfig() {
 		applyNotifyConfig(notifySvcInstance, &config.Notify)
 	}
 	o := &config.Security.OIDC
-	customHandler.SetOIDCService(oidcApp.NewService(oidcApp.Config{
+	customHandler.SetOIDCService(oidcApp.NewService(db.GetDB(), oidcApp.Config{ // 装配层显式句柄
 		Enabled:          o.Enabled,
 		Issuer:           o.Issuer,
 		ClientID:         o.ClientID,

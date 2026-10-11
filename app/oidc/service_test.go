@@ -15,7 +15,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/pigeonbox/core/pkg/auth"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -66,7 +65,7 @@ func fakeIdP(t *testing.T) (*httptest.Server, *int) {
 	return srv, &tokHits
 }
 
-func newOIDCDB(t *testing.T) {
+func newOIDCDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -74,17 +73,16 @@ func newOIDCDB(t *testing.T) {
 	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(gormDB)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
+	return gormDB
 }
 
 func TestOIDC_FullFlow(t *testing.T) {
-	newOIDCDB(t)
+	oidcDB := newOIDCDB(t)
 	auth.SetJWTSecret("oidc-test-secret-0123456789abcdef")
 	srv, tokHits := fakeIdP(t)
 
 	// Issuer 用真实 http 地址（discovery 走网络），其余端点为假 IdP 固定值
-	svc := NewService(Config{
+	svc := NewService(oidcDB, Config{
 		Enabled:      true,
 		Issuer:       srv.URL,
 		ClientID:     "client-1",
@@ -118,7 +116,7 @@ func TestOIDC_FullFlow(t *testing.T) {
 	claims, err := auth.ParseToken(token)
 	require.NoError(t, err)
 	var u model.User
-	require.NoError(t, db.GetDB().Where("oidc_sub = ?", "user-sub-42").First(&u).Error)
+	require.NoError(t, oidcDB.Where("oidc_sub = ?", "user-sub-42").First(&u).Error)
 	assert.Equal(t, claims.UserID, u.ID)
 	assert.Equal(t, "alice", u.Username)
 	assert.Equal(t, "alice@example.com", u.Email)
@@ -130,22 +128,22 @@ func TestOIDC_FullFlow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, claims.UserID, claims2.UserID)
 	var cnt int64
-	db.GetDB().Model(&model.User{}).Count(&cnt)
+	oidcDB.Model(&model.User{}).Count(&cnt)
 	assert.Equal(t, int64(1), cnt)
 }
 
 func TestOIDC_EmailMatchBindsSub(t *testing.T) {
-	newOIDCDB(t)
+	oidcDB := newOIDCDB(t)
 	auth.SetJWTSecret("oidc-test-secret-0123456789abcdef")
 	srv, _ := fakeIdP(t)
-	svc := NewService(Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: "s"})
+	svc := NewService(oidcDB, Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: "s"})
 
 	// 先以密码注册同邮箱用户
 	existing := &model.User{
 		Username: "alice-local", Email: "alice@example.com",
 		PasswordHash: "x", Role: "user", Status: "active",
 	}
-	require.NoError(t, db.GetDB().Create(existing).Error)
+	require.NoError(t, oidcDB.Create(existing).Error)
 
 	token, err := svc.ExchangeCallback(context.Background(), "http://pb.local", "the-code", svc.signState(time.Now().Unix(), "n3"), "n3")
 	require.NoError(t, err)
@@ -154,20 +152,20 @@ func TestOIDC_EmailMatchBindsSub(t *testing.T) {
 	assert.Equal(t, existing.ID, claims.UserID, "同邮箱应绑定既有账号而非建新号")
 
 	var u model.User
-	require.NoError(t, db.GetDB().First(&u, existing.ID).Error)
+	require.NoError(t, oidcDB.First(&u, existing.ID).Error)
 	assert.Equal(t, "user-sub-42", u.OidcSub, "登录时应回写 sub 绑定")
 }
 
 // TestOIDC_BannedUserRejected 封禁用户回调拒发 JWT（2026-10-08 加固）：
 // 密码登录在同位检查拒绝非 active 用户，OIDC 匹配命中不得绕过。
 func TestOIDC_BannedUserRejected(t *testing.T) {
-	newOIDCDB(t)
+	oidcDB := newOIDCDB(t)
 	auth.SetJWTSecret("oidc-test-secret-0123456789abcdef")
 	srv, _ := fakeIdP(t)
-	svc := NewService(Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: "s"})
+	svc := NewService(oidcDB, Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: "s"})
 
 	// 已有 sub 绑定但被封禁的账号
-	require.NoError(t, db.GetDB().Create(&model.User{
+	require.NoError(t, oidcDB.Create(&model.User{
 		Username: "banned", OidcSub: "user-sub-42",
 		PasswordHash: "x", Role: "user", Status: "disabled",
 	}).Error)

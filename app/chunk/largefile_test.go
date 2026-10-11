@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -18,12 +17,11 @@ import (
 // 断点续传、分片幂等）。以真实量级参数（25MB = 5MB×5 分片）驱动
 // init → 部分上传（模拟断线）→ 断点查询 → 幂等重传 → 补齐完成 → 秒传命中 全链路。
 func TestLargeFileChunkLifecycle(t *testing.T) {
-	newTestDB(t)
+	gormDB := newTestDB(t)
 	// 秒传检索查 file_codes，补迁移
-	gormDB := db.GetDB()
 	require.NoError(t, gormDB.AutoMigrate(&model.FileCode{}))
 
-	svc := NewService()
+	svc := NewService(gormDB)
 	ctx := context.Background()
 
 	const totalChunks = 5

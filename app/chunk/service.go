@@ -10,6 +10,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
+	"gorm.io/gorm"
 )
 
 type InitiateUploadReq struct {
@@ -91,10 +92,10 @@ type Service struct {
 	fallbackStorage storage.StorageInterface
 }
 
-func NewService() *Service {
+func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
-		chunkRepo:    dao.NewChunkRepository(),
-		fileCodeRepo: dao.NewFileCodeRepository(),
+		chunkRepo:    dao.NewChunkRepository(gormDB),
+		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
 	}
 }
 

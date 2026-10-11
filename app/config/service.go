@@ -33,6 +33,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // Service 配置中心服务。
@@ -51,23 +52,37 @@ type Service struct {
 
 // NewService 构造独立实例（测试/嵌入式；全站运行时请用 Default()——
 // 单行读改写语义不允许多实例并存，见包注释）。
-func NewService() *Service {
+func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
-		configRepo:         dao.NewSystemConfigRepository(),
-		adminOperationRepo: dao.NewAdminOperationLogRepository(),
+		configRepo:         dao.NewSystemConfigRepository(gormDB),
+		adminOperationRepo: dao.NewAdminOperationLogRepository(gormDB),
 		// config 保持 nil，由 GetConfig 懒加载默认值 → DB 持久化配置
 	}
 }
 
-// defaultSvc 包级惰性单例（DB 未初始化时内部按"回退默认值"降级，不会 panic）。
+// defaultSvc 包级单例（InitDefault 显式初始化；单实例约束见包注释）。
 var (
-	defaultSvcOnce sync.Once
-	defaultSvc     *Service
+	defaultMu  sync.RWMutex
+	defaultSvc *Service
 )
 
-// Default 全站共享的配置中心实例（单实例约束见包注释）。
+// InitDefault 注册全站配置中心单例（bootstrap 在 InitDatabase 后调用；幂等）。
+// 单实例约束见包注释：system_configs 单行读改写不允许多实例并存。
+func InitDefault(gormDB *gorm.DB) {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	if defaultSvc == nil {
+		defaultSvc = NewService(gormDB)
+	}
+}
+
+// Default 全站共享的配置中心实例。未 InitDefault 直接取用是装配错误，fail-loud。
 func Default() *Service {
-	defaultSvcOnce.Do(func() { defaultSvc = NewService() })
+	defaultMu.RLock()
+	defer defaultMu.RUnlock()
+	if defaultSvc == nil {
+		panic("config: Default() before InitDefault——bootstrap 必须在 InitDatabase 后调 InitDefault")
+	}
 	return defaultSvc
 }
 

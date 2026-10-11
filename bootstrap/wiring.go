@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	adminApp "github.com/pigeonbox/core/app/admin"
+	anonymousApp "github.com/pigeonbox/core/app/anonymous"
 	chunkApp "github.com/pigeonbox/core/app/chunk"
 	configApp "github.com/pigeonbox/core/app/config"
 	federationApp "github.com/pigeonbox/core/app/federation"
@@ -18,8 +19,10 @@ import (
 	moderationApp "github.com/pigeonbox/core/app/moderation"
 	notifyAppService "github.com/pigeonbox/core/app/notify"
 	oidcApp "github.com/pigeonbox/core/app/oidc"
+	presignApp "github.com/pigeonbox/core/app/presign"
 	previewApp "github.com/pigeonbox/core/app/preview"
 	requestApp "github.com/pigeonbox/core/app/request"
+	setupApp "github.com/pigeonbox/core/app/setup"
 	shareService "github.com/pigeonbox/core/app/share"
 	storageApp "github.com/pigeonbox/core/app/storage"
 	userService "github.com/pigeonbox/core/app/user"
@@ -30,6 +33,7 @@ import (
 	previewHandler "github.com/pigeonbox/core/gen/handler/preview"
 	ratelimitHandler "github.com/pigeonbox/core/gen/handler/ratelimit"
 	requestgenhandler "github.com/pigeonbox/core/gen/handler/request"
+	setupHandler "github.com/pigeonbox/core/gen/handler/setup"
 	shareHandler "github.com/pigeonbox/core/gen/handler/share"
 	anonHandler "github.com/pigeonbox/core/gen/handler/share_anonymous"
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
@@ -46,12 +50,22 @@ import (
 // initThriftIDLServices 初始化 thrift IDL 对应的新服务
 // 关联 internal/app/ → gen/http/handler/ 各 SetXxx 入口
 func initThriftIDLServices(database *gorm.DB) {
+	// 0. 单例显式初始化（dao 去全局化：懒单例退役；顺序契约 config 先于 admin）
+	configApp.InitDefault(database)
+	adminApp.InitDefault(database)
+
 	// 0. 恢复 DB 持久化的运行时存储配置（管理端在线切换的后端类型/s3/webdav）
 	restoreRuntimeStorage()
 	configApp.Default().RestoreAdminSettings()
 
+	// 0.1 setup 服务（/setup 向导 + /api/config 初始化状态；IDL handler 与
+	// handlers_public 共用同一实例）
+	setupSvc := setupApp.NewService(database)
+	publicSetupSvc = setupSvc
+	setupHandler.SetSetupService(setupSvc)
+
 	// 1. notify service（走 DAO，内部用全局 db.GetDB()）
-	notifyApp := notifyAppService.NewService()
+	notifyApp := notifyAppService.NewService(database)
 	// 1.1 注入定制路由的 notify service
 	customHandler.SetNotifyService(notifyApp)
 	// 1.2 供配置广播热重建使用（public 副本收到变更后重挂 Webhook/SMTP 渠道）
@@ -66,9 +80,9 @@ func initThriftIDLServices(database *gorm.DB) {
 	// presign 签名密钥：conf.PresignSigningKey 单源（PB_PRESIGN_SIGNING_KEY
 	// 优先，缺省回退 jwt_secret；chunk 会话令牌同键，取用语义收口一处）
 	signingKey := conf.PresignSigningKey()
-	presignHandler.SetService(redis.GetClient(),
+	presignHandler.SetService(presignApp.NewService(database, redis.GetClient(),
 		baseURL,
-		signingKey)
+		signingKey))
 	// 2.1 注入 share service（Complete 时写分享表）
 	shareSvc := shareService.NewService(database, baseURL, getBootstrapStorageService())
 	presignHandler.SetShareService(presignShareAdapter{shareSvc})
@@ -116,7 +130,7 @@ func initThriftIDLServices(database *gorm.DB) {
 				return
 			}
 			config.Security.OIDC = *o
-			customHandler.SetOIDCService(oidcApp.NewService(oidcApp.Config{
+			customHandler.SetOIDCService(oidcApp.NewService(database, oidcApp.Config{
 				Enabled:          o.Enabled,
 				Issuer:           o.Issuer,
 				ClientID:         o.ClientID,
@@ -138,7 +152,7 @@ func initThriftIDLServices(database *gorm.DB) {
 
 	// 2.4.1 寄件码/反向收件服务（P2）：经 ShareGateway 适配器依赖 share（消跨域 import）
 	// 双注入：gen/handler/request（IDL 化四端点）+ customHandler（访客投递重管道桥接）
-	requestSvcInstance = requestApp.NewService(requestShareGateway{shareSvc}, notifyApp)
+	requestSvcInstance = requestApp.NewService(database, requestShareGateway{shareSvc}, notifyApp)
 	customHandler.SetRequestService(requestSvcInstance)
 	requestgenhandler.SetRequestService(requestSvcInstance)
 
@@ -163,7 +177,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	}
 
 	// 3. anonymous service（需要 Redis）
-	anonHandler.SetService(redis.GetClient())
+	anonHandler.SetService(anonymousApp.NewService(redis.GetClient(), database))
 
 	// 4.5 取件码铸造接线（2026-10-07）：share 域经窄接口调用 anonymous 域，
 	// 文件分享出码时同步铸 6 位取件码（须共用同一 anon 实例，Redis/内存 KV 才一致）
@@ -230,16 +244,16 @@ func initThriftIDLServices(database *gorm.DB) {
 	// chunk：存储随 app service 注入，gen handler 只持服务句柄；
 	// share：存储由 app service 持有（shareSvc 构造时注入），不经 gen handler；
 	// preview：业务流已下沉 app/preview，存储随 service 注入。
-	chunkSvc := chunkApp.NewService()
+	chunkSvc := chunkApp.NewService(database)
 	chunkSvc.SetStorage(bootstrapStorage)
 	chunkHandler.SetChunkService(chunkSvc)
-	previewHandler.SetService(previewApp.NewService(bootstrapStorage))
+	previewHandler.SetService(previewApp.NewService(database, bootstrapStorage))
 
 	// 6.5 MCP server（AI 客户端集成）：统计/维护走全站唯一 admin 实例，
 	//     分享创建走 share service（复用配额/审核链路）、文件下载走全站存储实例、
 	//     联邦状态/路由走 federation 实例（未启用为 nil 适配器）——经窄接口适配器注入
 	if config.MCP.Enabled {
-		mcpService = mcpApp.NewService(config.App.Version)
+		mcpService = mcpApp.NewService(database, config.App.Version)
 		mcpService.SetAdminService(mcpAdminAdapter{adminSvc})
 		mcpService.SetShareService(mcpShareAdapter{shareSvc})
 		mcpService.SetStorageService(bootstrapStorage)
@@ -307,6 +321,7 @@ func applyNotifyConfig(target *notifyAppService.Service, cfg *conf.NotifyConfig)
 			cfg.SMTP.Username,
 			cfg.SMTP.Password,
 			cfg.SMTP.From,
+			userEmailLookup{},
 		))
 		logger.Info("SMTP mail notifications enabled", zap.String("host", cfg.SMTP.Host))
 	} else {

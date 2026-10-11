@@ -19,9 +19,14 @@ import (
 
 var adminService *adminsvc.Service
 
-func init() {
-	// 全站共享单例：多实例内存副本会互相覆盖 system_configs 单行 JSON
-	adminService = adminsvc.Default()
+// getAdminService 惰性取全站共享单例（bootstrap InitDefault 后可用；
+// 多实例内存副本会互相覆盖 system_configs 单行 JSON，故恒用 Default）。
+// 包级 init() 求值已随 dao 去全局化移除——init 早于 InitDatabase 必炸。
+func getAdminService() *adminsvc.Service {
+	if adminService == nil {
+		adminService = adminsvc.Default()
+	}
+	return adminService
 }
 
 // AdminLogin .
@@ -59,7 +64,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 生成 token
-	token, err := adminService.GenerateTokenForAdmin(ctx, req.Username, req.Password)
+	token, err := getAdminService().GenerateTokenForAdmin(ctx, req.Username, req.Password)
 	if err != nil {
 		_, _ = lock.RecordFailure(ctx, lockKey)
 		c.JSON(consts.StatusUnauthorized, &admin.AdminLoginResp{
@@ -98,7 +103,7 @@ func AdminStats(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	stats, err := adminService.GetStats(ctx)
+	stats, err := getAdminService().GetStats(ctx)
 	resp := &admin.AdminStatsResp{Code: 200, Message: "success"}
 	if err != nil {
 		resp.Code = 500
@@ -153,14 +158,14 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 	var files []*model.FileCode
 	var total int64
 	if health != "" {
-		files, total, err = adminService.GetFilesFiltered(ctx, model.FileCodeQuery{
+		files, total, err = getAdminService().GetFilesFiltered(ctx, model.FileCodeQuery{
 			Keyword:  search,
 			Health:   health,
 			Page:     page,
 			PageSize: pageSize,
 		})
 	} else {
-		files, total, err = adminService.GetFiles(ctx, page, pageSize, search)
+		files, total, err = getAdminService().GetFiles(ctx, page, pageSize, search)
 	}
 	resp := &admin.AdminListFilesResp{Code: 200, Message: "success"}
 	if err != nil {
@@ -213,17 +218,17 @@ func AdminDeleteFile(ctx context.Context, c *app.RequestContext) {
 
 	// 尝试按数字 id 删除
 	if id, parseErr := strconv.ParseUint(pathParam, 10, 64); parseErr == nil {
-		err = adminService.DeleteFile(ctx, uint(id))
+		err = getAdminService().DeleteFile(ctx, uint(id))
 	} else {
 		// 按 code 删除：先查出记录再删
-		fc, getErr := adminService.GetFileByCode(ctx, pathParam)
+		fc, getErr := getAdminService().GetFileByCode(ctx, pathParam)
 		if getErr != nil || fc == nil {
 			resp.Code = 404
 			resp.Message = "file not found"
 			c.JSON(consts.StatusOK, resp)
 			return
 		}
-		err = adminService.DeleteFile(ctx, fc.ID)
+		err = getAdminService().DeleteFile(ctx, fc.ID)
 	}
 
 	if err != nil {
@@ -254,7 +259,7 @@ func AdminListUsers(ctx context.Context, c *app.RequestContext) {
 		pageSize = 20
 	}
 
-	users, total, err := adminService.GetUsers(ctx, page, pageSize)
+	users, total, err := getAdminService().GetUsers(ctx, page, pageSize)
 	resp := &admin.AdminListUsersResp{Code: 200, Message: "success"}
 	if err != nil {
 		resp.Code = 500
@@ -304,7 +309,7 @@ func AdminUpdateUserStatus(ctx context.Context, c *app.RequestContext) {
 	if req.Status == 1 {
 		statusStr = "active"
 	}
-	err = adminService.UpdateUserStatus(ctx, uint(req.ID), statusStr)
+	err = getAdminService().UpdateUserStatus(ctx, uint(req.ID), statusStr)
 	resp := &admin.AdminUpdateUserStatusResp{Code: 200, Message: "success"}
 	if err != nil {
 		resp.Code = 500
@@ -319,7 +324,7 @@ func AdminUpdateUserStatus(ctx context.Context, c *app.RequestContext) {
 func AdminGetConfig(ctx context.Context, c *app.RequestContext) {
 	// data = SystemConfig 全量 JSON(v0.13.5 起;此前仅 3 段 typed,ex 段
 	// 永不下发——Config 页 ex 表单永不回填)。自由格式契约,data 随段演进。
-	cfg, err := adminService.GetConfig(ctx)
+	cfg, err := getAdminService().GetConfig(ctx)
 	resp := map[string]interface{}{"code": 200, "message": "success"}
 	if err != nil {
 		resp["code"] = 500
@@ -343,35 +348,9 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, &admin.AdminUpdateConfigResp{Code: 400, Message: err.Error()})
 		return
 	}
-	if err := adminService.UpdateConfig(ctx, cfg); err != nil {
+	if err := getAdminService().UpdateConfig(ctx, cfg); err != nil {
 		c.JSON(consts.StatusInternalServerError, &admin.AdminUpdateConfigResp{Code: 500, Message: err.Error()})
 		return
 	}
 	c.JSON(consts.StatusOK, &admin.AdminUpdateConfigResp{Code: 200, Message: "success"})
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

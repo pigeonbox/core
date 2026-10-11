@@ -12,8 +12,13 @@ import (
 
 var adminService *adminsvc.Service
 
-func init() {
-	adminService = adminsvc.Default()
+// getAdminService 惰性取全站共享单例（bootstrap InitDefault 后可用）。
+// 包级 init() 求值已随 dao 去全局化移除——init 早于 InitDatabase 必炸。
+func getAdminService() *adminsvc.Service {
+	if adminService == nil {
+		adminService = adminsvc.Default()
+	}
+	return adminService
 }
 
 // CleanExpiredFiles 清理过期文件（DB 记录 + 物理文件）。
@@ -22,7 +27,7 @@ func init() {
 // （startExpiredFileCleanup → CleanExpiredFiles）行为不一致。2026-10-06 215 COS 实测确认。
 // @router /admin/maintenance/clean-expired [POST]
 func CleanExpiredFiles(ctx context.Context, c *app.RequestContext) {
-	count, freed, err := adminService.CleanExpiredFiles(ctx)
+	count, freed, err := getAdminService().CleanExpiredFiles(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -43,7 +48,7 @@ func CleanExpiredFiles(ctx context.Context, c *app.RequestContext) {
 // CleanTempFiles 清理临时文件
 // @router /admin/maintenance/clean-temp [POST]
 func CleanTempFiles(ctx context.Context, c *app.RequestContext) {
-	count, err := adminService.CleanupIncompleteUploads(ctx, 24)
+	count, err := getAdminService().CleanupIncompleteUploads(ctx, 24)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -102,7 +107,7 @@ func GetStorageStatus(ctx context.Context, c *app.RequestContext) {
 // OptimizeDatabase 数据库优化（sqlite: VACUUM+ANALYZE；mysql/pg: 统计刷新）
 // @router /admin/maintenance/optimize [POST]
 func OptimizeDatabase(ctx context.Context, c *app.RequestContext) {
-	driver, detail, err := adminService.OptimizeDatabase(ctx)
+	driver, detail, err := getAdminService().OptimizeDatabase(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,

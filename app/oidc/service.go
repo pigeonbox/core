@@ -64,7 +64,7 @@ type Service struct {
 }
 
 // NewService 构建服务
-func NewService(cfg Config) *Service {
+func NewService(gormDB *gorm.DB, cfg Config) *Service {
 	if cfg.Scopes == "" {
 		cfg.Scopes = "openid profile email"
 	}
@@ -75,7 +75,7 @@ func NewService(cfg Config) *Service {
 		cfg:      cfg,
 		client:   &http.Client{Timeout: 15 * time.Second},
 		discSF:   singleflight.New[*discovery](),
-		userRepo: dao.NewUserRepository(),
+		userRepo: dao.NewUserRepository(gormDB),
 	}
 }
 

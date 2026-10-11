@@ -15,6 +15,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type Service struct {
@@ -44,16 +45,16 @@ type FederationNotifier interface {
 // SetFederationNotifier 注入联邦撤销钩子（bootstrap 调用；nil = 非联邦）
 func (s *Service) SetFederationNotifier(f FederationNotifier) { s.federation = f }
 
-func NewService() *Service {
+func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
-		userRepo:           dao.NewUserRepository(),
-		fileCodeRepo:       dao.NewFileCodeRepository(),
-		transferLogRepo:    dao.NewTransferLogRepository(),
-		adminOperationRepo: dao.NewAdminOperationLogRepository(),
-		chunkRepo:          dao.NewChunkRepository(),
-		fileFileRepo:       dao.NewFileCodeFileRepository(),
-		sysConfigRepo:      dao.NewSystemConfigRepository(),
-		cfg:                appconfig.NewService(),
+		userRepo:           dao.NewUserRepository(gormDB),
+		fileCodeRepo:       dao.NewFileCodeRepository(gormDB),
+		transferLogRepo:    dao.NewTransferLogRepository(gormDB),
+		adminOperationRepo: dao.NewAdminOperationLogRepository(gormDB),
+		chunkRepo:          dao.NewChunkRepository(gormDB),
+		fileFileRepo:       dao.NewFileCodeFileRepository(gormDB),
+		sysConfigRepo:      dao.NewSystemConfigRepository(gormDB),
+		cfg:                appconfig.NewService(gormDB),
 	}
 }
 
@@ -87,24 +88,31 @@ func Audit(ctx context.Context, action, target string, success bool) {
 	Default().logAdminOperation(ctx, action, target, success)
 }
 
-// defaultAdminService 包级惰性单例（EffectiveUserSettings 等包级入口用；
-// DB 未初始化时内部按"回退默认值"降级，不会 panic）。
+// defaultSvc 包级单例（InitDefault 显式初始化）。
 var (
-	defaultSvcOnce sync.Once
-	defaultSvc     *Service
+	defaultMu  sync.RWMutex
+	defaultSvc *Service
 )
 
-func defaultAdminService() *Service {
-	defaultSvcOnce.Do(func() {
-		defaultSvc = NewService()
-		// 全站单例改绑配置中心单例：admin.Default() 与 config.Default() 共享
-		// 同一份配置内存缓存与 DB 写通道（单行读改写约束，见 app/config 包注释；
-		// 此前配置状态内嵌本域，独立成域后约束随单例绑定延续）。
+// InitDefault 注册全站 admin 单例（bootstrap 在 config.InitDefault 之后调用；幂等）。
+// 全站单例改绑配置中心单例：admin.Default() 与 config.Default() 共享
+// 同一份配置内存缓存与 DB 写通道（单行读改写约束，见 app/config 包注释）。
+func InitDefault(gormDB *gorm.DB) {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	if defaultSvc == nil {
+		defaultSvc = NewService(gormDB)
 		defaultSvc.cfg = appconfig.Default()
-	})
-	return defaultSvc
+	}
 }
 
 // Default 全站共享的 admin Service 实例（治理面 + 配置门面同一实例；
-// 配置单实例约束见 app/config 包注释）。
-func Default() *Service { return defaultAdminService() }
+// 未 InitDefault 直接取用是装配错误，fail-loud）。
+func Default() *Service {
+	defaultMu.RLock()
+	defer defaultMu.RUnlock()
+	if defaultSvc == nil {
+		panic("admin: Default() before InitDefault——bootstrap 必须在 InitDatabase 后调 InitDefault")
+	}
+	return defaultSvc
+}

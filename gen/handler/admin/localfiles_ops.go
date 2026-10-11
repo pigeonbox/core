@@ -12,12 +12,12 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	admin "github.com/pigeonbox/contracts/gen/admin"
 	shareService "github.com/pigeonbox/core/app/share"
-	customHandler "github.com/pigeonbox/core/transport/http/handler"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/transfer"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
+	customHandler "github.com/pigeonbox/core/transport/http/handler"
 )
 
 // shareSvc 本地文件管理依赖（wiring 注入；与 customHandler 共用同一全站实例）。

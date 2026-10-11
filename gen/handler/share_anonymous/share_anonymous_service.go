@@ -12,7 +12,6 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/pigeonbox/contracts/errcode"
@@ -45,14 +44,15 @@ func sanitizeInternalMsg(err error) string {
 	return msg
 }
 
-// SetService 注入 service
-func SetService(rdb *redis.Client) {
-	anonSvc = anonapp.NewService(rdb, nil)
+// SetService 注入 service（bootstrap 调用，装配好的实例——gen 层不触 gorm/dao）
+func SetService(svc *anonapp.Service) {
+	anonSvc = svc
 }
 
 func getService() *anonapp.Service {
 	if anonSvc == nil {
-		anonSvc = anonapp.NewService(nil, nil)
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetService 先于服务流量）。
+		panic("anonymous service not initialized: SetService must be called before serving")
 	}
 	return anonSvc
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/pigeonbox/kit/uidgen"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // 6 位取件码字符表（去掉易混淆字符 0/O/1/I/L）
@@ -88,14 +89,12 @@ type Service struct {
 	fileCodeRepo *dao.FileCodeRepository
 }
 
-// NewService 创建 service。fileCodeRepo 为 nil 时内部自建（Retrieve 需查 DB）。
+// NewService 创建 service（repo 构造注入，去全局化终态）。
 // rdb nil 归一化：typed-nil 接口会骗过"Redis 可用"守卫（!= nil 判真）。
 // rdb 为 nil（redis.host 未配置）时进入单机内存模式：映射/展示信息存进程内
 // TTL KV，匿名取件全功能可用（单进程语义等价；重启丢失、不跨副本共享）。
-func NewService(rdb *redis.Client, fileCodeRepo *dao.FileCodeRepository) *Service {
-	if fileCodeRepo == nil {
-		fileCodeRepo = dao.NewFileCodeRepository()
-	}
+func NewService(rdb *redis.Client, gormDB *gorm.DB) *Service {
+	fileCodeRepo := dao.NewFileCodeRepository(gormDB)
 	var kv redisKV
 	if rdb != nil {
 		kv = rdb

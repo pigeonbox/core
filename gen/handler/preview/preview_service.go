@@ -27,8 +27,8 @@ func SetService(s *previewapp.Service) {
 
 func getService() *previewapp.Service {
 	if previewSvc == nil {
-		// 兜底实例仅测试/降级路径可达（存储未注入时预览生成不可用）
-		previewSvc = previewapp.NewService(nil)
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetService 先于服务流量）。
+		panic("preview service not initialized: SetService must be called before serving")
 	}
 	return previewSvc
 }

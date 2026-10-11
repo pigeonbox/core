@@ -22,6 +22,7 @@ import (
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
+	"github.com/pigeonbox/core/repo/db"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
 	customMw "github.com/pigeonbox/core/transport/http/middleware"
 )
@@ -104,7 +105,7 @@ func customizedRegister(r *server.Hertz) {
 		// initThriftIDLServices 未跑（如轻量测试环境）时惰性兜底：
 		// share service 缺席时 share_text 工具会明确报错，协议处理不受影响
 		if mcpService == nil {
-			mcpService = mcpApp.NewService(config.App.Version)
+			mcpService = mcpApp.NewService(db.GetDB(), config.App.Version) // 装配层显式句柄
 		}
 		r.POST("/api/v1/mcp", middleware.AdminMiddleware(), func(ctx context.Context, c *app.RequestContext) {
 			body := c.Request.Body()
@@ -166,7 +167,7 @@ func customizedRegister(r *server.Hertz) {
 	// ===== OIDC 单点登录（常注册+运行时门控：handler 按 Enabled() 响应，
 	// 管理端在线改 OIDC 段经 ReconfigureHooks 热重建 service，无需重启）=====
 	if config != nil {
-		customHandler.SetOIDCService(oidcApp.NewService(oidcApp.Config{
+		customHandler.SetOIDCService(oidcApp.NewService(db.GetDB(), oidcApp.Config{ // 装配层显式句柄
 			Enabled:          config.Security.OIDC.Enabled,
 			Issuer:           config.Security.OIDC.Issuer,
 			ClientID:         config.Security.OIDC.ClientID,

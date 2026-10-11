@@ -22,7 +22,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pigeonbox/core/pkg/logger"
-	"github.com/pigeonbox/core/repo/db/dao"
 )
 
 // SMTPMailer 邮件发送器（notify service 持有，可选）
@@ -34,11 +33,18 @@ type SMTPMailer struct {
 	password string
 	from     string
 
-	userRepo *dao.UserRepository
+	lookup UserEmailLookup
 }
 
-// NewSMTPMailer 构建邮件发送器（host 为空视为禁用；from 缺省取 username）
-func NewSMTPMailer(host string, port int, username, password, from string) *SMTPMailer {
+// UserEmailLookup 用户邮箱查询窄接口（SendToUser 用；装配点注入 dao 适配器，
+// 本包不直依 repo——transport 等消费方传 nil 表示仅用 SendTo 直发模式）。
+type UserEmailLookup interface {
+	EmailByID(ctx context.Context, id uint) (string, error)
+}
+
+// NewSMTPMailer 构建邮件发送器（host 为空视为禁用；from 缺省取 username）。
+// lookup 为 nil 时 SendToUser 直接跳过（TestSMTPNow 等只用 SendTo 的场景）。
+func NewSMTPMailer(host string, port int, username, password, from string, lookup UserEmailLookup) *SMTPMailer {
 	if from == "" {
 		from = username
 	}
@@ -48,7 +54,7 @@ func NewSMTPMailer(host string, port int, username, password, from string) *SMTP
 		username: username,
 		password: password,
 		from:     from,
-		userRepo: dao.NewUserRepository(),
+		lookup:   lookup,
 	}
 }
 
@@ -68,12 +74,15 @@ func (m *SMTPMailer) SendToUser(userID uint, subject, body string) {
 	if !m.Enabled() {
 		return
 	}
-	user, err := m.userRepo.GetByID(context.Background(), userID)
-	if err != nil || user == nil || strings.TrimSpace(user.Email) == "" {
+	if m.lookup == nil {
 		return
 	}
-	if err := m.send(user.Email, subject, body); err != nil {
-		logger.Warn("smtp mail send failed", zap.String("to", user.Email), zap.Error(err))
+	email, err := m.lookup.EmailByID(context.Background(), userID)
+	if err != nil || strings.TrimSpace(email) == "" {
+		return
+	}
+	if err := m.send(email, subject, body); err != nil {
+		logger.Warn("smtp mail send failed", zap.String("to", email), zap.Error(err))
 	}
 }
 

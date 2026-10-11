@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/pigeonbox/contracts/errcode"
 	presignmodel "github.com/pigeonbox/contracts/gen/presign"
@@ -29,9 +28,9 @@ import (
 
 var presignSvc *presignapp.Service
 
-// SetService 注入 service
-func SetService(rdb *redis.Client, baseURL, signingKey string) {
-	presignSvc = presignapp.NewService(rdb, baseURL, signingKey)
+// SetService 注入 service（bootstrap 调用，装配好的实例——gen 层不触 gorm/dao）
+func SetService(svc *presignapp.Service) {
+	presignSvc = svc
 }
 
 // SetPickupBinder 注入匿名取件码占位绑定（bootstrap 接线 anonymous 域实现）
@@ -70,7 +69,8 @@ func SetObjectStore(o presignapp.ObjectStore) {
 
 func getService() *presignapp.Service {
 	if presignSvc == nil {
-		presignSvc = presignapp.NewService(nil, "http://localhost:12345", "dev-signing-key")
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetService 先于服务流量）。
+		panic("presign service not initialized: SetService must be called before serving")
 	}
 	return presignSvc
 }

@@ -17,7 +17,8 @@ func SetNotifyService(s *notifyapp.Service) {
 
 func getNotifyService() *notifyapp.Service {
 	if notifySvc == nil {
-		notifySvc = notifyapp.NewService()
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetNotifyService 先于服务流量）。
+		panic("notify service not initialized: SetNotifyService must be called before serving")
 	}
 	return notifySvc
 }

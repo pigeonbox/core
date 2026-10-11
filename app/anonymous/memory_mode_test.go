@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/pigeonbox/core/repo/db"
-	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,9 +27,7 @@ func newMemoryTestService(t *testing.T) *Service {
 	sqlDB, err := g.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
-	return NewService(nil, dao.NewFileCodeRepository())
+	return NewService(nil, g)
 }
 
 // TestMemoryMode_IsMemoryKV 构造函数 nil 兜底应进入内存模式。

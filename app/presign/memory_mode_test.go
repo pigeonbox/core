@@ -11,7 +11,7 @@ import (
 // newMemoryTestService 构造内存模式（rdb=nil）的 presign service。
 func newMemoryTestService(t *testing.T) *Service {
 	t.Helper()
-	return NewService(nil, "http://test.local", "test-signing-key")
+	return NewService(newPresignTestDB(t), nil, "http://test.local", "test-signing-key")
 }
 
 // TestMemoryMode_IsMemoryKV 构造函数 nil 兜底应进入内存模式。

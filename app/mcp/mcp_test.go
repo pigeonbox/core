@@ -18,7 +18,6 @@ import (
 
 	adminApp "github.com/pigeonbox/core/app/admin"
 	shareApp "github.com/pigeonbox/core/app/share"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
@@ -127,20 +126,35 @@ func (a adminAPIAdapter) CleanExpired(ctx context.Context) (int64, int64, error)
 	return a.svc.CleanExpiredFiles(ctx)
 }
 
-func newMCPTestService(t *testing.T) *Service {
+// newMCPTestDB 构造注入用内存 sqlite（迁移 MCP 工具用表）。
+func newMCPTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.User{}, &model.AdminOperationLog{}))
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
+	sqlDB, err := g.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	return g
+}
 
-	svc := NewService("test-1.0.0")
+// newMCPTestServiceWithDB 同 newMCPTestService，额外返回测试库句柄（测试直查记录用）。
+func newMCPTestServiceWithDB(t *testing.T) (*Service, *gorm.DB) {
+	t.Helper()
+	g := newMCPTestDB(t)
+	svc := NewService(g, "test-1.0.0")
 	// share 服务与下载工具共用同一存储桩（写入/读取同 map 才能对上路径）
 	ms := mapStorage{data: map[string][]byte{}}
-	svc.SetShareService(shareAPIAdapter{shareApp.NewService("http://test.local", ms)})
-	svc.SetAdminService(adminAPIAdapter{adminApp.NewService()})
+	svc.SetShareService(shareAPIAdapter{shareApp.NewService(g, "http://test.local", ms)})
+	svc.SetAdminService(adminAPIAdapter{adminApp.NewService(g)})
 	svc.SetStorageService(ms)
+	return svc, g
+}
+
+// newMCPTestService 构造注入 mock 依赖的 MCP service。
+func newMCPTestService(t *testing.T) *Service {
+	t.Helper()
+	svc, _ := newMCPTestServiceWithDB(t)
 	return svc
 }
 
@@ -254,7 +268,7 @@ func extractCode(content string) string {
 }
 
 func TestToolsCall_TextSharePassword(t *testing.T) {
-	s := newMCPTestService(t)
+	s, g := newMCPTestServiceWithDB(t)
 	_, out := rpc(t, s, "tools/call", map[string]any{
 		"name": "share_text",
 		"arguments": map[string]any{
@@ -267,7 +281,7 @@ func TestToolsCall_TextSharePassword(t *testing.T) {
 	require.Len(t, code, 8)
 
 	// 密码保护标记落库
-	fc, err := dao.NewFileCodeRepository().GetByCode(context.Background(), code)
+	fc, err := dao.NewFileCodeRepository(g).GetByCode(context.Background(), code)
 	require.NoError(t, err)
 	assert.True(t, fc.RequireAuth)
 	assert.NotEmpty(t, fc.PasswordHash)
@@ -398,8 +412,9 @@ func TestToolsCall_FileShareRejections(t *testing.T) {
 	assert.Contains(t, text, "get_share_content")
 
 	// 超过 MCP 上限拒绝
-	tiny := NewService("test")
-	tiny.SetShareService(shareAPIAdapter{shareApp.NewService("http://test.local", nopStorage{})})
+	g := newMCPTestDB(t)
+	tiny := NewService(g, "test")
+	tiny.SetShareService(shareAPIAdapter{shareApp.NewService(g, "http://test.local", nopStorage{})})
 	tiny.SetStorageService(mapStorage{data: map[string][]byte{}})
 	tiny.SetMaxFileSize(4)
 	_, out = rpc(t, tiny, "tools/call", map[string]any{

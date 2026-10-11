@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,8 +13,7 @@ import (
 
 // =====================================================================
 // chunk service 单测（Shape B：DAO 通过全局 db.GetDB() 访问）。
-// 注意：与 share/user 不同，chunk 的 NewService() 在构造时即创建 repo，
-// 但 repo 内部仍惰性调用 db.GetDB()，故 SetDatabaseInstance 注入依然有效。
+// 注入式：构造直传 *gorm.DB（dao 去全局化终态）。
 // =====================================================================
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -28,15 +26,13 @@ func newTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(gormDB)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
 	return gormDB
 }
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()
-	newTestDB(t)
-	return NewService()
+	gormDB := newTestDB(t)
+	return NewService(gormDB)
 }
 
 // 测试：初始化上传，返回控制记录（chunk_index=-1）

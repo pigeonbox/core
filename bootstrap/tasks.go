@@ -11,6 +11,7 @@ import (
 	adminApp "github.com/pigeonbox/core/app/admin"
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/repo/db"
 )
 
 // startExpiredFileCleanup 定时清理过期文件（DB 记录 + 物理文件）。
@@ -38,7 +39,7 @@ func startMaintenanceJanitor() {
 	if config != nil {
 		retention = config.Admin.LogRetentionDays
 	}
-	j := adminApp.NewJanitor(getBootstrapStorageService(), retention)
+	j := adminApp.NewJanitor(db.GetDB(), getBootstrapStorageService(), retention) // 装配层显式句柄
 	// 管理端孤儿端点（POST /admin/storage/clean-presign-orphans 与
 	// GET /admin/storage/insights 的孤儿计数）复用同一 janitor 实例
 	storageHandler.SetJanitor(j)

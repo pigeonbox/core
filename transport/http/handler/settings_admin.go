@@ -25,7 +25,7 @@ func TestSMTPNow(to string) error {
 	if smtp.Host == "" {
 		return errors.New("SMTP 未配置（host 为空）")
 	}
-	mailer := notifyApp.NewSMTPMailer(smtp.Host, smtp.Port, smtp.Username, smtp.Password, smtp.From)
+	mailer := notifyApp.NewSMTPMailer(smtp.Host, smtp.Port, smtp.Username, smtp.Password, smtp.From, nil) // 仅 SendTo 直发，无需用户邮箱查询
 	return mailer.SendTo(strings.TrimSpace(to), "PigeonBox SMTP 测试邮件",
 		"这是一封来自 PigeonBox 的测试邮件，收到即代表 SMTP 配置生效。")
 }

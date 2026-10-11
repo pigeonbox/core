@@ -25,6 +25,7 @@ import (
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
+	"gorm.io/gorm"
 )
 
 // 协议常量
@@ -168,6 +169,9 @@ type Service struct {
 	fedSvc         FederationAPI
 	version        string
 	maxFileSizeCfg int64
+
+	// fileCodeRepo 直查展示用（get_share/list_shares；构造注入，去全局化终态）
+	fileCodeRepo *dao.FileCodeRepository
 }
 
 // defaultMaxFileSize MCP 单文件上传/下载默认上限（6MB：base64 膨胀 4/3 后约 8MB，
@@ -176,8 +180,8 @@ const defaultMaxFileSize int64 = 6 << 20
 
 // NewService 创建 MCP service。依赖经 Set*Service 注入（bootstrap 装配；
 // 未注入时对应工具返回明确错误而非静默降级）。
-func NewService(version string) *Service {
-	return &Service{version: version}
+func NewService(gormDB *gorm.DB, version string) *Service {
+	return &Service{version: version, fileCodeRepo: dao.NewFileCodeRepository(gormDB)}
 }
 
 // SetAdminService 注入 admin 域能力适配器（统计/用户/维护）
@@ -399,7 +403,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "get_share":
 		code := argStr("code")
-		fc, err := s.fileRepo().GetByCode(ctx, code)
+		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
@@ -431,7 +435,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		if pageSize > 100 {
 			pageSize = 100
 		}
-		files, total, err := s.fileRepo().List(ctx, page, pageSize, argStr("keyword"))
+		files, total, err := s.fileCodeRepo.List(ctx, page, pageSize, argStr("keyword"))
 		if err != nil {
 			return "查询失败: " + err.Error(), true
 		}
@@ -488,7 +492,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "get_share_content":
 		code := argStr("code")
-		fc, err := s.fileRepo().GetByCode(ctx, code)
+		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
@@ -511,7 +515,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "download_share_file":
 		code := argStr("code")
-		fc, err := s.fileRepo().GetByCode(ctx, code)
+		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
@@ -578,7 +582,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "delete_share":
 		code := argStr("code")
-		fc, err := s.fileRepo().GetByCode(ctx, code)
+		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
 		if err != nil {
 			return "分享不存在: " + code, true
 		}
@@ -641,9 +645,6 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		return "unknown tool: " + name, true
 	}
 }
-
-// fileRepo 惰性 repo（DB 未初始化时由调用错误兜底）
-func (s *Service) fileRepo() *dao.FileCodeRepository { return dao.NewFileCodeRepository() }
 
 // displayFileName 分享展示名（文本取前 20 字符，文件取原始名/回退 UUID 名）
 func displayFileName(fc *model.FileCode) string {

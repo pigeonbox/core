@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/glebarez/sqlite"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // mockShareService 用于单测的 share service mock
@@ -42,6 +44,17 @@ func (m *mockShareService) CreateShare(ctx context.Context, req *ShareCreateReq)
 	}, nil
 }
 
+// newPresignTestDB 构造注入用内存 sqlite（测试不触 DB 时也保持构造合法）。
+func newPresignTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	gormDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := gormDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	return gormDB
+}
+
 // newTestService 创建带 miniredis 的测试 service
 func newTestService(t *testing.T) (*Service, *miniredis.Miniredis) {
 	t.Helper()
@@ -52,7 +65,7 @@ func newTestService(t *testing.T) (*Service, *miniredis.Miniredis) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	svc := NewService(rdb, "http://test.local", "test-signing-key")
+	svc := NewService(newPresignTestDB(t), rdb, "http://test.local", "test-signing-key")
 	return svc, mr
 }
 

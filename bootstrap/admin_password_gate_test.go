@@ -6,7 +6,6 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,8 +28,6 @@ func TestCreateDefaultAdmin_ProductionGate(t *testing.T) {
 		sqlDB, err := gormDB.DB()
 		require.NoError(t, err)
 		sqlDB.SetMaxOpenConns(1)
-		db.SetDatabaseInstance(gormDB)
-		t.Cleanup(func() { db.SetDatabaseInstance(nil) })
 		return gormDB
 	}
 	productionCfg := &conf.AppConfiguration{}

@@ -38,7 +38,8 @@ var shareSvc *shareService.Service
 
 func getChunkService() *chunkService.Service {
 	if chunkSvc == nil {
-		chunkSvc = chunkService.NewService()
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetChunkService 先于服务流量）。
+		panic("chunk service not initialized: SetChunkService must be called before serving")
 	}
 	return chunkSvc
 }

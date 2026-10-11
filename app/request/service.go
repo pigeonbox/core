@@ -18,6 +18,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
 	"github.com/pigeonbox/kit/uidgen"
+	"gorm.io/gorm"
 )
 
 // 收到投递生成的分享的默认寿命/次数（v1 固定；管理端后续可配）
@@ -62,9 +63,9 @@ type NotifySender interface {
 }
 
 // NewService 构建服务。shareSvc 为分享创建网关（未注入时投递创建分享会失败）。
-func NewService(shareSvc ShareGateway, notify NotifySender) *Service {
+func NewService(gormDB *gorm.DB, shareSvc ShareGateway, notify NotifySender) *Service {
 	return &Service{
-		reqRepo:  dao.NewFileRequestRepository(),
+		reqRepo:  dao.NewFileRequestRepository(gormDB),
 		shareSvc: shareSvc,
 		notify:   notify,
 	}

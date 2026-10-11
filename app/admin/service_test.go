@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
 	"github.com/stretchr/testify/assert"
@@ -57,15 +56,13 @@ func newAdminTestDB(t *testing.T) *gorm.DB {
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.SystemConfigRecord{}))
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
 	return g
 }
 
 // TestCleanExpiredFiles_DeletesPhysicalFile 验证过期清理同时删 DB 记录和物理文件
 func TestCleanExpiredFiles_DeletesPhysicalFile(t *testing.T) {
-	newAdminTestDB(t)
-	svc := NewService()
+	adminDB := newAdminTestDB(t)
+	svc := NewService(adminDB)
 	st := &mockStorage{}
 	svc.SetStorage(st)
 
@@ -102,8 +99,8 @@ func TestCleanExpiredFiles_DeletesPhysicalFile(t *testing.T) {
 
 // TestCleanExpiredFiles_NoStorage 无 storage 时不崩，仅删 DB
 func TestCleanExpiredFiles_NoStorage(t *testing.T) {
-	newAdminTestDB(t)
-	svc := NewService() // 无 storage
+	adminDB := newAdminTestDB(t)
+	svc := NewService(adminDB) // 无 storage
 
 	ctx := context.Background()
 	past := time.Now().Add(-time.Hour)
@@ -134,25 +131,25 @@ func customTestConfig(name string) *SystemConfig {
 
 // TestUpdateConfig_PersistsToDB 验证 UpdateConfig 写穿到 system_configs 表
 func TestUpdateConfig_PersistsToDB(t *testing.T) {
-	newAdminTestDB(t)
-	svc := NewService()
+	adminDB := newAdminTestDB(t)
+	svc := NewService(adminDB)
 
 	ctx := context.Background()
 	require.NoError(t, svc.UpdateConfig(ctx, customTestConfig("持久化站点")))
 
 	var rec model.SystemConfigRecord
-	require.NoError(t, db.GetDB().First(&rec).Error, "应存在持久化记录")
+	require.NoError(t, adminDB.First(&rec).Error, "应存在持久化记录")
 	assert.Contains(t, rec.Data, `"name":"持久化站点"`)
 }
 
 // TestGetConfig_PersistedAcrossRestart 验证重启（新 Service 实例）后读到持久化配置
 func TestGetConfig_PersistedAcrossRestart(t *testing.T) {
-	newAdminTestDB(t)
+	adminDB := newAdminTestDB(t)
 
-	svc1 := NewService()
+	svc1 := NewService(adminDB)
 	require.NoError(t, svc1.UpdateConfig(context.Background(), customTestConfig("重启不丢")))
 
-	svc2 := NewService() // 模拟重启后的新实例
+	svc2 := NewService(adminDB) // 模拟重启后的新实例
 	cfg, err := svc2.GetConfig(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "重启不丢", cfg.Base.Name)
@@ -165,29 +162,29 @@ func TestGetConfig_PersistedAcrossRestart(t *testing.T) {
 
 // TestGetConfig_DefaultsWhenNoRecord 验证无持久化记录时返回默认值
 func TestGetConfig_DefaultsWhenNoRecord(t *testing.T) {
-	newAdminTestDB(t)
+	adminDB := newAdminTestDB(t)
 
-	cfg, err := NewService().GetConfig(context.Background())
+	cfg, err := NewService(adminDB).GetConfig(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "PigeonBox", cfg.Base.Name)
 	assert.Equal(t, "local", cfg.Storage.Type)
 	assert.Equal(t, 100, cfg.Transfer.MaxCount)
 }
 
-// TestGetConfig_WithoutDB 验证 DB 未初始化时不 panic，回退默认配置
+// TestGetConfig_WithoutDB 验证 DB 无持久化记录时回退默认配置（降级语义保留）。
+// dao 去全局化后「无 DB」场景不再存在，降级面收窄为「空表」。
 func TestGetConfig_WithoutDB(t *testing.T) {
-	db.SetDatabaseInstance(nil)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
+	adminDB := newAdminTestDB(t)
 
-	cfg, err := NewService().GetConfig(context.Background())
+	cfg, err := NewService(adminDB).GetConfig(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "PigeonBox", cfg.Base.Name)
 }
 
 // TestUpdateConfig_InvalidConfig 验证非法配置被拒绝且不落库
 func TestUpdateConfig_InvalidConfig(t *testing.T) {
-	newAdminTestDB(t)
-	svc := NewService()
+	adminDB := newAdminTestDB(t)
+	svc := NewService(adminDB)
 
 	bad := customTestConfig("非法端口")
 	bad.Base.Port = 70000
@@ -202,21 +199,21 @@ func TestUpdateConfig_InvalidConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "PigeonBox", cfg.Base.Name)
 	var count int64
-	require.NoError(t, db.GetDB().Model(&model.SystemConfigRecord{}).Count(&count).Error)
+	require.NoError(t, adminDB.Model(&model.SystemConfigRecord{}).Count(&count).Error)
 	assert.Equal(t, int64(0), count)
 }
 
 // TestUpdateConfig_SingleRow 验证多次更新只保留一行记录
 func TestUpdateConfig_SingleRow(t *testing.T) {
-	newAdminTestDB(t)
-	svc := NewService()
+	adminDB := newAdminTestDB(t)
+	svc := NewService(adminDB)
 	ctx := context.Background()
 
 	require.NoError(t, svc.UpdateConfig(ctx, customTestConfig("第一版")))
 	require.NoError(t, svc.UpdateConfig(ctx, customTestConfig("第二版")))
 
 	var count int64
-	require.NoError(t, db.GetDB().Model(&model.SystemConfigRecord{}).Count(&count).Error)
+	require.NoError(t, adminDB.Model(&model.SystemConfigRecord{}).Count(&count).Error)
 	assert.Equal(t, int64(1), count)
 
 	cfg, err := svc.GetConfig(ctx)
@@ -227,8 +224,8 @@ func TestUpdateConfig_SingleRow(t *testing.T) {
 // TestUpdateUserSettings_Roundtrip 用户设置写穿 DB 并可读回
 // （回归 2026-10-03：管理端"用户配置"此前是假开关——存储结构里根本没有该段）
 func TestUpdateUserSettings_Roundtrip(t *testing.T) {
-	newAdminTestDB(t)
-	svc := NewService()
+	adminDB := newAdminTestDB(t)
+	svc := NewService(adminDB)
 	ctx := context.Background()
 
 	require.NoError(t, svc.UpdateUserSettings(ctx, UserSettings{
@@ -247,7 +244,7 @@ func TestUpdateUserSettings_Roundtrip(t *testing.T) {
 	assert.Equal(t, 24, cfg.User.SessionExpiryHours)
 
 	// DB 落库校验（新实例从 DB 加载）
-	fresh := NewService()
+	fresh := NewService(adminDB)
 	cfg2, err := fresh.GetConfig(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, cfg2.User)
@@ -256,8 +253,8 @@ func TestUpdateUserSettings_Roundtrip(t *testing.T) {
 
 // TestUpdateConfig_PreservesUserSection 通用配置保存（无 user 段）不得冲掉用户设置
 func TestUpdateConfig_PreservesUserSection(t *testing.T) {
-	newAdminTestDB(t)
-	svc := NewService()
+	adminDB := newAdminTestDB(t)
+	svc := NewService(adminDB)
 	ctx := context.Background()
 	require.NoError(t, svc.UpdateUserSettings(ctx, UserSettings{AllowUserRegistration: true, SessionExpiryHours: 48}))
 
@@ -278,7 +275,7 @@ func TestLoadPersisted_LegacyRecordWithoutUserSection(t *testing.T) {
 	// 直接写一条历史形态的记录（只有旧字段）
 	require.NoError(t, g.Create(&model.SystemConfigRecord{Data: `{"base":{"name":"OldSite","description":"d","port":1234},"storage":{"type":"local","max_size":1},"transfer":{"max_count":10,"expire_default":7}}`}).Error)
 
-	cfg, err := NewService().GetConfig(context.Background())
+	cfg, err := NewService(g).GetConfig(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "OldSite", cfg.Base.Name)
 	require.NotNil(t, cfg.User)

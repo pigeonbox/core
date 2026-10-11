@@ -24,6 +24,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/storage"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // StorageProvider janitor 所需存储能力：通用操作 + 本地后端判定/根目录。
@@ -49,14 +50,14 @@ type Janitor struct {
 }
 
 // NewJanitor 创建 janitor。
-func NewJanitor(svc StorageProvider, retentionDays int) *Janitor {
+func NewJanitor(gormDB *gorm.DB, svc StorageProvider, retentionDays int) *Janitor {
 	return &Janitor{
 		svc:           svc,
 		retentionDays: retentionDays,
-		fileCodeRepo:  dao.NewFileCodeRepository(),
-		chunkRepo:     dao.NewChunkRepository(),
-		transferRepo:  dao.NewTransferLogRepository(),
-		adminLogRepo:  dao.NewAdminOperationLogRepository(),
+		fileCodeRepo:  dao.NewFileCodeRepository(gormDB),
+		chunkRepo:     dao.NewChunkRepository(gormDB),
+		transferRepo:  dao.NewTransferLogRepository(gormDB),
+		adminLogRepo:  dao.NewAdminOperationLogRepository(gormDB),
 	}
 }
 

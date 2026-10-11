@@ -30,6 +30,7 @@ import (
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
+	"gorm.io/gorm"
 )
 
 // Redis key 模板
@@ -155,7 +156,7 @@ type ShareServiceInterface interface {
 // "Redis 可用"守卫（!= nil 判真）。
 // rdb 为 nil（redis.host 未配置）时进入单机内存模式：直传会话存进程内
 // TTL KV，预签名直传全功能可用（单进程语义等价；重启未完成会话作废）。
-func NewService(rdb *redis.Client, baseURL string, signingKey string) *Service {
+func NewService(gormDB *gorm.DB, rdb *redis.Client, baseURL string, signingKey string) *Service {
 	var kv redisKV
 	if rdb != nil {
 		kv = rdb
@@ -167,7 +168,7 @@ func NewService(rdb *redis.Client, baseURL string, signingKey string) *Service {
 		defaultExpire: 1 * time.Hour,
 		signingKey:    []byte(signingKey),
 		baseURL:       baseURL,
-		fileCodeRepo:  dao.NewFileCodeRepository(),
+		fileCodeRepo:  dao.NewFileCodeRepository(gormDB),
 	}
 }
 

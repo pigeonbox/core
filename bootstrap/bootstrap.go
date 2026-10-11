@@ -115,14 +115,14 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 	transfer.SetSink(daoTransferSink{})
 	// JWT 身份复核 + 会话纪元（2026-10-05 审计 P2）：封禁/降权/改密即时生效
 	middleware.SetIdentityLoader(func(ctx context.Context, userID uint) (*middleware.IdentityRecord, error) {
-		u, err := dao.NewUserRepository().GetByID(ctx, userID)
+		u, err := dao.NewUserRepository(database).GetByID(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
 		return &middleware.IdentityRecord{Status: u.Status, Role: u.Role, Epoch: u.SessionEpoch}, nil
 	})
 	auth.SetEpochLoader(func(userID uint) int {
-		u, err := dao.NewUserRepository().GetByID(context.Background(), userID)
+		u, err := dao.NewUserRepository(database).GetByID(context.Background(), userID)
 		if err != nil {
 			return 0
 		}

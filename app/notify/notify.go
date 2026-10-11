@@ -56,9 +56,9 @@ type Service struct {
 	mailer     *SMTPMailer // 邮件通知渠道（nil = 禁用；P2 SMTP）
 }
 
-// NewService 创建 service（内部自建 repo，走全局 db.GetDB()）
-func NewService() *Service {
-	return &Service{notifyRepo: dao.NewNotifyRepository()}
+// NewService 创建 service（repo 构造注入，去全局化终态）
+func NewService(gormDB *gorm.DB) *Service {
+	return &Service{notifyRepo: dao.NewNotifyRepository(gormDB)}
 }
 
 // ListItem 列表项

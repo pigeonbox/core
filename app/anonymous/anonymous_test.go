@@ -10,8 +10,6 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/glebarez/sqlite"
 	"github.com/pigeonbox/core/pkg/utils"
-	"github.com/pigeonbox/core/repo/db"
-	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -37,11 +35,8 @@ func newTestService(t *testing.T) (*Service, *miniredis.Miniredis, *gorm.DB) {
 	sqlDB, err := g.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(g)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
 
-	repo := dao.NewFileCodeRepository()
-	return NewService(rdb, repo), mr, g
+	return NewService(rdb, g), mr, g
 }
 
 // TestCodeAlphabet 验证字符表（去掉易混淆字符 0/O/1/I/L）

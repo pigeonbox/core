@@ -17,6 +17,7 @@ import (
 	dao_preview "github.com/pigeonbox/core/repo/db/dao_preview"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
+	"gorm.io/gorm"
 )
 
 // 业务错误（HTTP 适配层据此映射状态码与文案，不泄露内部细节）。
@@ -55,11 +56,11 @@ type Service struct {
 }
 
 // NewService 构造预览域服务。
-func NewService(st storage.StorageInterface) *Service {
+func NewService(gormDB *gorm.DB, st storage.StorageInterface) *Service {
 	return &Service{
 		storageSvc:   st,
-		fileCodeRepo: dao.NewFileCodeRepository(),
-		previewRepo:  dao_preview.NewFilePreviewRepository(),
+		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
+		previewRepo:  dao_preview.NewFilePreviewRepository(gormDB),
 	}
 }
 

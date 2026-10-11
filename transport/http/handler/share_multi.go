@@ -40,9 +40,18 @@ func userIDAny(ctx context.Context, c *app.RequestContext) (uint, bool) {
 	return userIDFromCtx(c)
 }
 
-// multiChunkSvc 多文件绑定的 chunk 会话查询（chunk.Service 无状态，DAO 惰性）
+var multiChunkSvcInstance *chunk.Service
+
+// SetMultiChunkService 注入多文件绑定用 chunk 会话查询服务（bootstrap 调用）。
+func SetMultiChunkService(s *chunk.Service) { multiChunkSvcInstance = s }
+
+// multiChunkSvc 多文件绑定的 chunk 会话查询
 func multiChunkSvc() *chunk.Service {
-	return chunk.NewService()
+	if multiChunkSvcInstance == nil {
+		// fail-fast：装配缺失必须显式暴露（bootstrap 保证先于服务流量注入）。
+		panic("chunk service not initialized: SetMultiChunkService must be called before serving")
+	}
+	return multiChunkSvcInstance
 }
 
 // multiCommonParams 多文件创建的公共表单/JSON 参数

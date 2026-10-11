@@ -17,6 +17,7 @@ import (
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/transfer"
+	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -29,11 +30,11 @@ import (
 type daoAPIKeyStore struct{}
 
 func (daoAPIKeyStore) FindActiveByHash(ctx context.Context, hash string) (*middleware.APIKeyPrincipal, error) {
-	key, err := dao.NewUserAPIKeyRepository().GetActiveByHash(ctx, hash)
+	key, err := dao.NewUserAPIKeyRepository(db.GetDB()).GetActiveByHash(ctx, hash) // 装配层显式句柄
 	if err != nil {
 		return nil, err
 	}
-	user, err := dao.NewUserRepository().GetByID(ctx, key.UserID)
+	user, err := dao.NewUserRepository(db.GetDB()).GetByID(ctx, key.UserID)
 	if err != nil || user.Status != "active" {
 		// 封禁/停用用户的 Key 视为无效 Key（调用方计入防爆破，防枚举）
 		return nil, fmt.Errorf("api key invalid")
@@ -42,14 +43,14 @@ func (daoAPIKeyStore) FindActiveByHash(ctx context.Context, hash string) (*middl
 }
 
 func (daoAPIKeyStore) TouchLastUsed(ctx context.Context, keyID uint, ip string) error {
-	return dao.NewUserAPIKeyRepository().TouchLastUsed(ctx, keyID, ip)
+	return dao.NewUserAPIKeyRepository(db.GetDB()).TouchLastUsed(ctx, keyID, ip) // 装配层显式句柄
 }
 
 // daoTransferSink pkg/transfer.Sink 的 dao 桥。
 type daoTransferSink struct{}
 
 func (daoTransferSink) Create(ctx context.Context, e transfer.Entry) error {
-	return dao.NewTransferLogRepository().Create(ctx, &model.TransferLog{
+	return dao.NewTransferLogRepository(db.GetDB()).Create(ctx, &model.TransferLog{ // 装配层显式句柄
 		Operation: e.Operation, FileCodeID: e.FileCodeID, FileCode: e.Code,
 		FileName: e.FileName, FileSize: e.FileSize, UserID: e.UserID,
 		APIKeyID: e.APIKeyID, Username: e.Username, IP: e.IP, DurationMs: e.DurationMs,
@@ -236,4 +237,15 @@ func (adminDefaultsAdapter) DefaultUploadSize(ctx context.Context) int64 {
 
 func (adminDefaultsAdapter) AllowUserRegistration(ctx context.Context) bool {
 	return configApp.EffectiveUserSettings(ctx).AllowUserRegistration
+}
+
+// userEmailLookup notify.SMTPMailer.UserEmailLookup 的 dao 桥（SendToUser 查邮箱）。
+type userEmailLookup struct{}
+
+func (userEmailLookup) EmailByID(ctx context.Context, id uint) (string, error) {
+	u, err := dao.NewUserRepository(db.GetDB()).GetByID(ctx, id) // 装配层显式句柄
+	if err != nil {
+		return "", err
+	}
+	return u.Email, nil
 }
