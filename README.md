@@ -5,10 +5,12 @@
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/github/license/pigeonbox/core)](LICENSE)
 
-PigeonBox 业务核心库:16 个域服务 + 数据访问 + 存储抽象 + HTTP 装配(bootstrap)。**不含 main、不含静态资源、不含配置文件**——本模块定位是**被复用的库**,消费方:
+PigeonBox 业务核心库:17 个域服务(含 config 系统配置中心) + 数据访问 + 存储抽象 + HTTP 装配(bootstrap)。**不含 main、不含静态资源、不含配置文件**——本模块定位是**被复用的库**,消费方:
 
 - [`pigeonbox/server`](https://github.com/pigeonbox/server) —— 标准独立部署(自托管)
 - [`pigeonbox/fnos`](https://github.com/pigeonbox/fnos) —— 飞牛 fnOS 应用(单容器库式调用)
+- [`pigeonbox/openwrt`](https://github.com/pigeonbox/openwrt) —— OpenWrt/iStoreOS 原生包(库式调用)
+- [`pigeonbox/qnap`](https://github.com/pigeonbox/qnap) —— 威联通 QTS 原生 QPKG(库式调用)
 
 > 🗂️ [PigeonBox 生态](https://github.com/orgs/pigeonbox)成员仓 · 总览见 [装配仓 pigeonbox](https://github.com/pigeonbox/pigeonbox) · [架构图集](https://github.com/pigeonbox/pigeonbox/blob/main/docs/architecture.md)
 
@@ -17,11 +19,11 @@ PigeonBox 业务核心库:16 个域服务 + 数据访问 + 存储抽象 + HTTP �
 | 目录 | 说明 |
 |------|------|
 | `bootstrap/` | 库入口:`Bootstrap(configPath)` 拉起全部业务,返回 `*server.Hertz` |
-| `app/` | 16 个域服务:share / chunk / anonymous / presign / admin / user / notify / qrcode / setup / storage / federation / mcp / moderation / oidc / preview / request(模块间近零耦合,仅 presign→share) |
-| `repo/` | 数据访问:db(gorm dao/model)、redis、external |
+| `app/` | 17 个域服务:share / chunk / anonymous / presign / admin / config / user / notify / qrcode / setup / storage / federation / mcp / moderation / oidc / preview / request(模块间近零耦合;跨域引用仅 admin→config 与 share→moderation 钩子窄接口,原 presign→share 已消解) |
+| `repo/` | 数据访问:db(gorm dao/model)、redis、external;dao 构造**必填 `*gorm.DB`** 依赖注入,全局回退已退役 |
 | `storage/` | 存储抽象(OpenDAL 多后端) |
-| `pkg/` | auth / logger / middleware / resp / errors / utils 等横切设施 |
-| `transport/` | 手写 http handler 与中间件(生成代码之外的补充) |
+| `pkg/` | 12 包横切设施:auth / baseurl / errors / gate / logger / memkv / metrics / middleware / resp / security / transfer / utils |
+| `transport/` | 手写 http handler 与中间件(admin 面增强端点已 IDL 化收编 gen 链,手写区收窄为存储注入/多文件/OIDC 等桥接) |
 | `preview/` | 文件预览服务 |
 | `conf/` | 配置结构定义 |
 | `gen/` | thrift 生成的 handler / router(模型类型在 [`pigeonbox/contracts`](https://github.com/pigeonbox/contracts)) |
