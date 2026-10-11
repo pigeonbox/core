@@ -97,6 +97,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rate_limit.block_seconds", 60)
 	// MCP server 默认开启（路由挂管理员认证，无暴露风险）
 	v.SetDefault("mcp.enabled", true)
+	// 访客快速分享默认关闭（管理员专属；放开走 PB_MCP_ALLOW_GUEST=true，
+	// 游客仅 share_text/share_file，同网页匿名寄件限流/审核链路）
+	v.SetDefault("mcp.allow_guest", false)
 	v.SetDefault("mcp.max_file_size", 6<<20) // 单文件上限；默认 6MB（base64 后约 8MB < 默认请求体上限 10MB）
 	// /openapi.json 公开开关：默认保持公开（前端 /api-docs 页依赖），
 	// 生产部署建议关闭以收缩端点清单侦察面（PB_UI_EXPOSE_OPENAPI=false）
@@ -190,6 +193,7 @@ var envBindings = map[string][]string{
 	"notify.smtp.from":     {"PB_SMTP_FROM"},
 	// mcp
 	"mcp.enabled":       {"PB_MCP_ENABLED"},
+	"mcp.allow_guest":   {"PB_MCP_ALLOW_GUEST"},
 	"mcp.max_file_size": {"PB_MCP_MAX_FILE_SIZE"},
 	// ui
 	"ui.expose_openapi":  {"PB_UI_EXPOSE_OPENAPI"},

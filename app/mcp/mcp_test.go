@@ -48,8 +48,8 @@ func (nopStorage) GetFileReader(_ context.Context, _ string) (io.ReadCloser, int
 type shareAPIAdapter struct{ svc *shareApp.Service }
 
 func (a shareAPIAdapter) CreateTextShare(ctx context.Context, text string, expireValue int, expireStyle string,
-	requireAuth bool, passwordHash string, ownerIP, customCode string) (string, string, error) {
-	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, nil, ownerIP, false, customCode)
+	requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (string, string, error) {
+	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, userID, ownerIP, false, customCode)
 	if err != nil {
 		return "", "", err
 	}
@@ -61,6 +61,7 @@ func (a shareAPIAdapter) ShareBytes(ctx context.Context, opts FileShareOpts) (st
 		FileName: opts.FileName, Content: opts.Content,
 		ExpireValue: opts.ExpireValue, ExpireStyle: opts.ExpireStyle,
 		PasswordHash: opts.PasswordHash, CustomCode: opts.CustomCode,
+		UserID: opts.UserID, OwnerIP: opts.OwnerIP,
 	})
 	if err != nil {
 		return "", "", err
@@ -158,11 +159,17 @@ func newMCPTestService(t *testing.T) *Service {
 	return svc
 }
 
-// rpc 发送 JSON-RPC 请求并解析响应
+// rpc 发送 JSON-RPC 请求并解析响应（默认管理员身份）
 func rpc(t *testing.T, s *Service, method string, params any) (status int, out map[string]any) {
 	t.Helper()
+	return rpcAs(t, s, Caller{Admin: true, UserID: 1, IP: "127.0.0.1"}, method, params)
+}
+
+// rpcAs 以指定调用者身份发送 JSON-RPC 请求并解析响应
+func rpcAs(t *testing.T, s *Service, caller Caller, method string, params any) (status int, out map[string]any) {
+	t.Helper()
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	st, raw := s.Handle(context.Background(), body)
+	st, raw := s.Handle(context.Background(), body, caller)
 	require.NotEmpty(t, raw, "%s 应返回响应体", method)
 	require.NoError(t, json.Unmarshal(raw, &out))
 	return st, out
@@ -184,26 +191,131 @@ func TestInitialize(t *testing.T) {
 func TestNotification_NoResponse(t *testing.T) {
 	s := newMCPTestService(t)
 	body := []byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
-	st, raw := s.Handle(context.Background(), body)
+	st, raw := s.Handle(context.Background(), body, Caller{Admin: true})
 	assert.Equal(t, 202, st)
 	assert.Empty(t, raw, "通知不返回响应体")
 }
 
-func TestToolsList_ThirteenTools(t *testing.T) {
+func TestToolsList_AllTools(t *testing.T) {
 	s := newMCPTestService(t)
 	_, out := rpc(t, s, "tools/list", nil)
 	tools := out["result"].(map[string]any)["tools"].([]any)
-	assert.Len(t, tools, 13)
+	assert.Len(t, tools, 15)
 	names := map[string]bool{}
 	for _, tl := range tools {
 		names[tl.(map[string]any)["name"].(string)] = true
 	}
-	for _, want := range []string{"share_text", "share_file", "get_share", "get_share_content",
+	for _, want := range []string{"share_text", "share_file", "create_request_code", "preview_share",
+		"get_share", "get_share_content",
 		"download_share_file", "list_shares", "delete_share",
 		"get_system_status", "get_storage_info", "list_users", "cleanup_expired",
 		"federation_status", "federation_resolve"} {
 		assert.True(t, names[want], "缺少工具 %s", want)
 	}
+}
+
+// TestGuestScope 访客作用域（2026-10-12）：tools/list 只见快速分享工具，
+// 管理员工具越权调用被拒（列表过滤之外的复核）。
+func TestGuestScope(t *testing.T) {
+	s := newMCPTestService(t)
+	guest := Caller{} // 未登录
+
+	_, out := rpcAs(t, s, guest, "tools/list", nil)
+	tools := out["result"].(map[string]any)["tools"].([]any)
+	names := []string{}
+	for _, tl := range tools {
+		names = append(names, tl.(map[string]any)["name"].(string))
+	}
+	assert.ElementsMatch(t, []string{"share_text", "share_file"}, names, "游客仅快速分享工具")
+
+	// 越权调用管理员工具（即使直接 tools/call）
+	_, out = rpcAs(t, s, guest, "tools/call", map[string]any{"name": "list_shares"})
+	content := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "该工具不可用")
+
+	// 登录用户可见寄件码/预览但不可见管理工具
+	user := Caller{UserID: 7}
+	_, out = rpcAs(t, s, user, "tools/list", nil)
+	userNames := map[string]bool{}
+	for _, tl := range out["result"].(map[string]any)["tools"].([]any) {
+		userNames[tl.(map[string]any)["name"].(string)] = true
+	}
+	assert.True(t, userNames["create_request_code"])
+	assert.True(t, userNames["preview_share"])
+	assert.False(t, userNames["delete_share"])
+}
+
+// TestGuestShareText_MarkdownAndCustomCodeStripped 游客快速分享：结果带 Markdown
+// 链接；custom_code 仅登录用户可用（游客传了也忽略，防匿名铸造好记码）。
+func TestGuestShareText_MarkdownAndCustomCodeStripped(t *testing.T) {
+	s := newMCPTestService(t)
+	_, out := rpcAs(t, s, Caller{IP: "10.0.0.9"}, "tools/call", map[string]any{
+		"name": "share_text",
+		"arguments": map[string]any{
+			"text":        "guest quick share",
+			"custom_code": "MyCode123",
+		},
+	})
+	result := out["result"].(map[string]any)
+	assert.NotEqual(t, true, result["isError"])
+	content := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "Markdown: [")
+	code := extractCode(content)
+	assert.NotEqual(t, "MyCode123", code, "游客自定义取件码必须被忽略")
+	assert.Len(t, code, 8)
+}
+
+// fakeRequestAPI 寄件码工具测试桩。
+type fakeRequestAPI struct{ token string }
+
+func (f fakeRequestAPI) Create(_ context.Context, _ uint, _ RequestCreate) (string, time.Time, error) {
+	return f.token, time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), nil
+}
+
+// fakePreviewAPI 预览工具测试桩。
+type fakePreviewAPI struct{ result *PreviewResult }
+
+func (f fakePreviewAPI) Preview(_ context.Context, _ PreviewReq) (*PreviewResult, error) {
+	return f.result, nil
+}
+
+// TestCreateRequestCode 寄件码工具（登录用户）：返回投递链接。
+func TestCreateRequestCode(t *testing.T) {
+	s := newMCPTestService(t)
+	s.SetRequestService(fakeRequestAPI{token: strings.Repeat("a", 32)})
+	s.SetBaseURL("http://test.local")
+
+	_, out := rpcAs(t, s, Caller{UserID: 7}, "tools/call", map[string]any{
+		"name":      "create_request_code",
+		"arguments": map[string]any{"title": "给我投文件"},
+	})
+	content := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "http://test.local/#/request/"+strings.Repeat("a", 32))
+
+	// 游客不可用
+	_, out = rpcAs(t, s, Caller{}, "tools/call", map[string]any{"name": "create_request_code"})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "该工具不可用")
+}
+
+// TestPreviewShare 预览工具：文本摘要输出 + 游客不可用。
+func TestPreviewShare(t *testing.T) {
+	s := newMCPTestService(t)
+	s.SetPreviewService(fakePreviewAPI{result: &PreviewResult{
+		PreviewType: "text", MimeType: "text/plain", TextContent: "hello preview", FileSize: 13,
+	}})
+
+	_, out := rpcAs(t, s, Caller{UserID: 7}, "tools/call", map[string]any{
+		"name": "preview_share", "arguments": map[string]any{"code": "whatever"},
+	})
+	content := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "hello preview")
+
+	_, out = rpcAs(t, s, Caller{}, "tools/call", map[string]any{
+		"name": "preview_share", "arguments": map[string]any{"code": "whatever"},
+	})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "该工具不可用")
 }
 
 func TestToolsCall_TextShareRoundtrip(t *testing.T) {
@@ -496,7 +608,7 @@ func TestProtocolErrors(t *testing.T) {
 	s := newMCPTestService(t)
 
 	// 非法 JSON → -32700
-	st, raw := s.Handle(context.Background(), []byte("{not-json"))
+	st, raw := s.Handle(context.Background(), []byte("{not-json"), Caller{Admin: true})
 	assert.Equal(t, 200, st)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(raw, &resp))

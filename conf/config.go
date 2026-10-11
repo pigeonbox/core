@@ -110,10 +110,16 @@ type FederationConfig struct {
 }
 
 // MCPConfig Model Context Protocol server（AI 客户端集成；上游没有的差异化能力）。
-// 端点 POST /api/v1/mcp（Streamable HTTP / JSON-RPC 2.0），挂管理员 JWT 认证。
+// 端点 POST /api/v1/mcp（Streamable HTTP / JSON-RPC 2.0），默认挂管理员 JWT 认证。
 type MCPConfig struct {
 	// Enabled 默认 true（认证已强制，无暴露风险）。env: PB_MCP_ENABLED
 	Enabled bool `mapstructure:"enabled"`
+	// AllowGuest 访客快速分享（2026-10-12，对标上游 v2.8 MCP quick share 并超出）：
+	// true 时 /api/v1/mcp 不再强制管理员 JWT——游客仅 share_text/share_file
+	// （与网页匿名寄件同链路、同限流、同审核/白名单），登录用户 += create_request_code/
+	// preview_share，管理员 = 全量工具。默认 false（维持管理员专属）。
+	// env: PB_MCP_ALLOW_GUEST
+	AllowGuest bool `mapstructure:"allow_guest"`
 	// MaxFileSize MCP 单文件上传/下载上限（字节）。默认 6MB——base64 膨胀 4/3 后
 	// 约 8MB，低于默认请求体上限（max(10MB, upload.max_file_size)）；
 	// 调大超过请求体上限时须同步调大 upload.max_file_size。env: PB_MCP_MAX_FILE_SIZE

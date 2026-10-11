@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	adminApp "github.com/pigeonbox/core/app/admin"
 	configApp "github.com/pigeonbox/core/app/config"
 	federationApp "github.com/pigeonbox/core/app/federation"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
+	previewApp "github.com/pigeonbox/core/app/preview"
 	presignApp "github.com/pigeonbox/core/app/presign"
 	requestApp "github.com/pigeonbox/core/app/request"
 	shareService "github.com/pigeonbox/core/app/share"
@@ -114,6 +116,7 @@ func (a mcpShareAdapter) ShareBytes(ctx context.Context, opts mcpApp.FileShareOp
 		FileName: opts.FileName, Content: opts.Content,
 		ExpireValue: opts.ExpireValue, ExpireStyle: opts.ExpireStyle,
 		PasswordHash: opts.PasswordHash, CustomCode: opts.CustomCode,
+		UserID: opts.UserID, OwnerIP: opts.OwnerIP,
 	})
 	if err != nil {
 		return "", "", err
@@ -122,8 +125,8 @@ func (a mcpShareAdapter) ShareBytes(ctx context.Context, opts mcpApp.FileShareOp
 }
 
 func (a mcpShareAdapter) CreateTextShare(ctx context.Context, text string, expireValue int, expireStyle string,
-	requireAuth bool, passwordHash string, ownerIP, customCode string) (string, string, error) {
-	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, nil, ownerIP, false, customCode)
+	requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (string, string, error) {
+	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, userID, ownerIP, false, customCode)
 	if err != nil {
 		return "", "", err
 	}
@@ -140,6 +143,41 @@ func (a mcpShareAdapter) ShareFiles(ctx context.Context, code string) ([]mcpApp.
 		out[i] = mcpApp.ShareFileInfo{Name: it.Name, Size: it.Size}
 	}
 	return out, nil
+}
+
+// mcpRequestAdapter mcp.RequestAPI 的 request 域适配器（create_request_code）。
+type mcpRequestAdapter struct{ svc *requestApp.Service }
+
+func (a mcpRequestAdapter) Create(ctx context.Context, userID uint, req mcpApp.RequestCreate) (string, time.Time, error) {
+	fr, err := a.svc.Create(ctx, userID, requestApp.CreateReq{
+		Title: req.Title, MaxFiles: req.MaxFiles, MaxBytes: req.MaxBytes,
+		ExpireValue: req.ExpireValue, ExpireStyle: req.ExpireStyle,
+	})
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	exp := time.Time{}
+	if fr.ExpiredAt != nil {
+		exp = *fr.ExpiredAt
+	}
+	return fr.Token, exp, nil
+}
+
+// mcpPreviewAdapter mcp.PreviewAPI 的 preview 域适配器（preview_share）。
+type mcpPreviewAdapter struct{ svc *previewApp.Service }
+
+func (a mcpPreviewAdapter) Preview(ctx context.Context, req mcpApp.PreviewReq) (*mcpApp.PreviewResult, error) {
+	fp, err := a.svc.GetOrCreate(ctx, previewApp.GetReq{
+		Code: req.Code, UserID: req.UserID, ClientIP: req.ClientIP, Password: req.Password,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &mcpApp.PreviewResult{
+		PreviewType: fp.PreviewType, MimeType: fp.MimeType, TextContent: fp.TextContent,
+		FileSize: fp.FileSize, Width: fp.Width, Height: fp.Height,
+		PageCount: fp.PageCount, Duration: fp.Duration,
+	}, nil
 }
 
 // mcpFederationAdapter mcp.FederationAPI 的 federation 域适配器。

@@ -99,17 +99,34 @@ func customizedRegister(r *server.Hertz) {
 	r.GET("/api/v1/notifies/public", customHandler.ListPublicNotifies)
 
 	// ===== MCP server（Model Context Protocol；AI 客户端集成，上游没有的差异化能力）=====
-	// Streamable HTTP 传输：POST /api/v1/mcp（JSON-RPC 2.0），管理员 JWT 认证。
-	// Claude Desktop 等标准客户端以 Authorization: Bearer <admin token> 接入。（管理面）
+	// Streamable HTTP 传输：POST /api/v1/mcp（JSON-RPC 2.0）。
+	// 默认管理员 JWT 全量工具；mcp.allow_guest=true 时可选认证：游客仅
+	// share_text/share_file 快速分享（同网页匿名寄件限流/审核/白名单），登录用户
+	// += create_request_code/preview_share，管理员 = 全量。浏览器跨站一律拒绝
+	// （mcpGuestGate）。（管理面）
 	if config.MCP.Enabled && config.ServesAdminPlane() {
 		// initThriftIDLServices 未跑（如轻量测试环境）时惰性兜底：
 		// share service 缺席时 share_text 工具会明确报错，协议处理不受影响
 		if mcpService == nil {
 			mcpService = mcpApp.NewService(db.GetDB(), config.App.Version) // 装配层显式句柄
 		}
-		r.POST("/api/v1/mcp", middleware.AdminMiddleware(), func(ctx context.Context, c *app.RequestContext) {
+		authMW := middleware.AdminMiddleware()
+		if config.MCP.AllowGuest {
+			authMW = middleware.OptionalAuthMiddleware()
+		}
+		r.POST("/api/v1/mcp", mcpGuestGate(), authMW, func(ctx context.Context, c *app.RequestContext) {
+			uid, _ := middleware.UserIDFromContext(ctx)
+			ip := middleware.ClientIPFromContext(ctx)
+			if ip == "" {
+				ip = middleware.ClientIP(c)
+			}
+			caller := mcpApp.Caller{
+				Admin:  middleware.RoleFromContext(ctx) == "admin",
+				UserID: uid,
+				IP:     ip,
+			}
 			body := c.Request.Body()
-			status, respBody := mcpService.Handle(ctx, body)
+			status, respBody := mcpService.Handle(ctx, body, caller)
 			if status == 202 {
 				c.SetStatusCode(consts.StatusAccepted)
 				return

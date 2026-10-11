@@ -4,11 +4,13 @@ package bootstrap
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/pigeonbox/core/pkg/middleware"
 )
 
 // rateLimitBucket 路径 → 限流桶（"login"/"upload"/"download"，空串=不限）。
@@ -27,13 +29,15 @@ func rateLimitBucket(path string) string {
 		path == "/setup", path == "/setup/check":
 		return "login"
 
-	// 写入/上传类（匿名发布、分块上传、预签名、寄件码访客投递）
+	// 写入/上传类（匿名发布、分块上传、预签名、寄件码访客投递；MCP 快速分享
+	// 同属写入通道——访客形态（mcp.allow_guest）下必须与网页匿名寄件同限流）
 	case strings.HasPrefix(path, "/anonymous/generate"),
 		strings.HasPrefix(path, "/anonymous/retrieve"),
 		strings.HasPrefix(path, "/chunk/"),
 		strings.HasPrefix(path, "/api/v1/presign"),
 		strings.HasPrefix(path, "/api/v1/share/multi"),
 		strings.HasPrefix(path, "/api/v1/request/"),
+		path == "/api/v1/mcp",
 		strings.HasPrefix(path, "/share/text"),
 		strings.HasPrefix(path, "/share/file"):
 		return "upload"
@@ -138,6 +142,51 @@ func CORS() app.HandlerFunc {
 
 		c.Next(ctx)
 	}
+}
+
+// mcpGuestGate MCP 端点请求闸门（2026-10-12 访客快速分享）：
+//   - 浏览器跨站拒绝（mcpOriginAllowed）：allow_guest 形态下面向浏览器开放
+//     JSON-RPC POST，须防 CSRF 借访客/管理员浏览器灌分享或删分享
+//     （对标上游 v2.8 _validate_origin；原生 MCP 客户端无 Origin 头天然放行）；
+//   - Cookie 认证的写请求补 CSRF 头校验（Bearer 天然免疫，viaCookie=false 直接过）。
+func mcpGuestGate() app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		if !mcpOriginAllowed(c) {
+			c.JSON(consts.StatusForbidden, map[string]interface{}{
+				"code":    consts.StatusForbidden,
+				"message": "cross-site MCP requests are not allowed",
+			})
+			c.Abort()
+			return
+		}
+		_, viaCookie := middleware.SessionToken(c)
+		if !middleware.CSRFAllowed(c, viaCookie) {
+			c.JSON(consts.StatusForbidden, map[string]interface{}{
+				"code":    consts.StatusForbidden,
+				"message": "缺少 CSRF 头（Cookie 认证的 MCP 请求须携带 X-Requested-With: XMLHttpRequest）",
+			})
+			c.Abort()
+			return
+		}
+		c.Next(ctx)
+	}
+}
+
+// mcpOriginAllowed 浏览器跨站判定：Sec-Fetch-Site: cross-site 或 Origin 与 Host
+// 不符即拒绝；无 Origin/Sec-Fetch 头（Claude Desktop、curl 等原生客户端）放行。
+func mcpOriginAllowed(c *app.RequestContext) bool {
+	if string(c.GetHeader("Sec-Fetch-Site")) == "cross-site" {
+		return false
+	}
+	origin := string(c.GetHeader("Origin"))
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == string(c.GetHeader("Host"))
 }
 
 // isLocalhostOrigin 判断是否 localhost/127.0.0.1 的任意端口（开发环境跨域放行）。
