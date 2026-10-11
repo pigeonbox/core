@@ -55,12 +55,11 @@ type Service struct {
 	defaults     DefaultsProvider
 }
 
-func NewService() *Service {
-	// 延迟初始化 repository，确保数据库已经准备好
+func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
-		repo:         nil, // 延迟初始化
-		apiKeyRepo:   nil, // 延迟初始化
-		fileCodeRepo: nil, // 延迟初始化
+		repo:         dao.NewUserRepository(gormDB),
+		apiKeyRepo:   dao.NewUserAPIKeyRepository(gormDB),
+		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
 	}
 }
 
@@ -113,21 +112,7 @@ func (s *Service) SystemDefaultStorageQuota(ctx context.Context) int64 {
 	return s.defaultStorageQuota(ctx)
 }
 
-// ensureRepository 确保repository已初始化
-func (s *Service) ensureRepository() {
-	if s.repo == nil {
-		s.repo = dao.NewUserRepository()
-	}
-	if s.apiKeyRepo == nil {
-		s.apiKeyRepo = dao.NewUserAPIKeyRepository()
-	}
-	if s.fileCodeRepo == nil {
-		s.fileCodeRepo = dao.NewFileCodeRepository()
-	}
-}
-
 func (s *Service) Create(ctx context.Context, req *CreateUserReq) (*model.UserResp, error) {
-	s.ensureRepository()
 
 	// username 字符集白名单（2026-10-05 审计 P3）：注册/建号共用本收口。
 	// 昵称不受限（展示字段）；username 进日志/审计/键值，收紧为安全字符集。
@@ -173,7 +158,6 @@ func (s *Service) Create(ctx context.Context, req *CreateUserReq) (*model.UserRe
 }
 
 func (s *Service) GetByID(ctx context.Context, id uint) (*model.UserResp, error) {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -185,7 +169,6 @@ func (s *Service) GetByID(ctx context.Context, id uint) (*model.UserResp, error)
 }
 
 func (s *Service) Update(ctx context.Context, id uint, req *UpdateUserReq) (*model.UserResp, error) {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -224,7 +207,6 @@ func (s *Service) Update(ctx context.Context, id uint, req *UpdateUserReq) (*mod
 }
 
 func (s *Service) Delete(ctx context.Context, id uint) error {
-	s.ensureRepository()
 	_, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -237,7 +219,6 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 }
 
 func (s *Service) List(ctx context.Context, page, pageSize int) ([]*model.UserResp, int64, error) {
-	s.ensureRepository()
 	users, total, err := s.repo.List(ctx, page, pageSize)
 	if err != nil {
 		return nil, 0, err
@@ -253,7 +234,6 @@ func (s *Service) List(ctx context.Context, page, pageSize int) ([]*model.UserRe
 
 // Login 用户登录
 func (s *Service) Login(ctx context.Context, username, password string) (*model.UserResp, string, error) {
-	s.ensureRepository()
 	user, err := s.repo.GetByUsername(ctx, username)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -283,7 +263,6 @@ func (s *Service) Login(ctx context.Context, username, password string) (*model.
 
 // LoginByEmail 通过邮箱登录
 func (s *Service) LoginByEmail(ctx context.Context, email, password string) (*model.UserResp, string, error) {
-	s.ensureRepository()
 	user, err := s.repo.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -313,7 +292,6 @@ func (s *Service) LoginByEmail(ctx context.Context, email, password string) (*mo
 
 // ChangePassword 修改密码
 func (s *Service) ChangePassword(ctx context.Context, userID uint, oldPassword, newPassword string) error {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		return errors.New("用户不存在")
@@ -344,7 +322,6 @@ func (s *Service) ChangePassword(ctx context.Context, userID uint, oldPassword, 
 // UpdateUserStats 更新用户统计信息。
 // 用 SQL 表达式原子自增（此前为 GetByID+Update 读改写，并发下丢更新）。
 func (s *Service) UpdateUserStats(userID uint, statsType string, value int64) error {
-	s.ensureRepository()
 	ctx := context.Background()
 
 	updates := map[string]interface{}{}
@@ -371,7 +348,6 @@ func (e *QuotaExceededError) ErrCode() int  { return errcode.CodeStorageQuota }
 // 生效优先级：用户级 MaxStorageQuota > 系统默认 user.user_storage_quota；0 = 不限。
 // 已用配额以 file_codes 表实时聚合为准（比 users.total_storage 计数器更抗漂移）。
 func (s *Service) CheckQuota(ctx context.Context, userID uint, addBytes int64) error {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		// 用户不存在/查询失败时不阻断上传（统计与配额是运营约束，不是可用性前提）
@@ -398,7 +374,6 @@ func (s *Service) CheckQuota(ctx context.Context, userID uint, addBytes int64) e
 
 // SetStorageQuota 管理员设置用户存储配额（0 = 不限，回退系统默认）
 func (s *Service) SetStorageQuota(ctx context.Context, userID uint, quota int64) (*model.UserResp, error) {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -412,7 +387,6 @@ func (s *Service) SetStorageQuota(ctx context.Context, userID uint, quota int64)
 
 // SetUploadSize 管理员设置用户单次上传大小上限（0 = 用系统默认）
 func (s *Service) SetUploadSize(ctx context.Context, userID uint, size int64) (*model.UserResp, error) {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -429,7 +403,6 @@ func (s *Service) SetUploadSize(ctx context.Context, userID uint, size int64) (*
 // 优先级：用户级 MaxUploadSize > 系统默认 user.user_upload_size；0 = 不限。
 // 用户不存在/查询失败返回 0（不阻断，配额类是运营约束）。
 func (s *Service) GetUploadSizeCap(ctx context.Context, userID uint) int64 {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		return 0
@@ -442,7 +415,6 @@ func (s *Service) GetUploadSizeCap(ctx context.Context, userID uint) int64 {
 
 // GetStats 获取用户统计信息
 func (s *Service) GetStats(ctx context.Context, userID uint) (*model.UserStats, error) {
-	s.ensureRepository()
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, err
@@ -520,7 +492,6 @@ func GetKeyPrefix(key string) string {
 
 // CreateAPIKey 为用户创建新的 API Key
 func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIKeyReq) (*CreateAPIKeyResp, error) {
-	s.ensureRepository()
 
 	// 限制有效密钥数量
 	count, err := s.apiKeyRepo.CountActiveByUser(ctx, userID)
@@ -587,7 +558,6 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIK
 
 // ListAPIKeys 获取用户的全部 API Key 列表（包含已撤销）
 func (s *Service) ListAPIKeys(ctx context.Context, userID uint) ([]*APIKeyData, error) {
-	s.ensureRepository()
 
 	keys, err := s.apiKeyRepo.ListByUser(ctx, userID)
 	if err != nil {
@@ -613,7 +583,6 @@ func (s *Service) ListAPIKeys(ctx context.Context, userID uint) ([]*APIKeyData, 
 
 // DeleteAPIKey 撤销指定的 API Key
 func (s *Service) DeleteAPIKey(ctx context.Context, userID, id uint) error {
-	s.ensureRepository()
 
 	err := s.apiKeyRepo.RevokeByID(ctx, userID, id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -629,7 +598,6 @@ func (s *Service) DeleteAPIKey(ctx context.Context, userID, id uint) error {
 
 // GetUserFiles 获取用户文件列表（支持分页）
 func (s *Service) GetUserFiles(ctx context.Context, userID uint, page, pageSize int) (*usermodel.UserFileList, error) {
-	s.ensureRepository()
 	fileCodeRepo := s.fileCodeRepo
 
 	// 获取文件列表
@@ -692,7 +660,6 @@ func (s *Service) GetUserFiles(ctx context.Context, userID uint, page, pageSize 
 
 // RevokeAllAPIKeys 一键吊销用户全部有效 API Key（应急止损），返回吊销数量。
 func (s *Service) RevokeAllAPIKeys(ctx context.Context, userID uint) (int64, error) {
-	s.ensureRepository()
 	n, err := s.apiKeyRepo.RevokeAllByUser(ctx, userID)
 	if err != nil {
 		return 0, fmt.Errorf("吊销全部 API Key 失败: %w", err)

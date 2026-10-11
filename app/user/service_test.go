@@ -7,7 +7,6 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
-	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,8 +14,7 @@ import (
 )
 
 // =====================================================================
-// user service 单测（Shape B：DAO 通过全局 db.GetDB() 访问）
-// 复用 share service 的 SetDatabaseInstance 注入模式。
+// user service 单测（注入式：构造直传 *gorm.DB，dao 去全局化终态）
 // =====================================================================
 
 func newTestDB(t *testing.T) *gorm.DB {
@@ -29,17 +27,15 @@ func newTestDB(t *testing.T) *gorm.DB {
 	sqlDB, err := gormDB.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	db.SetDatabaseInstance(gormDB)
-	t.Cleanup(func() { db.SetDatabaseInstance(nil) })
 	return gormDB
 }
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()
-	newTestDB(t)
+	gormDB := newTestDB(t)
 	// 登录会生成 JWT，需要设置 secret（避免使用硬编码默认值）
 	auth.SetJWTSecret("test-secret-for-user-service")
-	return NewService()
+	return NewService(gormDB)
 }
 
 // 测试：创建用户成功

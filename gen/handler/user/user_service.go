@@ -17,7 +17,16 @@ import (
 	"github.com/pigeonbox/core/pkg/middleware"
 )
 
-var userService = userservice.NewService()
+var userService *userservice.Service
+
+// getUserService 取装配级 user 服务。fail-fast：装配缺失必须显式暴露
+// （bootstrap 保证 SetUserService 先于服务流量），不再静默自建裸实例。
+func getUserService() *userservice.Service {
+	if userService == nil {
+		panic("user service not initialized: SetUserService must be called before serving")
+	}
+	return userService
+}
 
 // SetUserService 注入装配级 user 服务（bootstrap 调用）。注入实例带
 // DefaultsProvider（桥到 admin 域持久化配置）——注册开关/配额默认值等
@@ -35,7 +44,7 @@ func SetUserService(s *userservice.Service) {
 func Register(ctx context.Context, c *app.RequestContext) {
 	// 检查是否允许用户注册：管理后台"用户配置"持久化值优先，
 	// 无记录回退 yaml（经注入的 DefaultsProvider，修复管理端开关不生效）
-	if !userService.RegistrationAllowed(ctx) {
+	if !getUserService().RegistrationAllowed(ctx) {
 		c.JSON(consts.StatusForbidden, map[string]interface{}{
 			"code":    403,
 			"message": "用户注册已关闭",
@@ -55,7 +64,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 调用 service
-	result, err := userService.Create(ctx, &userservice.CreateUserReq{
+	result, err := getUserService().Create(ctx, &userservice.CreateUserReq{
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
@@ -112,7 +121,7 @@ func Login(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 调用 service 进行登录验证
-	userInfo, token, err := userService.Login(ctx, req.Username, req.Password)
+	userInfo, token, err := getUserService().Login(ctx, req.Username, req.Password)
 	if err != nil {
 		_, _ = lock.RecordFailure(ctx, lockKey)
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
@@ -170,7 +179,7 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 获取用户信息
-	user, err := userService.GetByID(ctx, userID)
+	user, err := getUserService().GetByID(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -229,7 +238,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	if _, err := userService.Update(ctx, userID, &userservice.UpdateUserReq{
+	if _, err := getUserService().Update(ctx, userID, &userservice.UpdateUserReq{
 		Nickname: req.Nickname,
 		Avatar:   req.Avatar,
 	}); err != nil {
@@ -280,7 +289,7 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	if err := userService.ChangePassword(ctx, userID, req.OldPassword, req.NewPassword); err != nil {
+	if err := getUserService().ChangePassword(ctx, userID, req.OldPassword, req.NewPassword); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
 			"code":    400,
 			"message": err.Error(),
@@ -317,7 +326,7 @@ func UserStats(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	stats, err := userService.GetStats(ctx, userID)
+	stats, err := getUserService().GetStats(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -329,8 +338,8 @@ func UserStats(ctx context.Context, c *app.RequestContext) {
 	// 配额：用户级覆盖 > 系统默认（0 = 不限）
 	quotaUsed := stats.TotalStorage
 	quotaLimit := int64(0)
-	quotaLimit = userService.SystemDefaultStorageQuota(ctx)
-	if u, err := userService.GetByID(ctx, userID); err == nil && u != nil && u.MaxStorageQuota > 0 {
+	quotaLimit = getUserService().SystemDefaultStorageQuota(ctx)
+	if u, err := getUserService().GetByID(ctx, userID); err == nil && u != nil && u.MaxStorageQuota > 0 {
 		quotaLimit = u.MaxStorageQuota
 	}
 
@@ -391,7 +400,7 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 调用 service 获取用户文件列表
-	fileList, err := userService.GetUserFiles(ctx, uint(userID), int(page), int(pageSize))
+	fileList, err := getUserService().GetUserFiles(ctx, uint(userID), int(page), int(pageSize))
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -433,7 +442,7 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	keys, err := userService.ListAPIKeys(ctx, userID)
+	keys, err := getUserService().ListAPIKeys(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,
@@ -521,7 +530,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 调用 service 创建 API Key
-	result, err := userService.CreateAPIKey(ctx, uint(userID), &userservice.CreateAPIKeyReq{
+	result, err := getUserService().CreateAPIKey(ctx, uint(userID), &userservice.CreateAPIKeyReq{
 		Name:          req.Name,
 		ExpiresAt:     expiresAt,
 		ExpiresInDays: expiresInDays,
@@ -595,7 +604,7 @@ func DeleteAPIKey(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 调用 service 撤销 API Key
-	if err := userService.DeleteAPIKey(ctx, uint(userID), uint(keyID)); err != nil {
+	if err := getUserService().DeleteAPIKey(ctx, uint(userID), uint(keyID)); err != nil {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
 			"code":    404,
 			"message": err.Error(),
@@ -637,7 +646,7 @@ func RevokeAllAPIKeys(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	revoked, err := userService.RevokeAllAPIKeys(ctx, userID)
+	revoked, err := getUserService().RevokeAllAPIKeys(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    500,

@@ -128,7 +128,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	})
 	// 2.4 注入 user service：上传统计（此前从未接线，用户统计恒为 0）
 	// + 存储配额强制检查（user_quota / 用户级 max_storage_quota）
-	userSvc := userService.NewService()
+	userSvc := userService.NewService(database)
 	userSvc.SetDefaultsProvider(adminDefaultsAdapter{})
 	shareSvc.SetUserService(userSvc)
 	shareSvc.SetQuotaChecker(userSvc)
