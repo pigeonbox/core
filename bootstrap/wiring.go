@@ -29,6 +29,7 @@ import (
 	"github.com/pigeonbox/core/conf"
 	adminGenHandler "github.com/pigeonbox/core/gen/handler/admin"
 	chunkHandler "github.com/pigeonbox/core/gen/handler/chunk"
+	notifyHandler "github.com/pigeonbox/core/gen/handler/notify"
 	presignHandler "github.com/pigeonbox/core/gen/handler/presign"
 	previewHandler "github.com/pigeonbox/core/gen/handler/preview"
 	ratelimitHandler "github.com/pigeonbox/core/gen/handler/ratelimit"
@@ -68,6 +69,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	notifyApp := notifyAppService.NewService(database)
 	// 1.1 注入定制路由的 notify service
 	customHandler.SetNotifyService(notifyApp)
+	notifyHandler.SetNotifyService(notifyApp) // gen IDL 路由共用同一实例(此前懒回退裸实例掩盖漏注入)
 	// 1.2 供配置广播热重建使用（public 副本收到变更后重挂 Webhook/SMTP 渠道）
 	notifySvcInstance = notifyApp
 
@@ -249,6 +251,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	chunkSvc.SetStorage(bootstrapStorage)
 	chunkHandler.SetChunkService(chunkSvc)
 	previewHandler.SetService(previewApp.NewService(database, bootstrapStorage))
+	customHandler.SetMultiChunkService(chunkSvc) // 多文件绑定 chunk 会话查询(此前每调自建掩盖漏注入)
 
 	// 6.5 MCP server（AI 客户端集成）：统计/维护走全站唯一 admin 实例，
 	//     分享创建走 share service（复用配额/审核链路）、文件下载走全站存储实例、

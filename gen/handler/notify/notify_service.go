@@ -19,6 +19,9 @@ import (
 
 var notifySvc *notifyapp.Service
 
+// SetNotifyService 注入装配级 notify 服务（bootstrap 调用）。
+func SetNotifyService(s *notifyapp.Service) { notifySvc = s }
+
 func getService() *notifyapp.Service {
 	if notifySvc == nil {
 		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetNotifyService 先于服务流量）。
