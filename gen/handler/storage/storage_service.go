@@ -15,7 +15,6 @@ import (
 	storageapp "github.com/pigeonbox/core/app/storage"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/resp"
-	"github.com/pigeonbox/core/repo/db/dao"
 	storagedrv "github.com/pigeonbox/core/storage"
 )
 
@@ -31,6 +30,19 @@ func getService() *storageapp.Service {
 		storageSvc = storageapp.NewService()
 	}
 	return storageSvc
+}
+
+var adminStats *adminapp.Service
+
+// SetAdminStats 注入 admin 统计服务（bootstrap 调用）——洞察/趋势消费面收口，
+// gen handler 不直依 dao。
+func SetAdminStats(s *adminapp.Service) { adminStats = s }
+
+func getAdminStats() *adminapp.Service {
+	if adminStats == nil {
+		panic("admin stats service not initialized: SetAdminStats must be called before serving")
+	}
+	return adminStats
 }
 
 var storageJanitor *adminapp.Janitor
@@ -217,7 +229,7 @@ func GetStorageInsights(ctx context.Context, c *app.RequestContext) {
 	// 用量（DB 口径：未 purge 行——软删对象 purge 前仍占实际存储）
 	// + 回收站规模。用量按当前生效后端归位：local 计入 LocalUsage，
 	// 远端计入 RemoteUsage；历史遗留跨后端行不作区分（口径见 InsightStats）。
-	total, totalSize, alive, softDeleted, err := dao.NewFileCodeRepository().InsightStats(ctx)
+	total, totalSize, alive, softDeleted, err := getAdminStats().StorageInsight(ctx)
 	if err != nil {
 		resp.NewErrorWithMessage(c, errcode.CodeInternal, err.Error())
 		return
@@ -233,16 +245,15 @@ func GetStorageInsights(ctx context.Context, c *app.RequestContext) {
 
 	// 今日流量（transfer_logs 按 operation 计数；计数失败不阻断洞察）
 	today := time.Now().Format("2006-01-02")
-	tl := dao.NewTransferLogRepository()
 	todayStart := time.Date(time.Now().Year(), time.Now().Month(), time.Now().Day(), 0, 0, 0, 0, time.Local)
-	if rows, err := tl.TrendByDay(ctx, todayStart, "upload"); err == nil {
+	if rows, err := getAdminStats().TransferTrendByDay(ctx, todayStart, "upload"); err == nil {
 		for _, r := range rows {
 			if r.Date == today {
 				data.TodayTraffic.Uploads = r.Count
 			}
 		}
 	}
-	if rows, err := tl.TrendByDay(ctx, todayStart, "download"); err == nil {
+	if rows, err := getAdminStats().TransferTrendByDay(ctx, todayStart, "download"); err == nil {
 		for _, r := range rows {
 			if r.Date == today {
 				data.TodayTraffic.Downloads = r.Count

@@ -203,6 +203,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	storageSvc.SetRuntime(getBootstrapStorageService())
 	storageSvc.SetPersister(configApp.Default()) // RuntimePersister=config 域(运行时存储段唯一写者)
 	storageHandler.SetService(storageSvc)
+	storageHandler.SetAdminStats(adminSvc)
 
 	// 4.7 管理端增强服务注入（用户 CRUD/文件管理/富统计）：
 	//   - adminSvc/userSvc → gen/handler/admin（2026-10-10 IDL 化 20 端点）

@@ -81,6 +81,22 @@ func (s *Service) GetTransferLogs(ctx context.Context, query model.TransferLogQu
 	return s.transferLogRepo.List(ctx, query)
 }
 
+// ListAdminOperationLogs 查询管理操作审计（gen/handler 消费面收口，handler 不直依 dao）。
+func (s *Service) ListAdminOperationLogs(ctx context.Context, query model.AdminOperationLogQuery) ([]*model.AdminOperationLog, int64, error) {
+	return s.adminOperationRepo.List(ctx, query)
+}
+
+// StorageInsight 存储洞察聚合（gen/handler/storage 洞察端点消费面收口）。
+func (s *Service) StorageInsight(ctx context.Context) (total, totalSize, alive, softDeleted int64, err error) {
+	return s.fileCodeRepo.InsightStats(ctx)
+}
+
+// TransferTrendByDay 传输次数按天趋势（gen/handler/storage 今日流量消费面收口；
+// operation 空 = 全部类型）。
+func (s *Service) TransferTrendByDay(ctx context.Context, from time.Time, operation string) ([]dao.DayCount, error) {
+	return s.transferLogRepo.TrendByDay(ctx, from, operation)
+}
+
 // EnhancedStats Dashboard 富指标（昨日对比/下载总量/类型分布）。
 type EnhancedStats struct {
 	TodayUploads     int64             `json:"today_uploads"`

@@ -15,7 +15,6 @@ import (
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/transfer"
 	"github.com/pigeonbox/core/pkg/utils"
-	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
 )
@@ -220,7 +219,7 @@ func AdminActivities(ctx context.Context, c *app.RequestContext) {
 		b := s == "true"
 		query.Success = &b
 	}
-	logs, total, err := dao.NewAdminOperationLogRepository().List(ctx, query)
+	logs, total, err := getManageSvc().ListAdminOperationLogs(ctx, query)
 	if err != nil {
 		c.JSON(consts.StatusOK, &admin.AdminActivitiesResp{
 			Code: 50001, Message: "查询审计日志失败: " + err.Error(),
