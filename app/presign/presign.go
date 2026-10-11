@@ -643,22 +643,58 @@ type QuickUploadResult struct {
 	FullShareURL string
 }
 
-// CheckQuickUpload 秒传检查：按客户端提供的 SHA-256 + 文件大小查找未过期的既有分享。
-// 命中即无需直传，直接出码（对标上游 init 返回 existed 语义）。
-func (s *Service) CheckQuickUpload(ctx context.Context, fileHash string, fileSize int64) (*QuickUploadResult, error) {
-	if fileHash == "" || fileSize <= 0 || s.shareService == nil {
+// QuickShareMeta 秒传建分享所需元数据（presign init 请求携带）。
+type QuickShareMeta struct {
+	FileName     string
+	FileSize     int64
+	FileHash     string
+	ExpireValue  int
+	ExpireStyle  string
+	RequireAuth  bool
+	PasswordHash string
+}
+
+// CheckQuickUpload 秒传检查（2026-10-12 重做，D1=A 同用户内去重）：
+// 命中**调用者自己**历史同 hash+size 文件时，新建一条分享（调用者元数据：
+// 名称/过期/密码）引用既有存储对象，免直传直接出码。
+//
+// 此前语义=回借既有分享的 code（全库匹配）——两处不可接受：跨用户匹配是
+// 存在性 oracle（撞库探测谁传过什么）；借来的分享生命周期/密码/过期全归
+// 原主，本次请求的元数据被静默丢弃。现改为同用户 + 建新分享。
+func (s *Service) CheckQuickUpload(ctx context.Context, userID uint, meta QuickShareMeta) (*QuickUploadResult, error) {
+	if userID == 0 || meta.FileHash == "" || meta.FileSize <= 0 || s.shareService == nil {
 		return nil, errors.New("no quick upload candidate")
 	}
-	fc, err := s.fileCodeRepo.GetByHashAndSize(ctx, fileHash, fileSize)
+	fc, err := s.fileCodeRepo.FindQuickUploadSource(ctx, userID, meta.FileHash, meta.FileSize)
 	if err != nil || fc == nil {
 		return nil, errors.New("not found")
 	}
-	if fc.IsExpired() {
-		return nil, errors.New("expired")
+	srcPath := fc.GetFilePath()
+	if srcPath == "" {
+		return nil, errors.New("not found")
+	}
+	// 新分享引用源对象（FilePath=源路径；share 域 CreateShare 去重钩子对同路径
+	// no-op）。快照语义：新分享过期/密码独立于源分享，源删除不影响本分享
+	// （物理对象由引用计数保护，删除前查引用）。
+	resp, err := s.shareService.CreateShare(ctx, &ShareCreateReq{
+		Channel:      "presign",
+		FilePath:     srcPath,
+		Size:         meta.FileSize,
+		Text:         meta.FileName,
+		ExpiredAt:    utils.CalculateExpireTime(meta.ExpireValue, meta.ExpireStyle),
+		ExpiredCount: utils.CalculateExpireCount(meta.ExpireStyle, meta.ExpireValue),
+		RequireAuth:  meta.RequireAuth,
+		PasswordHash: meta.PasswordHash,
+		UserID:       &userID,
+		UploadType:   "authenticated",
+		FileHash:     meta.FileHash,
+	})
+	if err != nil {
+		return nil, err
 	}
 	return &QuickUploadResult{
-		ShareCode:    fc.Code,
-		FullShareURL: baseurl.Resolve(ctx, s.baseURL) + "/share/" + fc.Code,
+		ShareCode:    resp.Code,
+		FullShareURL: resp.FullShareURL,
 	}, nil
 }
 

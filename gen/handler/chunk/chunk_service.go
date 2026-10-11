@@ -163,23 +163,89 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// 检查快速上传：如果文件已存在，直接返回分享代码
-	if req.FileHash != "" {
-		shareCode, err := getChunkService().CheckQuickUpload(ctx, req.FileHash, req.FileSize)
-		if err == nil && shareCode != "" {
-			resp := &chunkmodel.ChunkUploadInitResp{
-				Code:    200,
-				Message: "文件已存在，快速上传成功",
-				Data: &chunkmodel.ChunkUploadInitData{
-					UploadID:      uploadID,
-					ChunkSize:     fmt.Sprintf("%d", req.ChunkSize),
-					TotalChunks:   fmt.Sprintf("%d", req.TotalChunks),
-					IsQuickUpload: true,
-					ShareCode:     shareCode,
-				},
+	// 秒传快速通道（2026-10-12，D1=A 同用户内 + 建新分享语义，与 presign 对齐）：
+	// 命中调用者自己历史同 hash+size 文件 → 按**本次元数据**建新分享（名称/过期/
+	// 密码生效，引用既有对象免传分片）。携带 expire_style 即启用（元数据显式
+	// opt-in；不带则走正常分片上传，Complete 再建分享）；仅登录用户。两条路径
+	// 均过 CreateShare 去重钩子（存储级去重恒生效）。
+	if req.FileHash != "" && gateUserID != nil && req.ExpireStyle != nil && *req.ExpireStyle != "" {
+		if err := utils.CheckExpireStyleAllowed(*req.ExpireStyle); err == nil {
+			if src, qerr := getChunkService().FindQuickUploadSource(ctx, *gateUserID, req.FileHash, req.FileSize); qerr == nil && src != nil {
+				// 密码保护（与 Complete 同语义：require_auth 必须有密码）
+				requireAuth := req.RequireAuth != nil && *req.RequireAuth
+				passwordHash := ""
+				if requireAuth {
+					password := ""
+					if req.Password != nil {
+						password = *req.Password
+					}
+					if password == "" {
+						c.JSON(consts.StatusBadRequest, map[string]interface{}{
+							"code":    400,
+							"message": "开启密码保护时必须提供密码",
+						})
+						return
+					}
+					hash, perr := utils.HashPassword(password)
+					if perr != nil {
+						c.JSON(consts.StatusInternalServerError, map[string]interface{}{
+							"code":    500,
+							"message": "密码处理失败",
+						})
+						return
+					}
+					passwordHash = hash
+				}
+				expireValue := 1
+				if req.ExpireValue != nil {
+					expireValue = int(*req.ExpireValue)
+				}
+				expireTime := utils.CalculateExpireTime(expireValue, *req.ExpireStyle)
+				expireCount := utils.CalculateExpireCount(*req.ExpireStyle, expireValue)
+				// 自定义取件码：仅登录用户可指定（与 Complete 同把关）
+				customCode := ""
+				if req.CustomCode != nil {
+					customCode = *req.CustomCode
+				}
+
+				shareResult, serr := getShareService().ShareFile(ctx, &shareService.ShareFileReq{
+					Channel:      "chunk",
+					FilePath:     src.GetFilePath(),
+					Size:         req.FileSize,
+					Text:         utils.SanitizeFileName(req.FileName),
+					ExpiredAt:    expireTime,
+					ExpiredCount: expireCount,
+					RequireAuth:  requireAuth,
+					PasswordHash: passwordHash,
+					UserID:       gateUserID,
+					UploadType:   "authenticated",
+					OwnerIP:      middleware.ClientIP(c),
+					FileHash:     req.FileHash,
+					IsChunked:    true,
+					CustomCode:   customCode,
+				})
+				if serr != nil {
+					resp.NewTypedError(c, serr) // 配额/审核等 typed error 按业务码透传
+					return
+				}
+				fullShareURL := publicShareURL(ctx, shareResult.Code)
+				if tk := security.GenerateDownloadToken(shareResult.Code); tk != "" {
+					fullShareURL += "?token=" + tk
+				}
+				c.JSON(consts.StatusOK, &chunkmodel.ChunkUploadInitResp{
+					Code:    200,
+					Message: "文件已存在，秒传成功",
+					Data: &chunkmodel.ChunkUploadInitData{
+						UploadID:      "",
+						ChunkSize:     fmt.Sprintf("%d", req.ChunkSize),
+						TotalChunks:   fmt.Sprintf("%d", req.TotalChunks),
+						IsQuickUpload: true,
+						ShareCode:     shareResult.Code,
+						ShareURL:      strPtr(fullShareURL),
+					},
+				})
+				return
 			}
-			c.JSON(consts.StatusOK, resp)
-			return
 		}
 	}
 
@@ -779,6 +845,9 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 }
 
 // readHeadFrom 从 reader 读取前 n 字节（魔数校验用）；读取失败返回 nil
+// strPtr 字符串转指针（契约 optional 字段）
+func strPtr(s string) *string { return &s }
+
 func readHeadFrom(r io.Reader, n int) []byte {
 	buf := make([]byte, n)
 	read, err := io.ReadFull(r, buf)

@@ -151,24 +151,6 @@ func Init(ctx context.Context, c *app.RequestContext) {
 	// 秒传指纹：客户端预计算 SHA-256（契约字段,contracts v0.5.0 起;超限为空串）
 	fileHash := strings.TrimSpace(strDeref(req.FileHash))
 
-	// 秒传：同哈希+同大小的未过期分享已存在 → 免直传直接出码。
-	// typed 契约响应（contracts v0.5.0 起 InitData 含秒传 optional 字段;
-	// required 字段以零值序列化,前端与 openapi 均按契约只读秒传字段）。
-	if fileHash != "" {
-		if qu, err := getService().CheckQuickUpload(ctx, fileHash, req.FileSize); err == nil && qu != nil {
-			resp.Success(c, &presignmodel.InitData{
-				UploadID:  "",
-				IsQuick:   boolPtr(true),
-				Existed:   boolPtr(true),
-				ShareCode: strPtr(qu.ShareCode),
-				ShareURL:  strPtr(qu.FullShareURL),
-				// 安全修复（2026-10-03）：不再对秒传命中的原分享签发下载令牌——
-				// 持同哈希文件者可借令牌跳过原分享的密码校验（穿透）。
-			})
-			return
-		}
-	}
-
 	// 密码保护:require_auth 时密码必填,bcrypt 哈希后随 meta 存储
 	// (修复:此前密码未传,导致大文件分享的密码保护形同虚设)
 	passwordHash := ""
@@ -188,6 +170,31 @@ func Init(ctx context.Context, c *app.RequestContext) {
 			return
 		}
 		passwordHash = hash
+	}
+
+	// 秒传（2026-10-12 重做，D1=A 同用户内去重）：命中调用者自己历史同 hash+size
+	// 文件 → 建新分享（本次元数据：名称/过期/密码）引用既有对象，免直传直接出码。
+	// 仅登录用户（匿名无归属,秒传必落空）;pickup_code 绑定会话走正常直传回填不进此路。
+	// typed 契约响应（InitData 含秒传 optional 字段,required 以零值序列化）。
+	if fileHash != "" && gateUserID != nil && strDeref(req.PickupCode) == "" {
+		if qu, err := getService().CheckQuickUpload(ctx, *gateUserID, presignapp.QuickShareMeta{
+			FileName:     req.FileName,
+			FileSize:     req.FileSize,
+			FileHash:     fileHash,
+			ExpireValue:  int(i32Deref(req.ExpireValue)),
+			ExpireStyle:  strDeref(req.ExpireStyle),
+			RequireAuth:  boolDeref(req.RequireAuth),
+			PasswordHash: passwordHash,
+		}); err == nil && qu != nil {
+			resp.Success(c, &presignmodel.InitData{
+				UploadID:  "",
+				IsQuick:   boolPtr(true),
+				Existed:   boolPtr(true),
+				ShareCode: strPtr(qu.ShareCode),
+				ShareURL:  strPtr(qu.FullShareURL),
+			})
+			return
+		}
 	}
 
 	// 匿名 per-IP 日配额（秒传未命中、参数校验全过才计数；登录用户不计）

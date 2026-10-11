@@ -5,9 +5,6 @@ import (
 	"context"
 	"fmt"
 	"time"
-
-	"github.com/pigeonbox/core/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // CleanupExpiredFiles 清理过期文件
@@ -66,16 +63,15 @@ func (s *Service) CleanExpiredFiles(ctx context.Context) (int64, int64, error) {
 	freedSpace := int64(0)
 	childRepo := s.fileFileRepo
 	for _, file := range expiredFiles {
-		// 多文件分享子文件一并清理（P0 多文件；失败不阻断 DB 删除）
+		// 多文件分享子文件一并清理（P0 多文件；失败不阻断 DB 删除）；
+		// 秒传共享对象保护（2026-10-12）：删前查引用，被其他分享共享时保留物理文件
 		if s.storage != nil {
 			if children, cerr := childRepo.ListByFileCodeID(ctx, file.ID); cerr == nil {
 				for _, c := range children {
 					if c.FilePath == "" {
 						continue
 					}
-					if err := s.storage.DeleteFile(ctx, c.FilePath); err != nil {
-						logger.Warn("delete child physical file failed during cleanup", zap.String("path", c.FilePath), zap.Error(err))
-					}
+					s.deletePhysicalIfUnreferenced(ctx, c.FilePath, file.ID)
 				}
 				if len(children) > 0 {
 					_ = childRepo.SoftDeleteByFileCodeIDs(ctx, []uint{file.ID})
@@ -84,12 +80,7 @@ func (s *Service) CleanExpiredFiles(ctx context.Context) (int64, int64, error) {
 		}
 		// 删物理文件（失败不阻断 DB 删除）
 		if s.storage != nil && file.FilePath != "" {
-			fp := file.GetFilePath()
-			if fp != "" {
-				if err := s.storage.DeleteFile(ctx, fp); err != nil {
-					logger.Warn("delete physical file failed during cleanup", zap.String("path", fp), zap.Error(err))
-				}
-			}
+			s.deletePhysicalIfUnreferenced(ctx, file.GetFilePath(), file.ID)
 		}
 		freedSpace += file.Size
 	}

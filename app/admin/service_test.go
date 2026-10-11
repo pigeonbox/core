@@ -55,7 +55,7 @@ func newAdminTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.SystemConfigRecord{}))
+	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.FileCodeFile{}, &model.SystemConfigRecord{}))
 	return g
 }
 

@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	"github.com/pigeonbox/core/repo/db/model"
@@ -57,22 +58,22 @@ func (r *FileCodeRepository) GetByCodeFolded(ctx context.Context, code string) (
 	return &fileCode, nil
 }
 
-// GetByHashAndSize 秒传检索：仅命中"正常态 + 无密码 + 未过期"的分享。
-// 回归（2026-10-03）：不过滤 status 会把 blocked/待审分享当秒传源（存在性
-// oracle + 假成功 UX）；不过滤 require_auth 会让持同哈希文件者借令牌穿透
-// 原分享的密码校验。
-// 回归二（2026-10-10，冒烟 S11b 暴露）：此前 First() 按 id 升序取最旧一条
-// 且不过滤过期——库里只要留有一条同哈希的过期记录，它就永远挡在后来全部
-// 有效分享前面，命中即 IsExpired 报错放弃，该文件秒传对所有人永久失效。
-// 现取候选集按 id 降序（新在前），Go 侧用 model.IsExpired() 挑最新可用一条
-// ——不在 SQL 复制过期语义（时间+次数双维度）防双源漂移；同 hash+size 候选
-// 天然少，Limit 32 封顶防恶意同哈希堆积拖查询。无可用候选返回
-// gorm.ErrRecordNotFound（与旧 First 未命中同契约，消费方按"未命中"处理）。
-func (r *FileCodeRepository) GetByHashAndSize(ctx context.Context, fileHash string, size int64) (*model.FileCode, error) {
+// FindQuickUploadSource 秒传源检索（2026-10-12 起限定同用户，D1=A 同用户内去重）：
+// 仅匹配**调用者自己**的历史文件分享，命中"正常态 + 未过期"且有存储路径。
+//
+// 隐私边界（D1 拍板）：跨用户匹配是存在性 oracle——持候选文件者可撞库探测
+// "本站是否有人传过该文件"，故仅限同用户（自己的文件自己知道，无泄露面）。
+// 回归（2026-10-03）：不过滤 status 会把 blocked/待审分享当秒传源（假成功 UX +
+// 违规内容借尸还魂）；回归二（2026-10-10）：候选按 id 降序 Go 侧挑最新可用，
+// 防过期旧记录挡死后来全部有效候选。无可用候选返回 gorm.ErrRecordNotFound。
+func (r *FileCodeRepository) FindQuickUploadSource(ctx context.Context, userID uint, fileHash string, size int64) (*model.FileCode, error) {
+	if userID == 0 || fileHash == "" || size <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
 	var candidates []model.FileCode
 	err := r.db().WithContext(ctx).
-		Where("file_hash = ? AND size = ? AND deleted_at IS NULL AND status = ? AND require_auth = ?",
-			fileHash, size, model.StatusNormal, false).
+		Where("user_id = ? AND file_hash = ? AND size = ? AND deleted_at IS NULL AND status = ?",
+			userID, fileHash, size, model.StatusNormal).
 		Order("id DESC").
 		Limit(32).
 		Find(&candidates).Error
@@ -80,14 +81,50 @@ func (r *FileCodeRepository) GetByHashAndSize(ctx context.Context, fileHash stri
 		return nil, err
 	}
 	for i := range candidates {
-		if !candidates[i].IsExpired() {
+		if !candidates[i].IsExpired() && candidates[i].GetFilePath() != "" {
 			return &candidates[i], nil
 		}
 	}
 	return nil, gorm.ErrRecordNotFound
 }
 
-// GetByHash 已删除：与 GetByHashAndSize SQL 逐字重复且全库无调用方（秒传走 GetByHashAndSize）。
+// CountFilePathReferences 统计引用某存储路径的分享行数（file_codes 主表 +
+// file_code_files 子表，均含软删行——软删行的物理文件留存供回收站恢复/清理
+// 任务处理）。excludeFileCodeID=本次要失效的分享自身 ID（0=不排）。
+// 秒传去重后多个分享共享同一物理文件，物理删除前必须确认无其他引用
+// （2026-10-12 秒传/去重）；查不清时调用方应跳过删除（宁泄漏勿误删）。
+//
+// 路径比对在 Go 侧按 GetFilePath() 解析后进行：file_codes 有新旧两种落库布局
+// （整路径 / 目录+uuid 文件名），SQL 精确比对会漏后者——按 file_path 相等或
+// uuid_file_name=basename 宽取候选，再解析归一比对。
+func (r *FileCodeRepository) CountFilePathReferences(ctx context.Context, filePath string, excludeFileCodeID uint) (int64, error) {
+	if filePath == "" {
+		return 0, nil
+	}
+	var rows []model.FileCode
+	if err := r.db().WithContext(ctx).Unscoped().
+		Where("(file_path = ? OR uuid_file_name = ?) AND id <> ?",
+			filePath, filepath.Base(filePath), excludeFileCodeID).
+		Find(&rows).Error; err != nil {
+		return 0, err
+	}
+	var n int64
+	for i := range rows {
+		if rows[i].GetFilePath() == filePath {
+			n++
+		}
+	}
+	var children []model.FileCodeFile
+	if err := r.db().WithContext(ctx).Unscoped().
+		Where("file_path = ? AND file_code_id <> ?", filePath, excludeFileCodeID).
+		Find(&children).Error; err != nil {
+		return 0, err
+	}
+	return n + int64(len(children)), nil
+}
+
+// GetByHashAndSize 已删除（2026-10-12）：全库秒传改为 FindQuickUploadSource
+// 同用户语义（D1=A），旧全局匹配是存在性 oracle 不再提供。
 
 func (r *FileCodeRepository) Update(ctx context.Context, fileCode *model.FileCode) error {
 	return r.db().WithContext(ctx).Save(fileCode).Error

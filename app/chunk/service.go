@@ -338,19 +338,23 @@ func (s *Service) GetUploadInfo(ctx context.Context, uploadID string) (*model.Up
 	return s.chunkRepo.GetByUploadID(ctx, uploadID)
 }
 
-// CheckQuickUpload 秒传检查（真实实现，替代原 TODO）：
-// 优先按 file_codes.file_hash + size 查既有未过期分享（跨会话秒传），
-// 命中直接返回分享码——客户端无需上传任何分片。
-func (s *Service) CheckQuickUpload(ctx context.Context, fileHash string, fileSize int64) (string, error) {
-	if fileHash == "" || fileSize <= 0 {
-		return "", errors.New("invalid file hash")
+// FindQuickUploadSource 秒传源检索（2026-10-12，D1=A 同用户内去重）：
+// 返回调用者自己历史同 hash+size 的最新可用分享；命中后由 handler 按**本次
+// 元数据**建新分享引用其存储对象（与 presign 通道同语义，2026-10-12 起
+// chunk init 契约携带 expire/password 元数据）。
+//
+// 此前"命中复用自己旧码"语义已废弃：旧分享的过期/密码/名称与本次请求意图
+// 不符（静默丢弃本次元数据）；全库跨用户匹配更早废弃——存在性 oracle。
+func (s *Service) FindQuickUploadSource(ctx context.Context, userID uint, fileHash string, fileSize int64) (*model.FileCode, error) {
+	if userID == 0 || fileHash == "" || fileSize <= 0 {
+		return nil, errors.New("invalid quick upload request")
 	}
-	fc, err := s.fileCodeRepo.GetByHashAndSize(ctx, fileHash, fileSize)
+	fc, err := s.fileCodeRepo.FindQuickUploadSource(ctx, userID, fileHash, fileSize)
 	if err != nil || fc == nil {
-		return "", errors.New("share code not found")
+		return nil, errors.New("share source not found")
 	}
 	if fc.IsExpired() {
-		return "", errors.New("share expired")
+		return nil, errors.New("share expired")
 	}
-	return fc.Code, nil
+	return fc, nil
 }

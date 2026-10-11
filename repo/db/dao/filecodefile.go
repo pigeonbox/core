@@ -68,6 +68,20 @@ func (r *FileCodeFileRepository) SoftDeleteByFileCodeIDs(ctx context.Context, fi
 		Delete(&model.FileCodeFile{}).Error
 }
 
+// ListAllPathsIncludingDeleted 全部子文件存储路径（含软删行，排除空路径）。
+// janitor 孤儿对账引用集用（2026-10-12）：多文件分享的非首文件只存在于子表，
+// 引用集漏掉会被对账误当孤儿删除。
+func (r *FileCodeFileRepository) ListAllPathsIncludingDeleted(ctx context.Context) ([]string, error) {
+	var paths []string
+	err := r.db().WithContext(ctx).Unscoped().Model(&model.FileCodeFile{}).
+		Where("file_path <> ''").
+		Distinct().Pluck("file_path", &paths).Error
+	if err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
 // CountByFileCodeIDs 批量统计多个分享的子文件数（列表页一次 GROUP BY，避免 N+1）。
 // 返回 file_code_id → count；无子行的分享不出现在结果中（调用方按 0 处理）。
 func (r *FileCodeFileRepository) CountByFileCodeIDs(ctx context.Context, fileCodeIDs []uint) (map[uint]int64, error) {

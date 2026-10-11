@@ -44,6 +44,7 @@ type Janitor struct {
 	retentionDays int // 0 = 永久保留日志
 
 	fileCodeRepo *dao.FileCodeRepository
+	fileFileRepo *dao.FileCodeFileRepository
 	chunkRepo    *dao.ChunkRepository
 	transferRepo *dao.TransferLogRepository
 	adminLogRepo *dao.AdminOperationLogRepository
@@ -55,6 +56,7 @@ func NewJanitor(gormDB *gorm.DB, svc StorageProvider, retentionDays int) *Janito
 		svc:           svc,
 		retentionDays: retentionDays,
 		fileCodeRepo:  dao.NewFileCodeRepository(gormDB),
+		fileFileRepo:  dao.NewFileCodeFileRepository(gormDB),
 		chunkRepo:     dao.NewChunkRepository(gormDB),
 		transferRepo:  dao.NewTransferLogRepository(gormDB),
 		adminLogRepo:  dao.NewAdminOperationLogRepository(gormDB),
@@ -85,6 +87,15 @@ func (j *Janitor) ReconcileOrphans(ctx context.Context) (int, int, error) {
 		if p := r.GetFilePath(); p != "" {
 			referenced[filepath.ToSlash(filepath.Clean(p))] = true
 		}
+	}
+	// 子表路径（2026-10-12 修复）：多文件分享的非首文件只存在于 file_code_files，
+	// 引用集漏掉会被对账误当孤儿删除。取集失败直接放弃本轮（引用集不全=误删风险）
+	childPaths, cerr := j.fileFileRepo.ListAllPathsIncludingDeleted(ctx)
+	if cerr != nil {
+		return 0, 0, cerr
+	}
+	for _, p := range childPaths {
+		referenced[filepath.ToSlash(filepath.Clean(p))] = true
 	}
 
 	// 2. 收集分片会话集合

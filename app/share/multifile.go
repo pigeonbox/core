@@ -250,10 +250,8 @@ func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
 		if c.FilePath == "" {
 			continue
 		}
-		if err := s.storage.DeleteFile(ctx, c.FilePath); err != nil {
-			logger.Warn("delete child physical file failed",
-				zap.String("path", c.FilePath), zap.Error(err))
-		}
+		// 秒传共享对象保护（2026-10-12）：删前查引用，多分享共享同一物理文件时保留
+		s.deletePhysicalIfUnreferenced(ctx, c.FilePath, fileCodeID)
 	}
 	if err := s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{fileCodeID}); err != nil {
 		logger.Warn("soft delete child rows failed", zap.Uint("file_code_id", fileCodeID), zap.Error(err))

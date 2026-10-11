@@ -87,14 +87,21 @@ func TestLargeFileChunkLifecycle(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	// 7. 跨会话秒传：插入同 hash+size 的既有分享后命中
+	// 7. 同用户秒传源检索（2026-10-12 D1=A）：插入同 hash+size 的自己既有分享后
+	// 命中，handler 据此按本次元数据建新分享（对齐 presign 语义）
+	uid := uint(1)
 	fc := &model.FileCode{
 		Code: "LF9999", FilePath: "uploads/2026/10/03/x.mp4", Size: fileSize,
-		FileHash: chunkHash(0), Text: "movie-25mb.mp4",
+		FileHash: chunkHash(0), Text: "movie-25mb.mp4", UserID: &uid,
 		ExpiredCount: -1, // -1 = 无限次（0 语义是"已耗尽"）
 	}
 	require.NoError(t, gormDB.Create(fc).Error)
-	code, err := svc.CheckQuickUpload(ctx, chunkHash(0), fileSize)
+	src, err := svc.FindQuickUploadSource(ctx, uid, chunkHash(0), fileSize)
 	require.NoError(t, err)
-	assert.Equal(t, "LF9999", code)
+	assert.Equal(t, "LF9999", src.Code)
+	assert.Equal(t, "uploads/2026/10/03/x.mp4", src.GetFilePath())
+
+	// 跨用户不得命中（存在性 oracle 防护）
+	_, err = svc.FindQuickUploadSource(ctx, 2, chunkHash(0), fileSize)
+	require.Error(t, err, "其他用户的同 hash 分享不得作为秒传源")
 }

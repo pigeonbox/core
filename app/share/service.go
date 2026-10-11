@@ -87,6 +87,9 @@ type ShareResp struct {
 	// PickupCode 6 位取件码（2026-10-07 起文件分享铸造；永久分享/未注入 minter 时为空。
 	// KV 映射仅加速解析，8 位分享码永远可用，故铸造失败不影响主流程）
 	PickupCode string `json:"pickup_code,omitempty"`
+	// Deduped 秒传去重命中（2026-10-12）：本分享未写入新存储对象，引用调用者
+	// 自己历史同 hash+size 文件的既有对象（D1=A 同用户内去重）
+	Deduped bool `json:"deduped,omitempty"`
 }
 
 // PickupCodeMinter 取件码铸造窄接口（app/anonymous.Service 结构性满足）。
@@ -563,6 +566,25 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 		return nil, err
 	}
 
+	// 秒传去重（2026-10-12，D1=A 同用户内）：命中自己历史同 hash+size 文件时，
+	// 回收冗余副本、新分享引用源对象（多分享共享物理文件——物理删除前必须查
+	// 引用，见 CountFilePathReferences 消费点）。
+	// ⚠️ 冗余副本回收必须走引用保护而非裸删：presign/chunk 秒传建分享传入的
+	// req.FilePath 本身可能就是某个既有源的路径（被其分享行引用），两查之间
+	// 若有更新的源出现而发生路径切换，裸删会误删既有源的物理文件（2026-10-12
+	// 实施中自查发现）；引用保护下被引用的路径只会跳过回收，多留的孤儿由
+	// janitor 对账兜底。
+	deduped := false
+	if req.FileHash != "" && req.UserID != nil && req.FilePath != "" {
+		if src, derr := s.fileCodeRepo.FindQuickUploadSource(ctx, *req.UserID, req.FileHash, req.Size); derr == nil && src != nil {
+			if srcPath := src.GetFilePath(); srcPath != "" && srcPath != req.FilePath {
+				s.deletePhysicalIfUnreferenced(ctx, req.FilePath, 0)
+				req.FilePath = srcPath
+				deduped = true
+			}
+		}
+	}
+
 	// 文件审核钩子（治理）：直传/分片/秒传三通道共用本入口。
 	// reject 建分享前拦截；pending 建分享后置待审并推事件（与文本通道同策略）。
 	filePending := false
@@ -645,6 +667,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 	s.federationCreated(fileCode.Code, fileCode.ExpiredAt)
 
 	resp := s.modelToResp(ctx, fileCode)
+	resp.Deduped = deduped
 	// 6 位取件码铸造（2026-10-07）：非致命——失败仅少一个快捷码，8 位分享码不受影响
 	if s.pickupMinter != nil {
 		if pickup, err := s.pickupMinter.MintForShare(ctx, fileCode.Code, req.Text, req.Size, req.RequireAuth, req.ExpiredAt); err != nil {
@@ -747,16 +770,12 @@ func (s *Service) DeleteFileByCode(ctx context.Context, code string, userID uint
 	}
 
 	// 4. 事务提交成功后，删除物理文件（不可回滚，放事务外，失败记日志不阻断）
-	//    多文件分享：子表各文件一并删除（legacy 单文件走主表路径）
+	//    多文件分享：子表各文件一并删除（legacy 单文件走主表路径）；
+	//    秒传共享对象保护（2026-10-12）：删前查引用，被其他分享共享时保留
 	if s.storage != nil {
 		s.deletePhysicalChildren(ctx, file.ID)
 		if file.FilePath != "" && file.UUIDFileName != "" {
-			filePath := file.GetFilePath()
-			if filePath != "" {
-				if err := s.storage.DeleteFile(ctx, filePath); err != nil {
-					logger.Warn("delete physical file failed", zap.String("path", filePath), zap.Error(err))
-				}
-			}
+			s.deletePhysicalIfUnreferenced(ctx, file.GetFilePath(), file.ID)
 		}
 	}
 

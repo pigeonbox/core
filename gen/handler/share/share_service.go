@@ -38,6 +38,9 @@ func strPtrIfNotEmpty(s string) *string {
 	return &s
 }
 
+// boolPtr 布尔转指针（契约 optional bool 字段）
+func boolPtr(b bool) *bool { return &b }
+
 // SetShareService 注入共享的 share service 实例（bootstrap 调用）。
 // 回归（治理 2026-10-03）：此前未注入，/share/text|file|select|download 走
 // getShareService() 懒加载裸实例，quotaChecker/notify/userService/moderator
@@ -414,13 +417,20 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 		Username: middleware.UsernameFromContext(ctx), IP: ownerIP,
 	})
 
+	message := "文件上传成功"
+	var deduped *bool
+	if shareResult.Deduped {
+		message = "秒传成功（内容已存在，未重复占用存储）"
+		deduped = boolPtr(true)
+	}
 	resp := &sharemodel.ShareFileResp{
 		Code:    200,
-		Message: "文件上传成功",
+		Message: message,
 		Data: &sharemodel.ShareData{
 			Code:       shareResult.Code,
 			URL:        fullShareURL,
 			PickupCode: strPtrIfNotEmpty(shareResult.PickupCode),
+			Deduped:    deduped,
 		},
 	}
 

@@ -45,6 +45,13 @@ func (s *Service) ShareBytes(ctx context.Context, opts ShareBytesOpts) (*ShareRe
 		return nil, fmt.Errorf("写入存储失败: %w", err)
 	}
 
+	// 上传通道标签随归属推导（与 ShareTextWithAuth 同语义）：MCP 游客快速分享
+	// （allow_guest）为匿名通道，登录用户/管理员为认证通道
+	uploadType := "anonymous"
+	if opts.UserID != nil {
+		uploadType = "authenticated"
+	}
+
 	return s.CreateShare(ctx, &ShareFileReq{
 		Channel:      "mcp",
 		FilePath:     rel,
@@ -55,7 +62,7 @@ func (s *Service) ShareBytes(ctx context.Context, opts ShareBytesOpts) (*ShareRe
 		RequireAuth:  opts.PasswordHash != "",
 		PasswordHash: opts.PasswordHash,
 		UserID:       opts.UserID,
-		UploadType:   "authenticated",
+		UploadType:   uploadType,
 		OwnerIP:      opts.OwnerIP,
 		CustomCode:   opts.CustomCode,
 	})

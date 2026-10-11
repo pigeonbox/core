@@ -21,7 +21,7 @@ func newJanitorTestEnv(t *testing.T) (string, *storage.StorageService, *gorm.DB)
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, g.AutoMigrate(
-		&model.FileCode{}, &model.UploadChunk{},
+		&model.FileCode{}, &model.FileCodeFile{}, &model.UploadChunk{},
 		&model.TransferLog{}, &model.AdminOperationLog{},
 	))
 	// glebarez/sqlite 的 :memory: 每条连接是独立库，多连接会拿到无表空库；

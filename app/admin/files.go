@@ -45,12 +45,9 @@ func (s *Service) PurgeFiles(ctx context.Context, ids []uint) (int64, error) {
 		if err != nil {
 			continue
 		}
-		if s.storage != nil {
-			if fp := file.GetFilePath(); fp != "" {
-				if err := s.storage.DeleteFile(ctx, fp); err != nil {
-					logger.Warn("purge physical object failed", zap.String("path", fp), zap.Error(err))
-				}
-			}
+		// 秒传共享对象保护（2026-10-12）：删前查引用，被其他分享共享时保留物理文件
+		if fp := file.GetFilePath(); fp != "" {
+			s.deletePhysicalIfUnreferenced(ctx, fp, id)
 		}
 		if _, err := s.fileCodeRepo.HardDeleteByIDs(ctx, []uint{id}); err != nil {
 			logger.Warn("purge db row failed", zap.Uint("id", id), zap.Error(err))
@@ -96,13 +93,10 @@ func (s *Service) DeleteFile(ctx context.Context, fileID uint) error {
 		return err
 	}
 
-	// 2. 删除物理文件（失败记日志不阻断——DB 已删，孤儿文件由清理任务兜底）
+	// 2. 删除物理文件（失败记日志不阻断——DB 已删，孤儿文件由清理任务兜底；
+	//    秒传共享对象保护：删前查引用，被其他分享共享时保留）
 	if s.storage != nil && file.FilePath != "" {
-		if fp := file.GetFilePath(); fp != "" {
-			if err := s.storage.DeleteFile(ctx, fp); err != nil {
-				logger.Warn("admin delete physical file failed", zap.String("path", fp), zap.Error(err))
-			}
-		}
+		s.deletePhysicalIfUnreferenced(ctx, file.GetFilePath(), fileID)
 	}
 
 	// 3. 联邦撤销公告（未启用为 no-op）
@@ -113,6 +107,27 @@ func (s *Service) DeleteFile(ctx context.Context, fileID uint) error {
 	s.logAdminOperation(ctx, "file.delete",
 		fmt.Sprintf("file %d (code=%s, name=%s) deleted", fileID, file.Code, file.Text), true)
 	return nil
+}
+
+// deletePhysicalIfUnreferenced 物理删除保护（2026-10-12 秒传去重共享对象）：
+// 无其他分享引用 filePath 时才删；查不清跳过删除（宁泄漏勿误删，janitor 对账兜底）。
+// excludeFileCodeID=本次要失效的分享自身 ID（0=不排）。
+func (s *Service) deletePhysicalIfUnreferenced(ctx context.Context, filePath string, excludeFileCodeID uint) {
+	if s.storage == nil || filePath == "" {
+		return
+	}
+	n, err := s.fileCodeRepo.CountFilePathReferences(ctx, filePath, excludeFileCodeID)
+	if err != nil {
+		logger.Warn("physical delete skipped: reference count failed (leak, janitor reconciles)",
+			zap.String("path", filePath), zap.Error(err))
+		return
+	}
+	if n > 0 {
+		return // 仍被其他分享引用（秒传共享对象），保留物理文件
+	}
+	if err := s.storage.DeleteFile(ctx, filePath); err != nil {
+		logger.Warn("delete physical file failed", zap.String("path", filePath), zap.Error(err))
+	}
 }
 
 // GetFileByCode 按取件码获取文件
@@ -181,9 +196,8 @@ func (s *Service) BatchDeleteFiles(ctx context.Context, ids []uint) (int, error)
 					if c.FilePath == "" {
 						continue
 					}
-					if err := s.storage.DeleteFile(ctx, c.FilePath); err != nil {
-						logger.Warn("batch delete child physical file failed", zap.String("path", c.FilePath), zap.Error(err))
-					}
+					// 秒传共享对象保护（2026-10-12）：删前查引用
+					s.deletePhysicalIfUnreferenced(ctx, c.FilePath, id)
 				}
 				if len(children) > 0 {
 					_ = childRepo.SoftDeleteByFileCodeIDs(ctx, []uint{id})
@@ -191,11 +205,7 @@ func (s *Service) BatchDeleteFiles(ctx context.Context, ids []uint) (int, error)
 			}
 		}
 		if s.storage != nil && fc.FilePath != "" {
-			if fp := fc.GetFilePath(); fp != "" {
-				if err := s.storage.DeleteFile(ctx, fp); err != nil {
-					logger.Warn("batch delete physical file failed", zap.String("path", fp), zap.Error(err))
-				}
-			}
+			s.deletePhysicalIfUnreferenced(ctx, fc.GetFilePath(), id)
 		}
 	}
 
