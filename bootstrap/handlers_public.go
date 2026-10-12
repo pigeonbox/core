@@ -67,6 +67,9 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		"oidcEnabled": conf.GetGlobalConfig().Security.OIDC.Enabled,
 		// 管理入口可见性（ui.show_admin_addr，缺省=展示；/admin 路由始终可达，仅控制页脚入口展示）
 		"showAdminAddr": config.UI.ShowAdminAddrEnabled(),
+		// 管理入口路径段（ui.admin_path/PB_UI_ADMIN_PATH，缺省 admin）：前端按此
+		// 注册 hash 路由——自定义后 /admin 不再可达（入口混淆，非安全边界）
+		"adminPath": config.UI.AdminPathOrDefault(),
 		// 直传设置下发（前端通道决策）：匿名 presign 直传开关 + 直传阈值(MB)。
 		// 管理后台持久化段优先，无记录回退全局 conf（缺省=开启/100MB）
 		"presignPolicy":      effectiveDownload.PresignPolicyOrDefault(),

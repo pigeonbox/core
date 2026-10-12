@@ -198,6 +198,7 @@ var envBindings = map[string][]string{
 	// ui
 	"ui.expose_openapi":  {"PB_UI_EXPOSE_OPENAPI"},
 	"ui.show_admin_addr": {"PB_UI_SHOW_ADMIN_ADDR"},
+	"ui.admin_path":      {"PB_UI_ADMIN_PATH"},
 	// moderation（内容审核，治理 2026-10-03）
 	"moderation.enabled":       {"PB_MODERATION_ENABLED"},
 	"moderation.blocked_words": {"PB_MODERATION_BLOCKED_WORDS"},

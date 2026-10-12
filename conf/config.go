@@ -2,6 +2,7 @@ package conf
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -523,11 +524,34 @@ type UIConfig struct {
 	// ExposeOpenAPI 是否公开 /openapi.json（默认 true，前端 /api-docs 页依赖）；
 	// 生产部署可置 false 收缩端点清单侦察面（env: PB_UI_EXPOSE_OPENAPI）。
 	ExposeOpenAPI bool `mapstructure:"expose_openapi" json:"expose_openapi"`
+	// AdminPath 自定义管理后台入口路径段（hash 路由，缺省 admin；env: PB_UI_ADMIN_PATH）。
+	// 仅入口混淆（SPA 须知路径才能路由，会随公开配置下发）——防误触与批量扫描，
+	// 不构成安全边界，安全靠登录鉴权。非法字符/超长自动回退 admin。
+	AdminPath string `mapstructure:"admin_path" json:"admin_path"`
 }
 
 // ShowAdminAddrEnabled 页脚管理入口是否展示（nil 视为展示）。
 func (c *UIConfig) ShowAdminAddrEnabled() bool {
 	return c.ShowAdminAddr == nil || *c.ShowAdminAddr
+}
+
+// AdminPathOrDefault 管理后台入口路径段（缺省 "admin"）。
+// 白名单消毒：仅字母/数字/-/_，长度 2~32；其余形态一律回退默认值。
+func (c *UIConfig) AdminPathOrDefault() string {
+	p := strings.TrimSpace(c.AdminPath)
+	p = strings.Trim(p, "/")
+	if len(p) < 2 || len(p) > 32 {
+		return "admin"
+	}
+	for i := 0; i < len(p); i++ {
+		ch := p[i]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9', ch == '-', ch == '_':
+		default:
+			return "admin"
+		}
+	}
+	return p
 }
 
 // ObservabilityConfig 可观测性配置（metrics；分布式追踪见路线图，未实现前不暴露配置）

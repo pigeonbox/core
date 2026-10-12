@@ -33,6 +33,7 @@ type MultiShareReq struct {
 	Channel      string // direct/chunk/presign（metrics/审核 meta 用）
 	Encrypted    bool   // E2E：所有子文件均为客户端密文（P1）
 	CustomCode   string // 自定义取件码（P3；登录用户专属，handler 把关）
+	Note         string // 文件备注（可空，取件页展示；2026-10-12 #489）
 }
 
 // ShareFileItem 分享内单文件视图（取件端/管理端通用）。
@@ -115,6 +116,7 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 			OwnerIP:      req.OwnerIP,
 			FileHash:     first.FileHash,
 			Encrypted:    req.Encrypted,
+			Note:         req.Note,
 		}
 	})
 	if err != nil {

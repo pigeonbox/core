@@ -37,6 +37,8 @@ type FileCode struct {
 	FilePath     string     `gorm:"size:255" json:"file_path"`
 	Size         int64      `gorm:"default:0" json:"size"`
 	Text         string     `gorm:"type:text" json:"text"`
+	// Note 文件备注（可空）：随分享展示给取件人（2026-10-12，文件+文本一并投递）
+	Note string `gorm:"type:text" json:"note"`
 	ExpiredAt    *time.Time `gorm:"index:idx_file_codes_status_expired,priority:2" json:"expired_at"`
 	ExpiredCount int        `gorm:"default:0" json:"expired_count"` // 剩余可取次数：-1=无限, 0=已耗尽, >0=剩余
 	UsedCount    int        `gorm:"default:0" json:"used_count"`

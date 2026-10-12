@@ -378,6 +378,12 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 		customCode = c.DefaultPostForm("custom_code", "")
 	}
 
+	// 文件备注（可空，取件页展示；2026-10-12 #489 文件+文本一并投递）
+	note := ""
+	if req.Note != nil {
+		note = *req.Note
+	}
+
 	// 11. 构建分享请求（encrypted 于 4.5 处解析；E2E 密文分享）
 	shareReq := &shareService.ShareFileReq{
 		Channel:      "direct",
@@ -394,6 +400,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 		FileHash:     fileHash,
 		Encrypted:    encryptedEarly,
 		CustomCode:   customCode,
+		Note:         note,
 	}
 
 	// 12. 调用 service 创建分享记录
@@ -551,6 +558,9 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	}
 	if token != "" {
 		data.Token = &token
+	}
+	if fileCode.Note != "" {
+		data.Note = &fileCode.Note
 	}
 	if fileCode.ExpiredAt != nil {
 		data.ExpireTime = fileCode.ExpiredAt.Format("2006-01-02 15:04:05")

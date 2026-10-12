@@ -207,6 +207,10 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 				if req.CustomCode != nil {
 					customCode = *req.CustomCode
 				}
+				note := ""
+				if req.Note != nil {
+					note = *req.Note
+				}
 
 				shareResult, serr := getShareService().ShareFile(ctx, &shareService.ShareFileReq{
 					Channel:      "chunk",
@@ -223,6 +227,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 					FileHash:     req.FileHash,
 					IsChunked:    true,
 					CustomCode:   customCode,
+					Note:         note,
 				})
 				if serr != nil {
 					resp.NewTypedError(c, serr) // 配额/审核等 typed error 按业务码透传
@@ -787,6 +792,10 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	if userID != nil && req.CustomCode != nil {
 		customCode = *req.CustomCode
 	}
+	note := ""
+	if req.Note != nil {
+		note = *req.Note
+	}
 
 	// 创建分享记录
 	shareReq := &shareService.ShareFileReq{
@@ -806,6 +815,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		UploadID:     uploadID,
 		Encrypted:    encrypted,
 		CustomCode:   customCode,
+		Note:         note,
 	}
 
 	shareResult, err := getShareService().ShareFile(ctx, shareReq)

@@ -249,6 +249,7 @@ func (a presignShareAdapter) CreateShare(ctx context.Context, req *presignApp.Sh
 		OwnerIP:      req.OwnerIP,
 		FileHash:     req.FileHash,
 		UploadID:     req.UploadID,
+		Note:         req.Note,
 	})
 	if err != nil {
 		return nil, err

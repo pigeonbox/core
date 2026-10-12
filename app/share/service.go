@@ -59,6 +59,7 @@ type ShareFileReq struct {
 	UploadID     string
 	Encrypted    bool   // E2E：存储内容为客户端密文（P1）
 	CustomCode   string // 自定义取件码（P3；登录用户专属，handler 把关）
+	Note         string // 文件备注（可空，取件页展示；2026-10-12 #489）
 }
 
 type ShareResp struct {
@@ -622,6 +623,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 			IsChunked:    req.IsChunked,
 			UploadID:     req.UploadID,
 			Encrypted:    req.Encrypted,
+			Note:         req.Note,
 		}
 	})
 	if err != nil {
@@ -1066,6 +1068,9 @@ func toUserShareItemData(f *model.FileCode) *sharemodel.UserShareItemData {
 	}
 	if f.PickupCode != nil {
 		item.PickupCode = f.PickupCode
+	}
+	if f.Note != "" {
+		item.Note = &f.Note
 	}
 	// 文件名提取：文件分享依次取原始文件名（Text）、UUID 名、路径尾段；
 	// 纯文本分享的 Text 是内容，不留文件名

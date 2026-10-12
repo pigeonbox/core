@@ -11,10 +11,9 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
-	"net/url"
-	"strings"
 	"time"
 
+	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
@@ -129,11 +128,8 @@ func (s *Service) PresignDownloadURL(ctx context.Context, filePath string, ttl t
 	}
 	disposition := ""
 	if len(fileName) > 0 && fileName[0] != "" {
-		safe := strings.ReplaceAll(fileName[0], `"`, "_")
-		disposition = fmt.Sprintf(`attachment; filename="%s"`, safe)
-		if encoded := url.PathEscape(safe); encoded != safe {
-			disposition += fmt.Sprintf(`; filename*=UTF-8''%s`, encoded)
-		}
+		// RFC 6266/5987 统一收口（ASCII 兜底名防老客户端丢名）
+		disposition = security.ContentDispositionAttachment(fileName[0])
 	}
 	return concrete.PresignGetURL(ctx, filePath, ttl, disposition)
 }

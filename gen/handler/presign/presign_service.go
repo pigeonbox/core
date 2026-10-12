@@ -185,6 +185,7 @@ func Init(ctx context.Context, c *app.RequestContext) {
 			ExpireStyle:  strDeref(req.ExpireStyle),
 			RequireAuth:  boolDeref(req.RequireAuth),
 			PasswordHash: passwordHash,
+			Note:         strDeref(req.Note),
 		}); err == nil && qu != nil {
 			resp.Success(c, &presignmodel.InitData{
 				UploadID:  "",
@@ -225,6 +226,7 @@ func Init(ctx context.Context, c *app.RequestContext) {
 		// 匿名取件码直传绑定（2026-10-07）：合法性与占位校验在 Complete 前由
 		// pickupBinder.ResolvePlaceholder 把关；此处仅消毒规整
 		PickupCode: strings.ToUpper(strings.TrimSpace(strDeref(req.PickupCode))),
+		Note:       strDeref(req.Note),
 	}
 	result, err := getService().Init(ctx, meta)
 	if err != nil {

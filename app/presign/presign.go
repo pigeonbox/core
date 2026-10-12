@@ -113,8 +113,8 @@ type ObjectStore interface {
 type PickupBinder interface {
 	// ResolvePlaceholder 校验取件码是待回填占位分享，返回其 8 位分享码
 	ResolvePlaceholder(ctx context.Context, pickupCode string) (string, error)
-	// BindFilePath 把直传对象回填到占位分享（file_path+size）
-	BindFilePath(ctx context.Context, shareCode, filePath string, size int64) error
+	// BindFilePath 把直传对象回填到占位分享（file_path+size；note 非空一并写入）
+	BindFilePath(ctx context.Context, shareCode, filePath string, size int64, note string) error
 }
 
 // ShareCreateReq 经 share 域建分享的窄化请求（消费侧词汇表）。
@@ -136,6 +136,7 @@ type ShareCreateReq struct {
 	OwnerIP      string
 	FileHash     string
 	UploadID     string
+	Note         string // 文件备注（可空，取件页展示；2026-10-12 #489）
 }
 
 // ShareCreateResp share 域建分享结果的窄视图（presign 消费字段）。
@@ -214,6 +215,8 @@ type InitMeta struct {
 	// 而是把对象回填到该占位记录（/anonymous/generate 创建）。有效期/密码以
 	// 占位记录为准——本 meta 的 expire/auth 字段在绑定路径被忽略。
 	PickupCode string `json:"pickup_code,omitempty"`
+	// Note 文件备注（可空，随分享展示给取件人；2026-10-12 #489）
+	Note string `json:"note,omitempty"`
 }
 
 // InitResult init 返回
@@ -450,7 +453,7 @@ func (s *Service) createShareRecord(ctx context.Context, meta *InitMeta, ownerIP
 		if err != nil {
 			return "", "", "", "", fmt.Errorf("取件码绑定失败: %w", err)
 		}
-		if err := s.pickupBinder.BindFilePath(ctx, shareCode, meta.ObjectKey, meta.FileSize); err != nil {
+		if err := s.pickupBinder.BindFilePath(ctx, shareCode, meta.ObjectKey, meta.FileSize, meta.Note); err != nil {
 			return "", "", "", "", fmt.Errorf("占位分享回填失败: %w", err)
 		}
 		return shareCode, "/share/select/?code=" + meta.PickupCode, "", meta.PickupCode, nil
@@ -491,6 +494,7 @@ func (s *Service) createShareRecord(ctx context.Context, meta *InitMeta, ownerIP
 		OwnerIP:      ownerIP,
 		FileHash:     meta.FileHash,
 		UploadID:     meta.UploadID,
+		Note:         meta.Note,
 	}
 
 	resp, err := s.shareService.CreateShare(ctx, req)
@@ -652,6 +656,7 @@ type QuickShareMeta struct {
 	ExpireStyle  string
 	RequireAuth  bool
 	PasswordHash string
+	Note         string // 文件备注（可空，取件页展示；2026-10-12 #489）
 }
 
 // CheckQuickUpload 秒传检查（2026-10-12 重做，D1=A 同用户内去重）：
@@ -688,6 +693,7 @@ func (s *Service) CheckQuickUpload(ctx context.Context, userID uint, meta QuickS
 		UserID:       &userID,
 		UploadType:   "authenticated",
 		FileHash:     meta.FileHash,
+		Note:         meta.Note,
 	})
 	if err != nil {
 		return nil, err

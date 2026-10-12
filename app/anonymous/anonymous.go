@@ -537,18 +537,23 @@ func (s *Service) ResolvePlaceholder(ctx context.Context, pickupCode string) (st
 
 // BindFilePath 把直传完成的对象回填到占位分享（匿名取件码直传通道的最后一公里）。
 // 以实际落盘对象为准更新 file_path 与 size；完成标记由调用方（presign Complete）保证。
+// note 非空时一并写入（先出码会话随 init 携带的文件备注）。
 // 占位记录自带 UUIDFileName（generate 的展示名），不清掉会被 GetFilePath()
 // 拼成 objectKey/文件名 的双重路径——直传对象 key 本身就是完整相对路径。
-func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, size int64) error {
+func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, size int64, note string) error {
 	fc, err := s.fileCodeRepo.GetByCode(ctx, shareCode)
 	if err != nil || fc == nil {
 		return ErrCodeNotFound
 	}
-	return s.fileCodeRepo.UpdateColumns(ctx, fc.ID, map[string]interface{}{
+	cols := map[string]interface{}{
 		"file_path":      filePath,
 		"uuid_file_name": "",
 		"size":           size,
-	})
+	}
+	if note != "" {
+		cols["note"] = note
+	}
+	return s.fileCodeRepo.UpdateColumns(ctx, fc.ID, cols)
 }
 
 // randomShareCode 8 位 file_code（crypto/rand，小写字母+数字）
