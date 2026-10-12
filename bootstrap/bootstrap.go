@@ -256,15 +256,7 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 	// 分享链接/直传回调地址用）。禁止静态拼接 server.host——那是监听地址
 	// （0.0.0.0），对外不可达（2026-10-07 真机事故：分享成功弹窗 0.0.0.0 链接）。
 	if config.Server.BaseURL == "" {
-		h.Use(func(ctx context.Context, c *app.RequestContext) {
-			if host := string(c.Host()); host != "" {
-				scheme := "http"
-				if string(c.Request.Header.Peek("X-Forwarded-Proto")) == "https" {
-					scheme = "https"
-				}
-				c.Set(baseurl.PublicBaseCtxKey, scheme+"://"+host)
-			}
-		})
+		h.Use(publicBaseMiddleware())
 	}
 
 	// 部署模式门卫（public 副本拒绝管理面路径；早于限流与全部业务链）
@@ -352,6 +344,24 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 
 	logger.Info("Application bootstrap completed successfully")
 	return h, nil
+}
+
+// publicBaseMiddleware 把请求来源(scheme://host，host 含端口)写入 go ctx 供
+// baseurl.Resolve 消费。必须 context.WithValue 包进 go ctx 并经 c.Next 透传：
+// 域服务拿到的是 handler 首参 go ctx，c.Set 只落 RequestContext.Keys，service
+// 层 ctx.Value 永远读不到（2026-10-12 修复前此推断为死代码，线上实际只有
+// base_url 硬配一条路生效；回归守卫见 public_base_middleware_test.go）。
+func publicBaseMiddleware() app.HandlerFunc {
+	return func(ctx context.Context, c *app.RequestContext) {
+		if host := string(c.Host()); host != "" {
+			scheme := "http"
+			if string(c.Request.Header.Peek("X-Forwarded-Proto")) == "https" {
+				scheme = "https"
+			}
+			ctx = context.WithValue(ctx, baseurl.PublicBaseCtxKey, scheme+"://"+host)
+		}
+		c.Next(ctx)
+	}
 }
 
 // Cleanup 清理资源

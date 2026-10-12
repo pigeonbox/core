@@ -10,9 +10,10 @@ package baseurl
 
 import "context"
 
-// PublicBaseCtxKey hertz ctx 中请求级公开 base 的键。bootstrap 在
-// server.base_url 未配置时挂中间件，把每条请求的来源(scheme://host)写入
-// ctx（hertz RequestContext.Value 读取 Set 的 kv）。
+// PublicBaseCtxKey 请求级公开 base 在 go ctx 中的键。bootstrap 在
+// server.base_url 未配置时挂中间件，把每条请求的来源(scheme://host) 经
+// context.WithValue 包进 go ctx 并 c.Next 透传——域服务读的是 handler 首参
+// go ctx；c.Set 只落 RequestContext.Keys，service 层读不到（曾致推断死代码）。
 const PublicBaseCtxKey = "pb.public_base"
 
 // Resolve 公开链接 base 解析：显式配置 > 请求来源（中间件注入）> 空串。
