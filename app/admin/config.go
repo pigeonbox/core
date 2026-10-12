@@ -18,6 +18,9 @@ type (
 	SystemConfig     = appconfig.SystemConfig
 	UserSettings     = appconfig.UserSettings
 	ReconfigureHooks = appconfig.ReconfigureHooks
+	BaseConfig       = appconfig.BaseConfig
+	StorageSettings  = appconfig.StorageSettings
+	TransferSettings = appconfig.TransferSettings
 )
 
 // ConfigService 暴露内部配置中心实例（bootstrap 装配/守卫测试用；

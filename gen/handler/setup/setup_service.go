@@ -171,11 +171,12 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 		cfg.User = &us
 	}
 
-	// Base：站点名称/描述（向导基础段可选；携带时以向导值 + 现网端口整段写入）
+	// Base：站点名称/描述（向导基础段可选；携带时以向导值 + 现网端口整段写入，
+	// 未携带保持 nil = 不改动现状）
 	if base := req.GetBaseConfig(); base != nil {
-		cfg.Base.Name = base.Name
-		cfg.Base.Description = base.Description
-		cfg.Base.Port = g.Server.Port
+		cfg.Base = &adminsvc.BaseConfig{
+			Name: base.Name, Description: base.Description, Port: g.Server.Port,
+		}
 	}
 
 	if err := adminsvc.Default().UpdateConfig(ctx, cfg); err != nil {

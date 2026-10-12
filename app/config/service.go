@@ -195,8 +195,12 @@ func (s *Service) ensureConfigLoaded(ctx context.Context) {
 		logger.Error("failed to load persisted system config, using defaults", zap.Error(err))
 	case persisted != nil:
 		s.config = persisted
+		siteName := ""
+		if persisted.Base != nil {
+			siteName = persisted.Base.Name
+		}
 		logger.Info("system config loaded from database",
-			zap.String("site_name", persisted.Base.Name))
+			zap.String("site_name", siteName))
 	}
 	// UploadEx 从未在线保存过时回填全局 conf 生效值：管理后台能看到真实
 	// 生效的上传准入配置，整段保存也不会把 yaml 值冲成零值
@@ -243,6 +247,17 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	// 通用配置保存（thrift 通道）不带 user 段，保留旧值避免被冲掉
 	if newConfig.User == nil && s.config != nil {
 		newConfig.User = s.config.User
+	}
+	// 值类型段同规则（2026-10-12 修复：此前 base/storage/transfer 为匿名值类型、
+	// 不在保留清单内，任何局部保存都会把它们按零值写库——站点名/端口/传输默认值被清空）
+	if newConfig.Base == nil && s.config != nil {
+		newConfig.Base = s.config.Base
+	}
+	if newConfig.Storage == nil && s.config != nil {
+		newConfig.Storage = s.config.Storage
+	}
+	if newConfig.Transfer == nil && s.config != nil {
+		newConfig.Transfer = s.config.Transfer
 	}
 	// v0.7.3 扩容段同规则：请求未携带的段保留旧值（前端按 tab 分批提交）
 	if newConfig.UI == nil && s.config != nil {

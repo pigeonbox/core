@@ -119,13 +119,9 @@ func TestCleanExpiredFiles_NoStorage(t *testing.T) {
 // customTestConfig 构造一份与默认值不同的配置，便于断言。
 func customTestConfig(name string) *SystemConfig {
 	cfg := &SystemConfig{}
-	cfg.Base.Name = name
-	cfg.Base.Description = "自定义描述"
-	cfg.Base.Port = 12345
-	cfg.Storage.Type = "s3"
-	cfg.Storage.MaxSize = 5 * 1024 * 1024 * 1024
-	cfg.Transfer.MaxCount = 50
-	cfg.Transfer.ExpireDefault = 30
+	cfg.Base = &BaseConfig{Name: name, Description: "自定义描述", Port: 12345}
+	cfg.Storage = &StorageSettings{Type: "s3", MaxSize: 5 * 1024 * 1024 * 1024}
+	cfg.Transfer = &TransferSettings{MaxCount: 50, ExpireDefault: 30}
 	return cfg
 }
 

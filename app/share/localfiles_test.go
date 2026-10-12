@@ -63,4 +63,11 @@ func TestLocalFilesConfinement(t *testing.T) {
 	// 未启用时拒绝
 	conf.SetGlobalConfig(&conf.AppConfiguration{})
 	require.Error(t, func() error { _, err := svc.ListLocalFiles(0, ""); return err }())
+
+	// 启用但未配白名单目录：报引导性错误（与「root 索引越界」分级，管理端据此展示引导态）
+	conf.SetGlobalConfig(&conf.AppConfiguration{
+		Upload: conf.UploadConfig{LocalImport: conf.LocalImportConfig{Enabled: true}},
+	})
+	_, err = svc.ListLocalFiles(0, "")
+	require.ErrorContains(t, err, "白名单目录")
 }

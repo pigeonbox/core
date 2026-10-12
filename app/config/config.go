@@ -12,22 +12,30 @@ import (
 	"github.com/pigeonbox/core/pkg/security"
 )
 
+// BaseConfig 站点基础信息段。指针语义与其余段一致：nil = 本次未提交，
+// UpdateConfig 保留现状（值类型无法表达"未提交"，局部保存曾把整段清零）。
+type BaseConfig struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Port        int    `json:"port"`
+}
+
+// StorageSettings 存储概览段（nil 语义同 BaseConfig；运行时存储后端走 runtime_storage）。
+type StorageSettings struct {
+	Type    string `json:"type"`
+	MaxSize int64  `json:"max_size"`
+}
+
+// TransferSettings 分享传输默认值段（nil 语义同 BaseConfig）。
+type TransferSettings struct {
+	MaxCount      int `json:"max_count"`
+	ExpireDefault int `json:"expire_default"`
+}
+
 type SystemConfig struct {
-	Base struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Port        int    `json:"port"`
-	} `json:"base"`
-
-	Storage struct {
-		Type    string `json:"type"`
-		MaxSize int64  `json:"max_size"`
-	} `json:"storage"`
-
-	Transfer struct {
-		MaxCount      int `json:"max_count"`
-		ExpireDefault int `json:"expire_default"`
-	} `json:"transfer"`
+	Base     *BaseConfig       `json:"base,omitempty"`
+	Storage  *StorageSettings  `json:"storage,omitempty"`
+	Transfer *TransferSettings `json:"transfer,omitempty"`
 
 	// RuntimeStorage 运行时存储配置（存储域经 RuntimePersister 接口读写，
 	// 本域只负责持久化不解释其内容；nil 表示管理端从未在线改过存储后端）。
@@ -88,13 +96,9 @@ func userSettingsFromYAML() *UserSettings {
 // defaultSystemConfig 站点配置默认值。
 func defaultSystemConfig() *SystemConfig {
 	cfg := &SystemConfig{}
-	cfg.Base.Name = "PigeonBox"
-	cfg.Base.Description = "文件分享平台"
-	cfg.Base.Port = 8888
-	cfg.Storage.Type = "local"
-	cfg.Storage.MaxSize = 1024 * 1024 * 1024 // 1GB
-	cfg.Transfer.MaxCount = 100
-	cfg.Transfer.ExpireDefault = 7 // 7天
+	cfg.Base = &BaseConfig{Name: "PigeonBox", Description: "文件分享平台", Port: 8888}
+	cfg.Storage = &StorageSettings{Type: "local", MaxSize: 1024 * 1024 * 1024} // 1GB
+	cfg.Transfer = &TransferSettings{MaxCount: 100, ExpireDefault: 7}         // 7天
 	cfg.User = userSettingsFromYAML()
 	return cfg
 }
@@ -104,16 +108,17 @@ func validateSystemConfig(cfg *SystemConfig) error {
 	if cfg == nil {
 		return errors.New("config is nil")
 	}
-	if cfg.Base.Port < 0 || cfg.Base.Port > 65535 {
+	// nil 段 = 本次未提交（保存时保留现状），不参与校验
+	if cfg.Base != nil && (cfg.Base.Port < 0 || cfg.Base.Port > 65535) {
 		return errors.New("base.port out of range (0-65535)")
 	}
-	if cfg.Storage.MaxSize < 0 {
+	if cfg.Storage != nil && cfg.Storage.MaxSize < 0 {
 		return errors.New("storage.max_size must be >= 0")
 	}
-	if cfg.Transfer.MaxCount < 0 {
+	if cfg.Transfer != nil && cfg.Transfer.MaxCount < 0 {
 		return errors.New("transfer.max_count must be >= 0")
 	}
-	if cfg.Transfer.ExpireDefault < 0 {
+	if cfg.Transfer != nil && cfg.Transfer.ExpireDefault < 0 {
 		return errors.New("transfer.expire_default must be >= 0")
 	}
 	if err := validateUserSettings(cfg.User); cfg.User != nil && err != nil {

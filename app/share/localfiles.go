@@ -34,6 +34,11 @@ func resolveLocalPath(rootIdx int, relPath string) (string, error) {
 		return "", errors.New("本地文件功能未启用")
 	}
 	roots := cfg.Upload.LocalImport.Roots
+	// 启用但未配白名单目录：报引导性错误（管理端据此展示配置引导而非通用报错）；
+	// 与「索引越界」（已配 roots 但客户端传了不存在的序号）分级
+	if len(roots) == 0 {
+		return "", errors.New("本地导入已启用但未配置白名单目录（roots）")
+	}
 	if rootIdx < 0 || rootIdx >= len(roots) {
 		return "", errors.New("root 索引越界")
 	}
