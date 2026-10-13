@@ -233,6 +233,7 @@ func AdminP2pPublish(ctx context.Context, c *app.RequestContext) {
 			PasswordHash: passwordHash,
 			CustomCode:   req.GetCustomCode(),
 			OwnerIP:      middleware.ClientIP(c),
+			Internal:     true, // 直传发布：p2px 已做收件区白名单校验，跳过 local_import 门
 		})
 		if ierr != nil {
 			if firstErr == nil {
