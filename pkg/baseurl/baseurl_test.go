@@ -14,10 +14,10 @@ func TestResolve(t *testing.T) {
 	// 显式配置最优先
 	assert.Equal(t, "https://s.example.com", Resolve(context.Background(), "https://s.example.com"))
 
-	// base_url 未配置时取请求来源(bootstrap 中间件写入 ctx)。
-	// 键必须是内置 string:hertz RequestContext.Value 只解析 string 键
-	// (c.Set 存 map[string]any),自定义 key 类型会查不到。
-	ctx := context.WithValue(context.Background(), PublicBaseCtxKey, "http://10.10.30.250:12345") //nolint:staticcheck // SA1029:hertz ctx 键约束见上
+	// base_url 未配置时取请求来源(bootstrap 中间件写入 go ctx)。
+	// 键为类型化私有键(SA1029):消费路径是 go ctx(c.Next 透传),
+	// 与 hertz RequestContext.Keys(string 键)无关——那是 c.Set 时代的历史约束。
+	ctx := context.WithValue(context.Background(), PublicBaseCtxKey, "http://10.10.30.250:12345")
 	assert.Equal(t, "http://10.10.30.250:12345", Resolve(ctx, ""))
 
 	// 双缺省退空串(FullShareURL 退化为相对路径,前端可由 origin 补全)
