@@ -141,6 +141,12 @@ func initThriftIDLServices(database *gorm.DB) {
 				FrontendCallback: o.FrontendCallback,
 			}))
 		},
+		OnP2PFederationChanged: func(f *conf.FederationConfig) {
+			if f == nil {
+				return
+			}
+			fedRT.apply(*f)
+		},
 	})
 	// 2.4 注入 user service：上传统计（此前从未接线，用户统计恒为 0）
 	// + 存储配额强制检查（user_quota / 用户级 max_storage_quota）
@@ -158,25 +164,32 @@ func initThriftIDLServices(database *gorm.DB) {
 	customHandler.SetRequestService(requestSvcInstance)
 	requestgenhandler.SetRequestService(requestSvcInstance)
 
-	// 2.4.2 P2P 联邦（M2）：启用时注册进联邦注册中心并公告口令路由。
-	// 初始化失败降级为非联邦模式（单站功能不受影响）；resolve 代理路由
-	// 恒注册（customizedRegister），未启用时由 handler 返回 available:false。
-	if config.Federation.Enabled {
-		if fedSvc, err := federationApp.NewService(config.Federation, config.App.Name); err != nil {
-			logger.Error("federation 服务初始化失败(继续以非联邦模式运行)", zap.Error(err))
-		} else {
-			fedSvc.Start()
-			federationSvcInstance = fedSvc
-			shareSvc.SetFederationNotifier(fedSvc)
+	// 2.4.2 P2P 联邦（spec 2026-10-14 §6）：装配收口 fedRT——启动种子（env/yaml，
+	// RestoreAdminSettings 已 overlay DB 值）与 admin 后台热切换同一条路径。
+	// 初始化失败降级为非联邦模式；resolve 代理路由恒注册（customizedRegister），
+	// 未启用时由 handler 返回 available:false。
+	fedRT.init(config.App.Name, federationApp.NewService,
+		func(svc *federationApp.Service) {
+			shareSvc.SetFederationNotifier(svc)
 			// admin 删除路径独立于 share 域，须单独挂钩（管理端删除即联邦撤销）
-			adminApp.Default().SetFederationNotifier(fedSvc)
-			customHandler.SetFederationService(fedSvc)
-			logger.Info("federation enabled",
-				zap.String("registry", config.Federation.RegistryURL),
-				zap.String("public_url", config.Federation.PublicURL),
-				zap.String("node_id", fedSvc.NodeID()))
-		}
-	}
+			adminApp.Default().SetFederationNotifier(svc)
+			customHandler.SetFederationService(svc)
+			// MCP 在后续相位才创建；运行时热切换须重挂（初装配由其相位自取 instance()）
+			if mcpService != nil {
+				mcpService.SetFederationService(mcpFederationAdapter{svc: svc})
+			}
+		},
+		func() {
+			// 非类型化 nil：typed-nil 传进接口字段非 nil，调用点判空失效（历史坑）
+			shareSvc.SetFederationNotifier(nil)
+			adminApp.Default().SetFederationNotifier(nil)
+			customHandler.SetFederationService(nil)
+			if mcpService != nil {
+				mcpService.SetFederationService(mcpFederationAdapter{svc: nil})
+			}
+		},
+	)
+	fedRT.apply(config.Federation)
 
 	// 3. anonymous service（需要 Redis）
 	anonHandler.SetService(anonymousApp.NewService(redis.GetClient(), database))
@@ -263,7 +276,7 @@ func initThriftIDLServices(database *gorm.DB) {
 		mcpService.SetAdminService(mcpAdminAdapter{adminSvc})
 		mcpService.SetShareService(mcpShareAdapter{shareSvc})
 		mcpService.SetStorageService(bootstrapStorage)
-		mcpService.SetFederationService(mcpFederationAdapter{svc: federationSvcInstance})
+		mcpService.SetFederationService(mcpFederationAdapter{svc: fedRT.instance()})
 		mcpService.SetRequestService(mcpRequestAdapter{requestSvcInstance})
 		mcpService.SetPreviewService(mcpPreviewAdapter{previewSvcInstance})
 		mcpService.SetMaxFileSize(config.MCP.MaxFileSize)
@@ -297,9 +310,6 @@ var notifySvcInstance *notifyAppService.Service
 
 // requestSvcInstance 寄件码服务实例（initThriftIDLServices 装配）
 var requestSvcInstance *requestApp.Service
-
-// federationSvcInstance P2P 联邦服务实例（initThriftIDLServices 装配；nil=未启用）
-var federationSvcInstance *federationApp.Service
 
 // bootstrapBaseURL 对外基础地址（server.base_url 优先，否则 host:port）
 func bootstrapBaseURL() string {

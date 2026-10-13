@@ -368,10 +368,8 @@ func publicBaseMiddleware() app.HandlerFunc {
 func Cleanup() {
 	logger.Info("Cleaning up resources...")
 
-	// 联邦服务先于数据库停：注销节点（best-effort），停心跳循环
-	if federationSvcInstance != nil {
-		federationSvcInstance.Stop()
-	}
+	// 联邦服务先于数据库停：注销节点（best-effort），停心跳循环（P1 走运行时单点）
+	fedRT.stop()
 
 	if database != nil {
 		if err := db.Close(); err != nil {
