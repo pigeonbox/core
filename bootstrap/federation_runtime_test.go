@@ -30,6 +30,7 @@ func TestFederationRuntimeSwitch(t *testing.T) {
 	r.init("t", federationApp.NewService,
 		func(s *federationApp.Service) { attached++ },
 		func() { detached++ },
+		func() bool { return conf.GetGlobalConfig().IsStandalone() }, // 测试注入（生产由 wiring 固化）
 	)
 
 	r.apply(fedTestCfg(t, true))

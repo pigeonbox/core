@@ -19,13 +19,14 @@ import (
 type fedStartFunc func(cfg conf.FederationConfig, nodeName string) (*federationApp.Service, error)
 
 type federationRuntime struct {
-	mu       sync.Mutex
-	start    fedStartFunc
-	attach   func(*federationApp.Service) // 挂注入点（share/admin/customHandler/MCP）
-	detach   func()                        // 摘注入点（全部置非类型化 nil——typed-nil 进接口非 nil 的历史坑）
-	current  *federationApp.Service
-	cfg      conf.FederationConfig
-	nodeName string
+	mu         sync.Mutex
+	start      fedStartFunc
+	attach     func(*federationApp.Service) // 挂注入点（share/admin/customHandler/MCP）
+	detach     func()                        // 摘注入点（全部置非类型化 nil——typed-nil 进接口非 nil 的历史坑）
+	standalone func() bool                   // 部署形态注入（棘轮规则 8：不直读全局 conf）
+	current    *federationApp.Service
+	cfg        conf.FederationConfig
+	nodeName   string
 }
 
 // fedRT 包级单例（initThriftIDLServices 装配；Cleanup 停机）。
@@ -33,10 +34,10 @@ var fedRT = &federationRuntime{}
 
 // init 注入工厂与注入点（装配期调用一次）。
 func (r *federationRuntime) init(nodeName string, start fedStartFunc,
-	attach func(*federationApp.Service), detach func()) {
+	attach func(*federationApp.Service), detach func(), standalone func() bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.nodeName, r.start, r.attach, r.detach = nodeName, start, attach, detach
+	r.nodeName, r.start, r.attach, r.detach, r.standalone = nodeName, start, attach, detach, standalone
 }
 
 // apply 按新配置切换 federation（启动路径与热路径共用；串行化）。
@@ -48,7 +49,7 @@ func (r *federationRuntime) apply(cfg conf.FederationConfig) {
 		r.stopLocked()
 		return
 	}
-	if g := conf.GetGlobalConfig(); g != nil && !g.IsStandalone() {
+	if r.standalone != nil && !r.standalone() {
 		logger.Warn("federation 启用被拒：多副本部署语义未定义（standalone 专属）")
 		r.stopLocked()
 		return

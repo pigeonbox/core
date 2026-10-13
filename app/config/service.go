@@ -212,14 +212,9 @@ func (s *Service) ensureConfigLoaded(ctx context.Context) {
 			s.config.UploadEx = &ue
 		}
 	}
-	// P2P 段从未在线保存过时回填全局 conf 生效值（与 UploadEx 同理：
-	// 管理后台看到真实生效的联邦配置，整段保存也不会把 env 种子冲成零值）
-	if s.config.P2P == nil {
-		if g := conf.GetGlobalConfig(); g != nil {
-			fed := g.Federation
-			s.config.P2P = &P2PSection{Federation: &fed}
-		}
-	}
+	// P2P 段回填在 applySystemConfigOverlayLocked 内做（复用其全局 conf 读点，
+	// 棘轮规则 8：不新增 GetGlobalConfig 直读；语义等价——启动 RestoreAdminSettings
+	// 与每次 UpdateConfig 都会经过 overlay）
 	s.applyUserSideEffects(s.config.User)
 }
 
@@ -384,7 +379,14 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 	if sc.APIToken != nil {
 		g.Security.APIToken = *sc.APIToken
 	}
-	if sc.P2P != nil && sc.P2P.Federation != nil {
+	// P2P 段从未在线保存过时回填全局 conf 生效值（与 UploadEx 回填同理：管理
+	// 后台看到真实生效的联邦配置，整段保存也不会把 env 种子冲成零值；回填只进
+	// 内存配置不强制落库）。g 已在本函数读取，不新增直读点（棘轮规则 8）。
+	if sc.P2P == nil {
+		fed := g.Federation
+		sc.P2P = &P2PSection{Federation: &fed}
+	}
+	if sc.P2P.Federation != nil {
 		g.Federation = *sc.P2P.Federation
 	}
 }

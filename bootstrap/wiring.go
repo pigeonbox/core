@@ -188,6 +188,7 @@ func initThriftIDLServices(database *gorm.DB) {
 				mcpService.SetFederationService(mcpFederationAdapter{svc: nil})
 			}
 		},
+		func() bool { return config.IsStandalone() }, // 部署形态装配期固化（运行期不变）
 	)
 	fedRT.apply(config.Federation)
 
