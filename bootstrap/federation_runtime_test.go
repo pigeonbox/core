@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	federationApp "github.com/pigeonbox/core/app/federation"
@@ -72,4 +73,31 @@ func TestFederationRuntimeSwitch(t *testing.T) {
 		t.Fatalf("关闭后应清空并 detach: svc=%v detached=%d", r.instance() != nil, detached)
 	}
 	r.stop() // 幂等
+}
+
+// TestFederationRuntimeConcurrentApply 并发 apply 由 mutex 串行化，
+// -race 下无数据竞争；任意交错后收敛到显式指定的终态。
+func TestFederationRuntimeConcurrentApply(t *testing.T) {
+	conf.SetGlobalConfig(&conf.AppConfiguration{})
+	t.Cleanup(func() { conf.SetGlobalConfig(&conf.AppConfiguration{}) })
+
+	r := &federationRuntime{}
+	r.init("t", federationApp.NewService,
+		func(*federationApp.Service) {},
+		func() {},
+		func() bool { return true },
+	)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(on bool) {
+			defer wg.Done()
+			r.apply(fedTestCfg(t, on))
+		}(i%2 == 0)
+	}
+	wg.Wait()
+	r.apply(fedTestCfg(t, false)) // 收敛到关闭
+	if r.instance() != nil {
+		t.Fatal("交错后显式关闭应收敛到无实例")
+	}
 }

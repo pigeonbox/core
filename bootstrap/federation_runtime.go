@@ -33,6 +33,9 @@ type federationRuntime struct {
 var fedRT = &federationRuntime{}
 
 // init 注入工厂与注入点（装配期调用一次）。
+// 注意：attach/detach 在 apply 持锁期间执行——闭包内严禁回调 fedRT 的
+// instance()/apply()/stop()（同锁重入即死锁）；闭包内只允许对注入目标
+// 做 setter 调用（这些 setter 自身已按热切换并发安全加锁）。
 func (r *federationRuntime) init(nodeName string, start fedStartFunc,
 	attach func(*federationApp.Service), detach func(), standalone func() bool) {
 	r.mu.Lock()

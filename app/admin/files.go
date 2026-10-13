@@ -99,9 +99,9 @@ func (s *Service) DeleteFile(ctx context.Context, fileID uint) error {
 		s.deletePhysicalIfUnreferenced(ctx, file.GetFilePath(), fileID)
 	}
 
-	// 3. 联邦撤销公告（未启用为 no-op）
-	if s.federation != nil {
-		s.federation.ShareDeleted(file.Code)
+	// 3. 联邦撤销公告（未启用为 no-op；快照读——热切换并发安全）
+	if fed := s.currentFederation(); fed != nil {
+		fed.ShareDeleted(file.Code)
 	}
 
 	s.logAdminOperation(ctx, "file.delete",
@@ -171,9 +171,10 @@ func (s *Service) UpdateFileExpire(ctx context.Context, id uint, expireAt *time.
 // 孤儿由 janitor 对账）。返回受影响行数。
 func (s *Service) BatchDeleteFiles(ctx context.Context, ids []uint) (int, error) {
 	// 先取口令供联邦撤销（批量接口不回报实际命中，按请求集合撤销；
-	// 误撤未删码由联邦客户端心跳补公告自愈）
+	// 误撤未删码由联邦客户端心跳补公告自愈；快照读——热切换并发安全）
 	codes := make([]string, 0, len(ids))
-	if s.federation != nil {
+	fed := s.currentFederation()
+	if fed != nil {
 		for _, id := range ids {
 			if fc, err := s.fileCodeRepo.GetByID(ctx, id); err == nil {
 				codes = append(codes, fc.Code)
@@ -210,9 +211,9 @@ func (s *Service) BatchDeleteFiles(ctx context.Context, ids []uint) (int, error)
 	}
 
 	n, err := s.fileCodeRepo.BatchDeleteByIDs(ctx, ids)
-	if err == nil && s.federation != nil {
+	if err == nil && fed != nil {
 		for _, code := range codes {
-			s.federation.ShareDeleted(code)
+			fed.ShareDeleted(code)
 		}
 	}
 	return n, err

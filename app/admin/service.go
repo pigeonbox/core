@@ -27,7 +27,8 @@ type Service struct {
 	fileFileRepo       *dao.FileCodeFileRepository // 多文件子表（files/maintenance 消费）
 	sysConfigRepo      *dao.SystemConfigRepository // 仅 OptimizeDatabase 表维护用（配置读写归 app/config 域）
 	storage            storage.StorageInterface
-	federation         FederationNotifier // P2P 联邦口令路由钩子（nil = 非联邦模式）
+	federation         FederationNotifier // P2P 联邦口令路由钩子（nil = 非联邦模式；读写走 federationMu——P1 后台热切换=运行期写）
+	federationMu       sync.RWMutex
 
 	// cfg 站点配置中心（app/config 域实例；本域经 config.go 门面委派）。
 	// NewService() 持独立实例（测试隔离）；Default() 单例改绑 config.Default()
@@ -42,8 +43,20 @@ type FederationNotifier interface {
 	ShareDeleted(code string)
 }
 
-// SetFederationNotifier 注入联邦撤销钩子（bootstrap 调用；nil = 非联邦）
-func (s *Service) SetFederationNotifier(f FederationNotifier) { s.federation = f }
+// SetFederationNotifier 注入联邦撤销钩子（bootstrap 调用；nil = 非联邦。
+// P1 后台热切换后为运行期写，与删除路径并发——须加锁）
+func (s *Service) SetFederationNotifier(f FederationNotifier) {
+	s.federationMu.Lock()
+	defer s.federationMu.Unlock()
+	s.federation = f
+}
+
+// currentFederation 读当前联邦钩子（并发安全快照）
+func (s *Service) currentFederation() FederationNotifier {
+	s.federationMu.RLock()
+	defer s.federationMu.RUnlock()
+	return s.federation
+}
 
 func NewService(gormDB *gorm.DB) *Service {
 	return &Service{

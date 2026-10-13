@@ -251,7 +251,8 @@ type Service struct {
 	adminSvc       AdminAPI
 	shareSvc       ShareAPI
 	storageSvc     StorageAPI
-	fedSvc         FederationAPI
+	fedSvc         FederationAPI // 读写走 fedMu——P1 后台热切换=运行期写
+	fedMu          sync.RWMutex
 	requestSvc     RequestAPI
 	previewSvc     PreviewAPI
 	version        string
@@ -281,8 +282,20 @@ func (s *Service) SetShareService(svc ShareAPI) { s.shareSvc = svc }
 // SetStorageService 注入存储能力（download_share_file）
 func (s *Service) SetStorageService(svc StorageAPI) { s.storageSvc = svc }
 
-// SetFederationService 注入 P2P 联邦适配器（未启用传 nil 实例适配器）
-func (s *Service) SetFederationService(svc FederationAPI) { s.fedSvc = svc }
+// SetFederationService 注入 P2P 联邦适配器（未启用传 nil 实例适配器。
+// P1 后台热切换后为运行期写，与工具调用并发——须加锁）
+func (s *Service) SetFederationService(svc FederationAPI) {
+	s.fedMu.Lock()
+	defer s.fedMu.Unlock()
+	s.fedSvc = svc
+}
+
+// currentFederation 读当前联邦适配器（并发安全快照）
+func (s *Service) currentFederation() FederationAPI {
+	s.fedMu.RLock()
+	defer s.fedMu.RUnlock()
+	return s.fedSvc
+}
 
 // SetRequestService 注入 request 域能力适配器（create_request_code）
 func (s *Service) SetRequestService(svc RequestAPI) { s.requestSvc = svc }
@@ -743,10 +756,11 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 			displayFileName(fc), len(data), base64.StdEncoding.EncodeToString(data)), false
 
 	case "federation_status":
-		if s.fedSvc == nil {
+		fed := s.currentFederation()
+		if fed == nil {
 			return "联邦未启用（federation.enabled=false 或初始化失败，本站为独立模式）", false
 		}
-		st := s.fedSvc.Status()
+		st := fed.Status()
 		// 适配器在联邦未启用时返回 Enabled:false（非 nil 接口包 nil 实例）
 		if !st.Enabled {
 			return "联邦未启用（federation.enabled=false 或初始化失败，本站为独立模式）", false
@@ -759,10 +773,11 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 			st.NodeID, strings.Join(st.Registries, ", "), health), false
 
 	case "federation_resolve":
-		if s.fedSvc == nil {
+		fed := s.currentFederation()
+		if fed == nil {
 			return "联邦未启用", true
 		}
-		info, rerr := s.fedSvc.Resolve(argStr("code"))
+		info, rerr := fed.Resolve(argStr("code"))
 		if rerr != nil {
 			return "联邦解析失败: " + rerr.Error(), true
 		}

@@ -115,3 +115,23 @@ func TestUpdateConfigP2PFederationHook(t *testing.T) {
 	require.NotNil(t, got)
 	require.True(t, got.Enabled)
 }
+
+// TestUpdateConfigP2PSubsectionPreserve {"p2p":{}}（federation 子段 nil）不得冲掉
+// 联邦配置——P2 直传段将来同挂 p2p 下，子段互冲是定时炸弹（同顶层指针段语义
+// 下沉一层）。
+func TestUpdateConfigP2PSubsectionPreserve(t *testing.T) {
+	svc := newTestConfigService(t)
+	ctx := context.Background()
+	withGlobalConf(t)
+	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
+		P2P: &P2PSection{Federation: &conf.FederationConfig{Enabled: true, RegistryURL: "http://p2p:12346"}},
+	}))
+	// 只带空 p2p 段（无 federation 子段）
+	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{P2P: &P2PSection{}}))
+	got, err := svc.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.P2P)
+	require.NotNil(t, got.P2P.Federation, "空 p2p 段不应冲掉 federation 子段")
+	require.True(t, got.P2P.Federation.Enabled)
+	require.Equal(t, "http://p2p:12346", got.P2P.Federation.RegistryURL)
+}

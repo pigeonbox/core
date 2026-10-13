@@ -8,6 +8,7 @@ package handler
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
@@ -15,14 +16,30 @@ import (
 	"github.com/pigeonbox/core/pkg/resp"
 )
 
-var federationSvc *federation.Service
+// federationSvc 读写走 federationMu——P1 后台热切换=运行期写，与请求路径并发。
+var (
+	federationSvc *federation.Service
+	federationMu  sync.RWMutex
+)
 
 // SetFederationService 注入联邦服务（bootstrap 调用；nil = 未启用）
-func SetFederationService(s *federation.Service) { federationSvc = s }
+func SetFederationService(s *federation.Service) {
+	federationMu.Lock()
+	defer federationMu.Unlock()
+	federationSvc = s
+}
+
+// currentFederationService 读当前联邦服务（并发安全快照）
+func currentFederationService() *federation.Service {
+	federationMu.RLock()
+	defer federationMu.RUnlock()
+	return federationSvc
+}
 
 // FederationResolve 口令联邦解析。
 func FederationResolve(ctx context.Context, c *app.RequestContext) {
-	if federationSvc == nil {
+	svc := currentFederationService()
+	if svc == nil {
 		resp.Success(c, map[string]any{"available": false})
 		return
 	}
@@ -31,7 +48,7 @@ func FederationResolve(ctx context.Context, c *app.RequestContext) {
 		resp.Success(c, map[string]any{"available": false})
 		return
 	}
-	info, err := federationSvc.Resolve(code)
+	info, err := svc.Resolve(code)
 	if err != nil || info == nil {
 		resp.Success(c, map[string]any{"available": false})
 		return

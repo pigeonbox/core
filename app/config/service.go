@@ -290,9 +290,14 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	if newConfig.APIToken == nil && s.config != nil {
 		newConfig.APIToken = s.config.APIToken
 	}
-	// P2P 段同规则（2026-10-14 对称节点 P1：局部保存不冲掉联邦配置）
+	// P2P 段同规则（2026-10-14 对称节点 P1：局部保存不冲掉联邦配置）。
+	// 子段同规则下沉一层：{"p2p":{}}（federation 子段 nil）保留现状——P2 直传段
+	// 将来同挂 p2p 下，否则任一子段保存都会互冲。
 	if newConfig.P2P == nil && s.config != nil {
 		newConfig.P2P = s.config.P2P
+	} else if newConfig.P2P != nil && newConfig.P2P.Federation == nil &&
+		s.config != nil && s.config.P2P != nil {
+		newConfig.P2P.Federation = s.config.P2P.Federation
 	}
 	s.configMu.RUnlock()
 	data, err := json.Marshal(newConfig)

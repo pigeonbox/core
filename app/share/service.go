@@ -109,7 +109,8 @@ type Service struct {
 	quotaChecker QuotaChecker
 	moderator    moderation.Moderator // 内容审核钩子（nil = 不审核）
 	flagEmitter  FlagEventEmitter     // share.flagged webhook（nil = 不推送）
-	federation   FederationNotifier   // P2P 联邦口令路由钩子（nil = 非联邦模式）
+	federation   FederationNotifier   // P2P 联邦口令路由钩子（nil = 非联邦模式；读写走 federationMu——P1 后台热切换=运行期写）
+	federationMu sync.RWMutex
 
 	// 存储兜底（storageClient 惰性本地后端，仅未注入时使用；见 files.go）
 	fallbackOnce    sync.Once
@@ -163,20 +164,32 @@ func (s *Service) SetPickupMinter(m PickupCodeMinter) { s.pickupMinter = m }
 // SetFlagEventEmitter 注入 share.flagged webhook 推送（bootstrap 调用）
 func (s *Service) SetFlagEventEmitter(e FlagEventEmitter) { s.flagEmitter = e }
 
-// SetFederationNotifier 注入 P2P 联邦口令路由钩子（bootstrap 调用；nil = 非联邦）
-func (s *Service) SetFederationNotifier(f FederationNotifier) { s.federation = f }
+// SetFederationNotifier 注入 P2P 联邦口令路由钩子（bootstrap 调用；nil = 非联邦。
+// P1 后台热切换后为运行期写，与请求路径并发——须加锁）
+func (s *Service) SetFederationNotifier(f FederationNotifier) {
+	s.federationMu.Lock()
+	defer s.federationMu.Unlock()
+	s.federation = f
+}
+
+// currentFederation 读当前联邦钩子（并发安全快照）
+func (s *Service) currentFederation() FederationNotifier {
+	s.federationMu.RLock()
+	defer s.federationMu.RUnlock()
+	return s.federation
+}
 
 // federationCreated 联邦公告（nil 安全；实现方保证异步不阻塞建分享）
 func (s *Service) federationCreated(code string, expiresAt *time.Time) {
-	if s.federation != nil {
-		s.federation.ShareCreated(code, expiresAt)
+	if n := s.currentFederation(); n != nil {
+		n.ShareCreated(code, expiresAt)
 	}
 }
 
 // federationDeleted 联邦撤销（nil 安全；实现方 best-effort）
 func (s *Service) federationDeleted(code string) {
-	if s.federation != nil {
-		s.federation.ShareDeleted(code)
+	if n := s.currentFederation(); n != nil {
+		n.ShareDeleted(code)
 	}
 }
 
