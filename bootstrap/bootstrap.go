@@ -370,6 +370,10 @@ func Cleanup() {
 
 	// 联邦服务先于数据库停：注销节点（best-effort），停心跳循环（P1 走运行时单点）
 	fedRT.stop()
+	// 直传子进程先于数据库停：杀在途 p2pc 进程组 + 停配额监控（P2a）
+	if p2pxSvcInstance != nil {
+		p2pxSvcInstance.Stop()
+	}
 
 	if database != nil {
 		if err := db.Close(); err != nil {

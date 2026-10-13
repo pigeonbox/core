@@ -74,6 +74,10 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		// ===== ratelimit（IDL）=====
 		"GET /admin/ratelimit/config", "PUT /admin/ratelimit/config",
 		"GET /admin/ratelimit/status", "POST /admin/ratelimit/test",
+		// ===== p2p 设备直传（IDL，P2a 2026-10-14）=====
+		"GET /admin/p2p/status", "GET /admin/p2p/tasks",
+		"POST /admin/p2p/send", "POST /admin/p2p/recv",
+		"POST /admin/p2p/cancel", "POST /admin/p2p/publish",
 		// ===== storage（IDL）=====
 		"GET /admin/storage", "PUT /admin/storage/config",
 		"POST /admin/storage/switch", "GET /admin/storage/test/:type",

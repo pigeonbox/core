@@ -4,7 +4,9 @@ package bootstrap
 // 服务实例全局、bootstrapBaseURL、存储单例与 applyNotifyConfig。
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"sync"
 
 	"go.uber.org/zap"
@@ -19,6 +21,7 @@ import (
 	moderationApp "github.com/pigeonbox/core/app/moderation"
 	notifyAppService "github.com/pigeonbox/core/app/notify"
 	oidcApp "github.com/pigeonbox/core/app/oidc"
+	p2pxApp "github.com/pigeonbox/core/app/p2px"
 	presignApp "github.com/pigeonbox/core/app/presign"
 	previewApp "github.com/pigeonbox/core/app/preview"
 	requestApp "github.com/pigeonbox/core/app/request"
@@ -30,6 +33,7 @@ import (
 	adminGenHandler "github.com/pigeonbox/core/gen/handler/admin"
 	chunkHandler "github.com/pigeonbox/core/gen/handler/chunk"
 	notifyHandler "github.com/pigeonbox/core/gen/handler/notify"
+	p2pGenHandler "github.com/pigeonbox/core/gen/handler/p2p"
 	presignHandler "github.com/pigeonbox/core/gen/handler/presign"
 	previewHandler "github.com/pigeonbox/core/gen/handler/preview"
 	ratelimitHandler "github.com/pigeonbox/core/gen/handler/ratelimit"
@@ -198,6 +202,28 @@ func initThriftIDLServices(database *gorm.DB) {
 		logger.Error("federation 启动装配失败（以非联邦模式运行）", zap.Error(err))
 	}
 
+	// 2.4.3 设备直传 supervisor（P2a，spec 2026-10-14 §7）：数据面=spawn p2pc
+	// 子进程（控制面/数据面分离原则），standalone 专属；配置读 SystemConfig
+	// p2p.direct（DB 热生效）。构造注入 standalone 判定（棘轮规则 8）。
+	dataDir := filepath.Dir(config.Database.DBName)
+	if dataDir == "" || dataDir == "." {
+		dataDir = "data"
+	}
+	p2pxSvcInstance = p2pxApp.NewService(p2pxApp.Deps{
+		Standalone: func() bool { return config.IsStandalone() },
+		DataDir:    dataDir,
+		GetDirect: func(ctx context.Context) (configApp.DirectTransferConfig, bool) {
+			cfg, err := configApp.Default().GetConfig(ctx)
+			if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Direct == nil {
+				return configApp.DirectTransferConfig{}, false
+			}
+			return *cfg.P2P.Direct, true
+		},
+	})
+	p2pGenHandler.SetService(p2pxSvcInstance)
+	p2pGenHandler.SetShareService(shareSvc)
+	p2pGenHandler.SetAuditWriter(adminApp.Default().LogOperation)
+
 	// 3. anonymous service（需要 Redis）
 	anonHandler.SetService(anonymousApp.NewService(redis.GetClient(), database))
 
@@ -317,6 +343,9 @@ var notifySvcInstance *notifyAppService.Service
 
 // requestSvcInstance 寄件码服务实例（initThriftIDLServices 装配）
 var requestSvcInstance *requestApp.Service
+
+// p2pxSvcInstance 设备直传 supervisor 实例（P2a；Cleanup 停机收口）
+var p2pxSvcInstance *p2pxApp.Service
 
 // bootstrapBaseURL 对外基础地址（server.base_url 优先，否则 host:port）
 func bootstrapBaseURL() string {

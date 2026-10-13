@@ -58,6 +58,12 @@ func (s *Service) currentFederation() FederationNotifier {
 	return s.federation
 }
 
+// LogOperation 管理操作审计公开入口（供 gen handler 等非本域包写审计，
+// 与 logAdminOperation 同表同语义；P2a 设备直传操作页使用）。
+func (s *Service) LogOperation(ctx context.Context, action, target string, success bool) {
+	s.logAdminOperation(ctx, action, target, success)
+}
+
 func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
 		userRepo:           dao.NewUserRepository(gormDB),
