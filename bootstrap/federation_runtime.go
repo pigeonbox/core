@@ -6,6 +6,9 @@ package bootstrap
 // 多副本硬约束运行时化：节点身份是进程级 Ed25519，standalone 专属。
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -14,6 +17,10 @@ import (
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
 )
+
+// defaultPublicRegistry 官方公共注册中心（spec 2026-10-14 §3.1/§5：registry
+// 留空 = 官方缺省；自建 p2pd 时显式配置）。信令 56788，中继经 /health 自发现。
+const defaultPublicRegistry = "http://home.enjoye.top:56788"
 
 // fedStartFunc 生产工厂 = federationApp.NewService；测试注入可控工厂。
 type fedStartFunc func(cfg conf.FederationConfig, nodeName string) (*federationApp.Service, error)
@@ -44,24 +51,46 @@ func (r *federationRuntime) init(nodeName string, start fedStartFunc,
 }
 
 // apply 按新配置切换 federation（启动路径与热路径共用；串行化）。
-func (r *federationRuntime) apply(cfg conf.FederationConfig) {
+// 返回 error 表示"本次切换未生效（联邦维持原状/未启用）"——配置层可能已
+// 持久化新值，调用方（UpdateConfig 钩子）必须把错误透传给管理员，
+// 禁止静默（spec §12.4 断链响亮；评审 P0/P1-1：曾因吞错致"保存成功但联邦从未启动"）。
+// 失败路径一律维持原实例（回滚语义，不留半态）。
+func (r *federationRuntime) apply(cfg conf.FederationConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.cfg = cfg
 	if !cfg.Enabled {
+		r.cfg = cfg
 		r.stopLocked()
-		return
+		return nil
 	}
 	if r.standalone != nil && !r.standalone() {
-		logger.Warn("federation 启用被拒：多副本部署语义未定义（standalone 专属）")
+		r.cfg = cfg
 		r.stopLocked()
-		return
+		return errors.New("多副本部署禁用联邦（standalone 专属；请用单机 standalone 模式或保持关闭）")
 	}
-	svc, err := r.start(cfg, r.nodeName)
+	// spec §3.1/§5 缺省语义（评审 P0-1：界面提示"留空=官方公共注册中心"，
+	// 后端却曾对空值报错——主路径静默失败）：
+	//   registry_url 留空 → 官方公共注册中心
+	eff := cfg
+	if strings.TrimSpace(eff.RegistryURL) == "" {
+		eff.RegistryURL = defaultPublicRegistry
+	}
+	// public_url 留空 → 站点对外地址（server.base_url）；推断不出或监听
+	// 0.0.0.0 时响亮拒绝——拼进公告即不可达取件链接（2026-10-07 iStoreOS 事故同款）
+	if strings.TrimSpace(eff.PublicURL) == "" && config != nil {
+		eff.PublicURL = bootstrapBaseURL()
+	}
+	if eff.PublicURL == "" || strings.Contains(eff.PublicURL, "0.0.0.0") {
+		return fmt.Errorf("public_url 为空且无法从站点配置推断可用对外地址（当前 %q），请显式填写本站对外地址", eff.PublicURL)
+	}
+	// 同配置重复保存：短路，不触发 deregister/register 抖动（评审 P2-3）
+	if r.current != nil && cfg == r.cfg {
+		return nil
+	}
+	svc, err := r.start(eff, r.nodeName)
 	if err != nil {
 		// 回滚语义：新配置装配失败维持原状，不留半态
-		logger.Error("federation 新配置装配失败，维持原配置", zap.Error(err))
-		return
+		return fmt.Errorf("federation 装配失败（维持原配置）: %w", err)
 	}
 	if r.current != nil {
 		r.current.Stop()
@@ -70,14 +99,16 @@ func (r *federationRuntime) apply(cfg conf.FederationConfig) {
 		}
 	}
 	r.current = svc
+	r.cfg = cfg
 	svc.Start()
 	if r.attach != nil {
 		r.attach(svc)
 	}
 	logger.Info("federation enabled",
-		zap.String("registry", cfg.RegistryURL),
-		zap.String("public_url", cfg.PublicURL),
+		zap.String("registry", eff.RegistryURL),
+		zap.String("public_url", eff.PublicURL),
 		zap.String("node_id", svc.NodeID()))
+	return nil
 }
 
 // stopLocked 停并摘注入点（调用方持锁）。

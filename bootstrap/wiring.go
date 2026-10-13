@@ -141,11 +141,13 @@ func initThriftIDLServices(database *gorm.DB) {
 				FrontendCallback: o.FrontendCallback,
 			}))
 		},
-		OnP2PFederationChanged: func(f *conf.FederationConfig) {
+		OnP2PFederationChanged: func(f *conf.FederationConfig) error {
 			if f == nil {
-				return
+				return nil
 			}
-			fedRT.apply(*f)
+			// 错误必须透传到 admin（断链响亮）：apply 失败=联邦维持原状，
+			// 配置值与运行态分叉不可静默（评审 P1-1/P1-2）
+			return fedRT.apply(*f)
 		},
 	})
 	// 2.4 注入 user service：上传统计（此前从未接线，用户统计恒为 0）
@@ -190,7 +192,11 @@ func initThriftIDLServices(database *gorm.DB) {
 		},
 		func() bool { return config.IsStandalone() }, // 部署形态装配期固化（运行期不变）
 	)
-	fedRT.apply(config.Federation)
+	if err := fedRT.apply(config.Federation); err != nil {
+		// 启动期失败=以非联邦模式运行（管理员无在线会话可报，响亮落日志；
+		// 在线保存路径经 ReconfigureHooks 透传给管理员）
+		logger.Error("federation 启动装配失败（以非联邦模式运行）", zap.Error(err))
+	}
 
 	// 3. anonymous service（需要 Redis）
 	anonHandler.SetService(anonymousApp.NewService(redis.GetClient(), database))

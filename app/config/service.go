@@ -104,8 +104,10 @@ type ReconfigureHooks struct {
 	OnNotifyChanged func(n *conf.NotifyConfig)
 	// OnOIDCChanged OIDC service 热重建（按新段；Enabled=false 时 handler 走未启用响应）
 	OnOIDCChanged func(o *conf.OIDCConfig)
-	// OnP2PFederationChanged federation 运行时热切换（bootstrap 注册；P1 对称节点 spec §6）
-	OnP2PFederationChanged func(f *conf.FederationConfig)
+	// OnP2PFederationChanged federation 运行时热切换（bootstrap 注册；P1 对称节点
+	// spec §6）。返回 error 时 UpdateConfig 透传给管理员——切换失败但配置已持久化
+	// 的分叉必须响亮（spec §12.4），禁止静默。
+	OnP2PFederationChanged func(f *conf.FederationConfig) error
 }
 
 // SetReconfigureHooks 注册组件热重建钩子（bootstrap 调用）。
@@ -245,8 +247,9 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 		return err
 	}
 	// 提交意图先于 nil-保留合并捕获：热切换钩子只在请求真正携带该段时触发。
-	// ensureConfigLoaded 会把 P2P 回填成恒非 nil（env 种子镜像），若以合并后
-	// 状态判空，任何局部保存都会误触发 federation stop/start 抖动。
+	// overlay 回填（见 applySystemConfigOverlayLocked）会让内存里的 P2P 段恒非
+	// nil（env 种子镜像），若以合并后状态判空，任何局部保存都会误触发
+	// federation stop/start 抖动。
 	p2pFedSubmitted := newConfig.P2P != nil && newConfig.P2P.Federation != nil
 	s.ensureConfigLoaded(ctx)
 	s.configMu.RLock()
@@ -338,7 +341,13 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 			hooks.OnOIDCChanged(oidcCfg)
 		}
 		if p2pFedSubmitted && p2pFedCfg != nil && hooks.OnP2PFederationChanged != nil {
-			hooks.OnP2PFederationChanged(p2pFedCfg)
+			if err := hooks.OnP2PFederationChanged(p2pFedCfg); err != nil {
+				// 配置已写库/overlay，但运行态切换失败（维持原状）——审计记失败
+				// 并把错误透传给管理员，禁止"保存成功但联邦从未启动"式静默
+				s.logConfigOperation(ctx, "config.update",
+					"p2p.federation apply failed: "+err.Error(), false)
+				return fmt.Errorf("p2p.federation 配置已保存但未生效: %w", err)
+			}
 		}
 	}
 
@@ -385,8 +394,10 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 		g.Security.APIToken = *sc.APIToken
 	}
 	// P2P 段从未在线保存过时回填全局 conf 生效值（与 UploadEx 回填同理：管理
-	// 后台看到真实生效的联邦配置，整段保存也不会把 env 种子冲成零值；回填只进
-	// 内存配置不强制落库）。g 已在本函数读取，不新增直读点（棘轮规则 8）。
+	// 后台看到真实生效的联邦配置，整段保存也不会把 env 种子冲成零值）。注意
+	// 语义：回填本身不写库，但随后任意一次保存经 nil-保留会把镜像值持久化
+	// ——与 UploadEx 先例同语义（env 种子自此以 DB 值固化，后台可改）。g 已在
+	// 本函数读取，不新增直读点（棘轮规则 8）。
 	if sc.P2P == nil {
 		fed := g.Federation
 		sc.P2P = &P2PSection{Federation: &fed}

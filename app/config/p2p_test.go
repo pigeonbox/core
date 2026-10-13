@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -105,7 +106,7 @@ func TestUpdateConfigP2PFederationHook(t *testing.T) {
 	withGlobalConf(t)
 	var got *conf.FederationConfig
 	svc.SetReconfigureHooks(&ReconfigureHooks{
-		OnP2PFederationChanged: func(f *conf.FederationConfig) { got = f },
+		OnP2PFederationChanged: func(f *conf.FederationConfig) error { got = f; return nil },
 	})
 	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{OIDC: &conf.OIDCConfig{}}))
 	require.Nil(t, got, "未提交 p2p 段不应触发")
@@ -114,6 +115,24 @@ func TestUpdateConfigP2PFederationHook(t *testing.T) {
 	}))
 	require.NotNil(t, got)
 	require.True(t, got.Enabled)
+}
+
+// TestUpdateConfigP2PFederationHookError 热切换失败必须透传给管理员——
+// 配置已写库但运行态维持原状的分叉禁止静默（评审 P1-1）。
+func TestUpdateConfigP2PFederationHookError(t *testing.T) {
+	svc := newTestConfigService(t)
+	ctx := context.Background()
+	withGlobalConf(t)
+	svc.SetReconfigureHooks(&ReconfigureHooks{
+		OnP2PFederationChanged: func(f *conf.FederationConfig) error {
+			return errors.New("boom：federation 装配失败")
+		},
+	})
+	err := svc.UpdateConfig(ctx, &SystemConfig{
+		P2P: &P2PSection{Federation: &conf.FederationConfig{Enabled: true, PublicURL: "http://s.example.com"}},
+	})
+	require.Error(t, err, "切换失败必须让保存请求失败（响亮）")
+	require.Contains(t, err.Error(), "boom")
 }
 
 // TestUpdateConfigP2PSubsectionPreserve {"p2p":{}}（federation 子段 nil）不得冲掉
