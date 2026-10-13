@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeonbox/core/app/config"
+	"github.com/pigeonbox/core/conf"
 )
 
 // stub p2pc:send 打口令行后阻塞;recv 把 hello 落到 --out 目录后退出。
@@ -69,8 +69,8 @@ func testDeps(t *testing.T, binPath string) Deps {
 		Standalone: func() bool { return true },
 		DataDir:    t.TempDir(),
 		MonitorInterval: 50 * time.Millisecond,
-		GetDirect: func(ctx context.Context) (config.DirectTransferConfig, bool) {
-			return config.DirectTransferConfig{
+		GetDirect: func(ctx context.Context) (conf.P2PDirectConfig, bool) {
+			return conf.P2PDirectConfig{
 				Enabled:        true,
 				RegistryURL:    "http://127.0.0.1:1",
 				SendRoots:      []string{rootsDir},
@@ -163,7 +163,7 @@ func TestSendRootsWhitelist(t *testing.T) {
 	d := testDeps(t, bin)
 	roots := []string{"/tmp/p2px-roots"}
 	cfgFn := d.GetDirect
-	d.GetDirect = func(ctx context.Context) (config.DirectTransferConfig, bool) {
+	d.GetDirect = func(ctx context.Context) (conf.P2PDirectConfig, bool) {
 		c, ok := cfgFn(ctx)
 		c.SendRoots = roots
 		return c, ok

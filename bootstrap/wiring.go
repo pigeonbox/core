@@ -212,10 +212,10 @@ func initThriftIDLServices(database *gorm.DB) {
 	p2pxSvcInstance = p2pxApp.NewService(p2pxApp.Deps{
 		Standalone: func() bool { return config.IsStandalone() },
 		DataDir:    dataDir,
-		GetDirect: func(ctx context.Context) (configApp.DirectTransferConfig, bool) {
+		GetDirect: func(ctx context.Context) (conf.P2PDirectConfig, bool) {
 			cfg, err := configApp.Default().GetConfig(ctx)
 			if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Direct == nil {
-				return configApp.DirectTransferConfig{}, false
+				return conf.P2PDirectConfig{}, false
 			}
 			return *cfg.P2P.Direct, true
 		},

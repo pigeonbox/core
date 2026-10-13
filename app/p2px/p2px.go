@@ -22,7 +22,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pigeonbox/core/app/config"
+	"github.com/pigeonbox/core/conf"
 )
 
 // 任务状态机。
@@ -52,7 +52,7 @@ type Deps struct {
 	// DataDir 服务数据目录（默认收件区/任务工作区基准）
 	DataDir string
 	// GetDirect 读当前直传配置（DB 热生效；bool=false 表示未配置）
-	GetDirect func(ctx context.Context) (config.DirectTransferConfig, bool)
+	GetDirect func(ctx context.Context) (conf.P2PDirectConfig, bool)
 	// MonitorInterval 配额监控周期（缺省 5s；测试可压到毫秒级）
 	MonitorInterval time.Duration
 }
@@ -236,17 +236,17 @@ func (s *Service) getTask(taskID string) (*Task, error) {
 }
 
 // guard 创建任务前的公共门禁：standalone + 开关 + 二进制。
-func (s *Service) guard(ctx context.Context) (config.DirectTransferConfig, string, error) {
+func (s *Service) guard(ctx context.Context) (conf.P2PDirectConfig, string, error) {
 	if s.deps.Standalone != nil && !s.deps.Standalone() {
-		return config.DirectTransferConfig{}, "", errors.New("设备直传为 standalone 部署专属（多副本模式禁用）")
+		return conf.P2PDirectConfig{}, "", errors.New("设备直传为 standalone 部署专属（多副本模式禁用）")
 	}
 	cfg, ok := s.deps.GetDirect(ctx)
 	if !ok || !cfg.Enabled {
-		return config.DirectTransferConfig{}, "", errors.New("设备直传未启用（管理后台「P2P 与联邦」分区开启）")
+		return conf.P2PDirectConfig{}, "", errors.New("设备直传未启用（管理后台「P2P 与联邦」分区开启）")
 	}
 	bin, err := s.locateBinary(cfg)
 	if err != nil {
-		return config.DirectTransferConfig{}, "", err
+		return conf.P2PDirectConfig{}, "", err
 	}
 	return cfg, bin, nil
 }
@@ -260,7 +260,7 @@ func effectiveRegistry(u string) string {
 }
 
 // effectiveRecvDir 收件区缺省回填（留空=<data>/p2p-inbox）。
-func (s *Service) effectiveRecvDir(cfg config.DirectTransferConfig) string {
+func (s *Service) effectiveRecvDir(cfg conf.P2PDirectConfig) string {
 	if strings.TrimSpace(cfg.RecvDir) != "" {
 		return strings.TrimSpace(cfg.RecvDir)
 	}

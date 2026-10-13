@@ -168,7 +168,7 @@ func TestUpdateConfigP2PDirectSubsection(t *testing.T) {
 	}))
 	// 再存直传（不带 federation）→ 联邦保留
 	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &DirectTransferConfig{Enabled: true, SendRoots: []string{"/data/in"}, RecvDir: "/data/inbox"}},
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{Enabled: true, SendRoots: []string{"/data/in"}, RecvDir: "/data/inbox"}},
 	}))
 	got, err := svc.GetConfig(ctx)
 	require.NoError(t, err)
@@ -189,17 +189,17 @@ func TestUpdateConfigP2PDirectSubsection(t *testing.T) {
 
 	// 校验：send_roots 必须绝对路径且禁 "/"
 	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &DirectTransferConfig{SendRoots: []string{"relative/path"}}},
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{SendRoots: []string{"relative/path"}}},
 	}))
 	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &DirectTransferConfig{SendRoots: []string{"/"}}},
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{SendRoots: []string{"/"}}},
 	}))
 	// 校验：配额非负
 	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &DirectTransferConfig{MaxTaskBytes: -1}},
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{MaxTaskBytes: -1}},
 	}))
 	// 校验：recv_dir 绝对路径
 	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &DirectTransferConfig{RecvDir: "inbox"}},
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RecvDir: "inbox"}},
 	}))
 }

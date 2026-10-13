@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/pigeonbox/core/app/config"
+	"github.com/pigeonbox/core/conf"
 )
 
 // Send 发起发送任务（白名单校验 → spawn p2pc send → 口令行异步解析进任务）。
@@ -68,7 +68,7 @@ func normalizeCode(code string) string {
 }
 
 // registryArgs registry/relay/node-key 参数拼装。
-func (s *Service) registryArgs(cfg config.DirectTransferConfig) []string {
+func (s *Service) registryArgs(cfg conf.P2PDirectConfig) []string {
 	args := []string{"--registry", effectiveRegistry(cfg.RegistryURL)}
 	if strings.TrimSpace(cfg.RelayAddr) != "" {
 		args = append(args, "--relay", strings.TrimSpace(cfg.RelayAddr))
@@ -270,7 +270,7 @@ func (s *Service) dropTask(id string) {
 
 // locateBinary 查找序：config.BinaryPath > PB_P2PC_PATH env > 内置候选
 // （可执行文件同目录/p2pc、./p2pc、/usr/bin/p2pc、PATH 查找）。
-func (s *Service) locateBinary(cfg config.DirectTransferConfig) (string, error) {
+func (s *Service) locateBinary(cfg conf.P2PDirectConfig) (string, error) {
 	if p := strings.TrimSpace(cfg.BinaryPath); p != "" {
 		if isExecutable(p) {
 			return p, nil

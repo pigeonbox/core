@@ -226,28 +226,9 @@ func validateSystemConfig(cfg *SystemConfig) error {
 type P2PSection struct {
 	// Federation 联邦控制面（overlay → conf.Federation；nil = 保留现状）
 	Federation *conf.FederationConfig `json:"federation,omitempty"`
-	// Direct 设备直传数据面（p2pc；nil = 保留现状；P2a 落地）
-	Direct *DirectTransferConfig `json:"direct,omitempty"`
-}
-
-// DirectTransferConfig 设备直传参数（supervisor 域 app/p2px 消费；admin-only）。
-type DirectTransferConfig struct {
-	// Enabled 直传能力总开关（缺省 false）
-	Enabled bool `json:"enabled"`
-	// RegistryURL p2pd 基址，留空 = 官方公共注册中心（与 federation 缺省同源）
-	RegistryURL string `json:"registry_url"`
-	// RelayAddr 显式中继，留空 = 经 /health 自发现
-	RelayAddr string `json:"relay_addr"`
-	// SendRoots 发送路径白名单（绝对路径，空 = 拒绝所有发送；仿 local_import 校验）
-	SendRoots []string `json:"send_roots"`
-	// RecvDir 收件暂存目录，留空 = <data>/p2p-inbox
-	RecvDir string `json:"recv_dir"`
-	// MaxTaskBytes 单任务字节上限（0 = 缺省 50 GiB）
-	MaxTaskBytes int64 `json:"max_task_bytes"`
-	// InboxQuotaBytes 收件区总配额（0 = 缺省 200 GiB）
-	InboxQuotaBytes int64 `json:"inbox_quota_bytes"`
-	// BinaryPath p2pc 路径，留空 = 查找序（PB_P2PC_PATH env > 内置候选）
-	BinaryPath string `json:"binary_path"`
+	// Direct 设备直传数据面（p2pc；nil = 保留现状；P2a 落地；类型归 conf 层——
+	// p2px 域消费须遵守跨域依赖白名单，不入 app 域）
+	Direct *conf.P2PDirectConfig `json:"direct,omitempty"`
 }
 
 // localImportOfUploadEx UploadEx 段内嵌的 local_import（同一配置两种提交形状）
