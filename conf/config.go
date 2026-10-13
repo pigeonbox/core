@@ -95,19 +95,20 @@ func (c *AppConfiguration) ServesAdminPlane() bool {
 // 注册中心不落盘不见明文）。详见 docs/specs/2026-10-04-p2p-registry-service-design.md。
 type FederationConfig struct {
 	// Enabled 总开关（默认 false）。env: PB_FEDERATION_ENABLED
-	Enabled bool `mapstructure:"enabled"`
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
 	// RegistryURL 联邦注册中心基址，如 http://p2p:12346；支持逗号分隔多主备
 	// （写路径全推、读路径依次 failover）。env: PB_FEDERATION_REGISTRY_URL
-	RegistryURL string `mapstructure:"registry_url"`
+	RegistryURL string `mapstructure:"registry_url" json:"registry_url"`
 	// PublicURL 本站对外可达基址（公告给取件方直连下载用；必须公网/局域网可达，
 	// 一般与 server.base_url 一致）。env: PB_FEDERATION_PUBLIC_URL
-	PublicURL string `mapstructure:"public_url"`
+	PublicURL string `mapstructure:"public_url" json:"public_url"`
 	// NodeKeyPath 节点身份密钥（Ed25519 seed hex, 0600），首次启动自动生成。
 	// 缺失/损坏会重新生成=联邦身份更换。env: PB_FEDERATION_NODE_KEY_PATH
-	NodeKeyPath string `mapstructure:"node_key_path"`
+	NodeKeyPath string `mapstructure:"node_key_path" json:"node_key_path"`
 	// AnnounceMinEntropyBits 口令公告熵门槛（位），低于此熵的口令不出站
 	// （6 位数字取件码默认只在本站有效，防 registry 侧枚举）。0=默认 40。
-	AnnounceMinEntropyBits int `mapstructure:"announce_min_entropy_bits"`
+	// json 标签随 SystemConfig.p2p 段在线读写（2026-10-14 对称节点 P1）。
+	AnnounceMinEntropyBits int `mapstructure:"announce_min_entropy_bits" json:"announce_min_entropy_bits"`
 }
 
 // MCPConfig Model Context Protocol server（AI 客户端集成；上游没有的差异化能力）。

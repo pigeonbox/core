@@ -63,6 +63,10 @@ type SystemConfig struct {
 	// API Key 认证总开关与 per-Key 限流
 	APIToken *conf.APITokenConfig `json:"api_token,omitempty"`
 
+	// P2P P2P 能力段（2026-10-14 对称节点 spec §5）：Federation 控制面在线开关；
+	// 直传数据面参数（enabled/send_roots/…）随 P2a 落地。nil = 未在线设置。
+	P2P *P2PSection `json:"p2p,omitempty"`
+
 	// 新段是否发生变化的标记由「非 nil」即涵盖；保存走 UpdateConfig 既有持久化通道
 }
 
@@ -164,7 +168,37 @@ func validateSystemConfig(cfg *SystemConfig) error {
 			}
 		}
 	}
+	// p2p.federation 段校验（2026-10-14 对称节点 P1）：URL 收紧 scheme/形态
+	// （与 notify/oidc 同一策略），registry 支持逗号多主备
+	if cfg.P2P != nil && cfg.P2P.Federation != nil {
+		f := cfg.P2P.Federation
+		if u := strings.TrimSpace(f.RegistryURL); u != "" {
+			for _, one := range strings.Split(u, ",") {
+				one = strings.TrimSpace(one)
+				if one == "" {
+					continue
+				}
+				if err := security.ValidateEndpointURL(one); err != nil {
+					return fmt.Errorf("p2p.federation.registry_url 校验失败: %w", err)
+				}
+			}
+		}
+		if u := strings.TrimSpace(f.PublicURL); u != "" {
+			if err := security.ValidateEndpointURL(u); err != nil {
+				return fmt.Errorf("p2p.federation.public_url 校验失败: %w", err)
+			}
+		}
+		if f.AnnounceMinEntropyBits < 0 || f.AnnounceMinEntropyBits > 256 {
+			return errors.New("p2p.federation.announce_min_entropy_bits out of range (0-256)")
+		}
+	}
 	return nil
+}
+
+// P2PSection P2P 能力配置段（spec 2026-10-14 §5）。
+type P2PSection struct {
+	// Federation 联邦控制面（overlay → conf.Federation；nil = 保留现状）
+	Federation *conf.FederationConfig `json:"federation,omitempty"`
 }
 
 // localImportOfUploadEx UploadEx 段内嵌的 local_import（同一配置两种提交形状）
