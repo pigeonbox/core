@@ -146,11 +146,15 @@ func TestFederationRuntimeConcurrentApply(t *testing.T) {
 		wg.Add(1)
 		go func(on bool) {
 			defer wg.Done()
-			r.apply(fedTestCfg(t, on))
+			// 交错期间 enabled 分支可能因 standalone 门/装配失败报错，
+			// 本用例只断言无数据竞争与终态收敛，错误本身不作断言
+			_ = r.apply(fedTestCfg(t, on))
 		}(i%2 == 0)
 	}
 	wg.Wait()
-	r.apply(fedTestCfg(t, false)) // 收敛到关闭
+	if err := r.apply(fedTestCfg(t, false)); err != nil { // 收敛到关闭
+		t.Fatalf("关闭应成功: %v", err)
+	}
 	if r.instance() != nil {
 		t.Fatal("交错后显式关闭应收敛到无实例")
 	}
