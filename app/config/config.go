@@ -192,6 +192,33 @@ func validateSystemConfig(cfg *SystemConfig) error {
 			return errors.New("p2p.federation.announce_min_entropy_bits out of range (0-256)")
 		}
 	}
+	// p2p.direct 子段校验（P2a）：roots 绝对路径+禁 "/"（与 local_import 同策略）
+	if cfg.P2P != nil && cfg.P2P.Direct != nil {
+		d := cfg.P2P.Direct
+		for _, root := range d.SendRoots {
+			root = strings.TrimSpace(root)
+			if root == "" {
+				continue
+			}
+			if !filepath.IsAbs(root) {
+				return fmt.Errorf("p2p.direct.send_roots 需为绝对路径: %s", root)
+			}
+			if filepath.Clean(root) == "/" {
+				return errors.New("p2p.direct.send_roots 禁止配置根目录 /")
+			}
+		}
+		if d.RecvDir != "" && !filepath.IsAbs(d.RecvDir) {
+			return fmt.Errorf("p2p.direct.recv_dir 需为绝对路径: %s", d.RecvDir)
+		}
+		if d.MaxTaskBytes < 0 || d.InboxQuotaBytes < 0 {
+			return errors.New("p2p.direct 配额参数必须 >= 0")
+		}
+		if u := strings.TrimSpace(d.RegistryURL); u != "" {
+			if err := security.ValidateEndpointURL(u); err != nil {
+				return fmt.Errorf("p2p.direct.registry_url 校验失败: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -199,6 +226,28 @@ func validateSystemConfig(cfg *SystemConfig) error {
 type P2PSection struct {
 	// Federation 联邦控制面（overlay → conf.Federation；nil = 保留现状）
 	Federation *conf.FederationConfig `json:"federation,omitempty"`
+	// Direct 设备直传数据面（p2pc；nil = 保留现状；P2a 落地）
+	Direct *DirectTransferConfig `json:"direct,omitempty"`
+}
+
+// DirectTransferConfig 设备直传参数（supervisor 域 app/p2px 消费；admin-only）。
+type DirectTransferConfig struct {
+	// Enabled 直传能力总开关（缺省 false）
+	Enabled bool `json:"enabled"`
+	// RegistryURL p2pd 基址，留空 = 官方公共注册中心（与 federation 缺省同源）
+	RegistryURL string `json:"registry_url"`
+	// RelayAddr 显式中继，留空 = 经 /health 自发现
+	RelayAddr string `json:"relay_addr"`
+	// SendRoots 发送路径白名单（绝对路径，空 = 拒绝所有发送；仿 local_import 校验）
+	SendRoots []string `json:"send_roots"`
+	// RecvDir 收件暂存目录，留空 = <data>/p2p-inbox
+	RecvDir string `json:"recv_dir"`
+	// MaxTaskBytes 单任务字节上限（0 = 缺省 50 GiB）
+	MaxTaskBytes int64 `json:"max_task_bytes"`
+	// InboxQuotaBytes 收件区总配额（0 = 缺省 200 GiB）
+	InboxQuotaBytes int64 `json:"inbox_quota_bytes"`
+	// BinaryPath p2pc 路径，留空 = 查找序（PB_P2PC_PATH env > 内置候选）
+	BinaryPath string `json:"binary_path"`
 }
 
 // localImportOfUploadEx UploadEx 段内嵌的 local_import（同一配置两种提交形状）
