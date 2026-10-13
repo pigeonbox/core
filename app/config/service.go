@@ -104,6 +104,8 @@ type ReconfigureHooks struct {
 	OnNotifyChanged func(n *conf.NotifyConfig)
 	// OnOIDCChanged OIDC service 热重建（按新段；Enabled=false 时 handler 走未启用响应）
 	OnOIDCChanged func(o *conf.OIDCConfig)
+	// OnP2PFederationChanged federation 运行时热切换（bootstrap 注册；P1 对称节点 spec §6）
+	OnP2PFederationChanged func(f *conf.FederationConfig)
 }
 
 // SetReconfigureHooks 注册组件热重建钩子（bootstrap 调用）。
@@ -210,6 +212,14 @@ func (s *Service) ensureConfigLoaded(ctx context.Context) {
 			s.config.UploadEx = &ue
 		}
 	}
+	// P2P 段从未在线保存过时回填全局 conf 生效值（与 UploadEx 同理：
+	// 管理后台看到真实生效的联邦配置，整段保存也不会把 env 种子冲成零值）
+	if s.config.P2P == nil {
+		if g := conf.GetGlobalConfig(); g != nil {
+			fed := g.Federation
+			s.config.P2P = &P2PSection{Federation: &fed}
+		}
+	}
 	s.applyUserSideEffects(s.config.User)
 }
 
@@ -239,6 +249,10 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	if err := validateSystemConfig(newConfig); err != nil {
 		return err
 	}
+	// 提交意图先于 nil-保留合并捕获：热切换钩子只在请求真正携带该段时触发。
+	// ensureConfigLoaded 会把 P2P 回填成恒非 nil（env 种子镜像），若以合并后
+	// 状态判空，任何局部保存都会误触发 federation stop/start 抖动。
+	p2pFedSubmitted := newConfig.P2P != nil && newConfig.P2P.Federation != nil
 	s.ensureConfigLoaded(ctx)
 	s.configMu.RLock()
 	if newConfig.RuntimeStorage == nil && s.config != nil {
@@ -281,6 +295,10 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	if newConfig.APIToken == nil && s.config != nil {
 		newConfig.APIToken = s.config.APIToken
 	}
+	// P2P 段同规则（2026-10-14 对称节点 P1：局部保存不冲掉联邦配置）
+	if newConfig.P2P == nil && s.config != nil {
+		newConfig.P2P = s.config.P2P
+	}
 	s.configMu.RUnlock()
 	data, err := json.Marshal(newConfig)
 	if err != nil {
@@ -302,6 +320,10 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	// 新段热应用：整体 overlay 到全局 conf（所有 conf.GetGlobalConfig() 读取点即刻生效）
 	s.applySystemConfigOverlayLocked(newConfig)
 	notifyCfg, oidcCfg := newConfig.Notify, newConfig.OIDC
+	var p2pFedCfg *conf.FederationConfig
+	if newConfig.P2P != nil {
+		p2pFedCfg = newConfig.P2P.Federation
+	}
 	s.configMu.Unlock()
 
 	// 组件热重建（bootstrap 注册的钩子；nil 段不触发）
@@ -314,6 +336,9 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 		}
 		if oidcCfg != nil && hooks.OnOIDCChanged != nil {
 			hooks.OnOIDCChanged(oidcCfg)
+		}
+		if p2pFedSubmitted && p2pFedCfg != nil && hooks.OnP2PFederationChanged != nil {
+			hooks.OnP2PFederationChanged(p2pFedCfg)
 		}
 	}
 
@@ -358,6 +383,9 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 	}
 	if sc.APIToken != nil {
 		g.Security.APIToken = *sc.APIToken
+	}
+	if sc.P2P != nil && sc.P2P.Federation != nil {
+		g.Federation = *sc.P2P.Federation
 	}
 }
 
