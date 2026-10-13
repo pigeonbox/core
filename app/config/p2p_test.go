@@ -79,6 +79,25 @@ func TestUpdateConfigP2PPartialPreserveAndOverlay(t *testing.T) {
 	require.False(t, g.Federation.Enabled)
 }
 
+// TestOverlayBackfillsP2PFromGlobalConf DB 无 p2p 段时，overlay 从全局 conf
+// 回填生效值（env 种子镜像；管理后台 GET 不显示成"关"）。
+func TestOverlayBackfillsP2PFromGlobalConf(t *testing.T) {
+	svc := newTestConfigService(t)
+	ctx := context.Background()
+	g := withGlobalConf(t)
+	g.Federation.Enabled = true
+	g.Federation.RegistryURL = "http://seed:56788"
+
+	// 任意局部保存（只带 oidc）触发 overlay → p2p 段被回填为 env 种子镜像
+	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{OIDC: &conf.OIDCConfig{}}))
+	got, err := svc.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.P2P)
+	require.NotNil(t, got.P2P.Federation)
+	require.True(t, got.P2P.Federation.Enabled)
+	require.Equal(t, "http://seed:56788", got.P2P.Federation.RegistryURL)
+}
+
 // TestUpdateConfigP2PFederationHook 热切换钩子只在 p2p.federation 非 nil 时触发。
 func TestUpdateConfigP2PFederationHook(t *testing.T) {
 	svc := newTestConfigService(t)
