@@ -139,6 +139,7 @@ func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir strin
 	t.mu.Lock()
 	t.cancel = cancel
 	t.pid = cmd.Process.Pid
+	t.waitingSince = time.Now()
 	t.mu.Unlock()
 	s.writePidFile(t.ID, cmd.Process.Pid)
 
@@ -215,6 +216,7 @@ func (s *Service) fireRetry(t *Task) {
 	}
 	t.mu.Lock()
 	t.state = StateWaiting
+	t.waitingSince = time.Now()
 	t.mu.Unlock()
 }
 
@@ -244,6 +246,7 @@ func (s *Service) scanLines(t *Task, r interface{ Read([]byte) (int, error) }, i
 		}
 		if t.state == StateWaiting && !strings.HasPrefix(line, "口令") {
 			t.state = StateRunning
+			t.waitingSince = time.Time{} // 出字节/有推进即离开纯等待态
 		}
 		t.log = append(t.log, line)
 		if len(t.log) > logRingSize {
@@ -309,6 +312,7 @@ func (s *Service) monitorLoop() {
 			return
 		case <-tick.C:
 			s.checkQuotas()
+			s.checkGhostPairs()
 			if time.Since(lastSweep) >= time.Hour || s.deps.MonitorInterval < 10*time.Second && time.Since(lastSweep) >= s.deps.MonitorInterval*720 {
 				s.sweepInbox()
 				lastSweep = time.Now()
@@ -369,6 +373,57 @@ func (s *Service) checkQuotas() {
 			t.mu.Unlock()
 		}
 	}
+}
+
+// checkGhostPairs 收端幽灵配对看门狗：waiting 态零字节超时 → 杀+按可重试
+// 失败处理（退避重派；重派后同目录触发 p2pc offset 断点续传）。
+func (s *Service) checkGhostPairs() {
+	gt := s.deps.GhostPairTimeout
+	if gt <= 0 {
+		gt = recvGhostPairTimeout
+	}
+	s.mu.Lock()
+	tasks := make([]*Task, 0, len(s.tasks))
+	for _, t := range s.tasks {
+		tasks = append(tasks, t)
+	}
+	s.mu.Unlock()
+	now := time.Now()
+	for _, t := range tasks {
+		t.mu.Lock()
+		hang := t.state == StateWaiting && t.Kind == "recv" &&
+			!t.waitingSince.IsZero() && now.Sub(t.waitingSince) > gt
+		t.mu.Unlock()
+		if !hang {
+			continue
+		}
+		killProcessGroup(t.pid)
+		s.finishAndMaybeRetry(t, fmt.Sprintf("配对等待超时（%v 零字节——疑似与失效会话配对），自动重派", gt))
+	}
+}
+
+// finishAndMaybeRetry 杀后统一入口：可重试分类 → 退避重派 或 终态。
+func (s *Service) finishAndMaybeRetry(t *Task, reason string) {
+	t.mu.Lock()
+	t.err = reason
+	t.finishedAt = time.Now()
+	s.removePidFile(t.ID)
+	if t.attempts >= s.deps.MaxAttemptsFor(t) || !isRetryable(reason) {
+		t.state = StateFailed
+		t.mu.Unlock()
+		return
+	}
+	t.attempts++
+	t.state = StateRetrying
+	delay := retryBackoff << uint(t.attempts-1)
+	if delay > 60*time.Second {
+		delay = 60 * time.Second
+	}
+	if t.Kind == "recv" {
+		delay += 3 * time.Second
+	}
+	t.retryTimer = time.AfterFunc(delay, func() { s.fireRetry(t) })
+	t.mu.Unlock()
 }
 
 // dropTask 创建失败时出册。

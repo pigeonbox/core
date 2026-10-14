@@ -54,6 +54,10 @@ const (
 	// 收端额外 +3s 错峰等发端先重发公告；总重试窗口 ≈5 分钟）
 	maxAttempts  = 8
 	retryBackoff = 5 * time.Second
+	// recvGhostPairTimeout 收端幽灵配对看门狗（2026-10-14 冻结实测）：与死会话
+	// 配对后 p2pc 清空读 deadline 无限等数据（p2pd 回放死会话 hello）——
+	// 真实配对在双端就绪后秒级开始出字节，90s 零字节必是幽灵，杀+重派
+	recvGhostPairTimeout = 90 * time.Second
 )
 
 // Deps supervisor 依赖注入（生产由 bootstrap/wiring 装配；测试注入桩）。
@@ -68,6 +72,8 @@ type Deps struct {
 	MonitorInterval time.Duration
 	// MaxAttempts 自动续传最大重试次数（缺省 8；0=缺省）
 	MaxAttempts int
+	// GhostPairTimeout 收端零字节配对看门狗（缺省 90s；测试可调）
+	GhostPairTimeout time.Duration
 	// InboxTTL 收件区文件存活期（缺省 7 天；终态/已发布/无属主目录超期即清扫，spec §7.3）
 	InboxTTL time.Duration
 }
@@ -87,6 +93,7 @@ type Task struct {
 	finishedAt time.Time
 	published  bool // 已发布为分享（幂等闸：重复/并发 publish 拒绝——否则重复铸分享+重复拷存储）
 	attempts   int        // 已尝试次数（自动续传环）
+	waitingSince time.Time // 进入 waiting 的时刻（收端幽灵配对看门狗用）
 	spec       *spawnSpec // 重派规格（spawn 时记录）
 	retryTimer *time.Timer
 	log        []string
@@ -163,6 +170,9 @@ func NewService(deps Deps) *Service {
 	}
 	if deps.MaxAttempts <= 0 {
 		deps.MaxAttempts = maxAttempts
+	}
+	if deps.GhostPairTimeout <= 0 {
+		deps.GhostPairTimeout = recvGhostPairTimeout
 	}
 	s := &Service{
 		deps:    deps,
