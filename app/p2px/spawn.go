@@ -48,9 +48,11 @@ func (s *Service) Recv(ctx context.Context, code string) (*Task, error) {
 	}
 	t := s.newTask("recv", code, nil)
 	outDir := filepath.Join(recvDir, t.ID)
-	args := []string{"recv", code, "--out", outDir, "--yes"}
+	// 口令走 env(PB_P2P_CODE)而非 argv——argv 在 ps 中同机可见,口令即授权
+	// (2026-10-14 安全评审硬化;p2pc ≥v0.6.2 支持 "recv -" 读 env)
+	args := []string{"recv", "-", "--out", outDir, "--yes"}
 	args = append(args, s.registryArgs(cfg)...)
-	return s.spawnPrepared(t, bin, args, outDir)
+	return s.spawnPrepared(t, bin, args, outDir, "PB_P2P_CODE="+code)
 }
 
 // normalizeCode 口令归一：去空格/连字符、大写（与 p2pc 接受形态对齐后重新分组）。
@@ -99,10 +101,14 @@ func (s *Service) newTask(kind, code string, paths []string) *Task {
 }
 
 // spawnPrepared 真实 spawn：进程组 + stdout/stderr 行扫描 + Wait 收尾。
-func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir string) (*Task, error) {
+// extraEnv 为任务级环境变量（recv 的 PB_P2P_CODE 口令走此通道,不落 argv）。
+func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir string, extraEnv ...string) (*Task, error) {
 	taskCtx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(taskCtx, bin, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	if outDir != "" {
 		if err := os.MkdirAll(outDir, 0o700); err != nil {
 			cancel()
