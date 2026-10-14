@@ -496,6 +496,31 @@ func (s *Service) EmitShareFlagged(code, reason, ownerIP string) {
 	})
 }
 
+// EmitP2pInvite 设备直传邀请到达 webhook 推送（P3；best-effort，未配置 webhook 即短路）。
+// 邀请面向 admin（收件箱在管理页轮询呈现），此事件供运维侧及时感知。
+func (s *Service) EmitP2pInvite(fromName, code, note string) {
+	if s.webhookURL == "" {
+		return
+	}
+	payload := map[string]interface{}{
+		"event":     "p2p.invite",
+		"from_name": fromName,
+		"code_hint": code[:4] + "-****-****", // 口令 bearer 不落明文
+		"note":      note,
+		"hint":      "incoming direct-transfer invite; review via GET /admin/p2p/invites",
+		"timestamp": time.Now().Unix(),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	async.GoSafe(func() {
+		if err := s.sendWebhook(context.Background(), "p2p.invite", body); err != nil {
+			logger.Warn("webhook push failed", zap.String("url", s.webhookURL), zap.Error(err))
+		}
+	})
+}
+
 // dispatchWebhook 异步推送（5s 超时，失败静默记日志）
 func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, content, notifyType, level string) {
 	if s.webhookURL == "" {

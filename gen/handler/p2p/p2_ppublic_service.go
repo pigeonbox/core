@@ -12,6 +12,12 @@ import (
 	p2p "github.com/pigeonbox/contracts/gen/p2p"
 )
 
+// inviteNotifier 邀请到达通知（notify 域 webhook 事件；wiring 注入，nil=跳过）。
+var inviteNotifier func(fromName, code, note string)
+
+// SetInviteNotifier 注入邀请到达通知器（bootstrap/wiring 调用）。
+func SetInviteNotifier(fn func(fromName, code, note string)) { inviteNotifier = fn }
+
 // PostP2PInvite 接收来自其他实例的直传邀请。
 // @router /api/v1/p2p/invite [POST]
 func PostP2PInvite(ctx context.Context, c *app.RequestContext) {
@@ -20,9 +26,13 @@ func PostP2PInvite(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: 400, Message: "请求体无效"})
 		return
 	}
-	if _, err := getP2px().AddInvite(req.GetCode(), req.GetFromName(), req.GetNote()); err != nil {
+	inv, err := getP2px().AddInvite(req.GetCode(), req.GetFromName(), req.GetNote())
+	if err != nil {
 		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: 400, Message: err.Error()})
 		return
+	}
+	if inviteNotifier != nil {
+		inviteNotifier(inv.FromName, inv.Code, inv.Note) // best-effort,失败不影响收件
 	}
 	c.JSON(consts.StatusOK, &p2p.PostP2PInviteResp{Code: 200, Message: "邀请已送达"})
 }

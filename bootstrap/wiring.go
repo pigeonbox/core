@@ -222,6 +222,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	})
 	p2pGenHandler.SetService(p2pxSvcInstance)
 	p2pGenHandler.SetShareService(shareSvc)
+	p2pGenHandler.SetInviteNotifier(notifySvcInstance.EmitP2pInvite)
 	p2pGenHandler.SetAuditWriter(adminApp.Default().LogOperation)
 
 	// 3. anonymous service（需要 Redis）
