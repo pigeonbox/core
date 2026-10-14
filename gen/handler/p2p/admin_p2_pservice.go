@@ -82,10 +82,20 @@ func SetAuditWriter(fn func(ctx context.Context, action, target string, success 
 	auditWriter = fn
 }
 
+// audit 操作审计（口令打码——口令即授权,bearer 不落明文日志,只留前 4 位）。
 func audit(ctx context.Context, action, target string, err error) {
 	if auditWriter != nil {
 		auditWriter(ctx, action, target, err == nil)
 	}
+}
+
+// maskCode 口令打码（审计用）:KJ8Y-WCYZ-E249 → KJ8Y-****-****
+func maskCode(code string) string {
+	code = strings.TrimSpace(code)
+	if len(code) <= 4 {
+		return "****"
+	}
+	return code[:4] + "-****-****"
 }
 
 // ---- 端点 ----
@@ -165,7 +175,7 @@ func AdminP2pRecv(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	task, err := getP2px().Recv(ctx, req.Code)
-	audit(ctx, "p2p.recv", req.Code, err)
+	audit(ctx, "p2p.recv", maskCode(req.Code), err)
 	if err != nil {
 		badReq(c, err.Error())
 		return
@@ -247,6 +257,9 @@ func AdminP2pPublish(ctx context.Context, c *app.RequestContext) {
 	if len(codes) == 0 && firstErr != nil {
 		badReq(c, firstErr.Error())
 		return
+	}
+	if firstErr == nil {
+		getP2px().MarkPublished(req.TaskID) // 全成功才置幂等闸（部分失败允许重试补齐）
 	}
 	okData(c, map[string]any{"share_codes": codes})
 }

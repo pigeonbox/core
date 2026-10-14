@@ -5,7 +5,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pigeonbox/core/conf"
@@ -216,6 +218,18 @@ func validateSystemConfig(cfg *SystemConfig) error {
 		if u := strings.TrimSpace(d.RegistryURL); u != "" {
 			if err := security.ValidateEndpointURL(u); err != nil {
 				return fmt.Errorf("p2p.direct.registry_url 校验失败: %w", err)
+			}
+		}
+		// relay_addr = host:port（p2pc --relay 形态）；形态校验防误填 URL 导致拨号失败
+		// （SplitHostPort 对 "http://evil.com/" 能拆出非空 port，必须再断言端口数字）
+		if r := strings.TrimSpace(d.RelayAddr); r != "" {
+			host, port, err := net.SplitHostPort(r)
+			if err != nil || host == "" || port == "" {
+				return fmt.Errorf("p2p.direct.relay_addr 需为 host:port 形态: %s", r)
+			}
+			pn, perr := strconv.Atoi(port)
+			if perr != nil || pn < 1 || pn > 65535 {
+				return fmt.Errorf("p2p.direct.relay_addr 端口需为 1-65535 数字: %s", r)
 			}
 		}
 	}

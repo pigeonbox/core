@@ -55,6 +55,8 @@ type Deps struct {
 	GetDirect func(ctx context.Context) (conf.P2PDirectConfig, bool)
 	// MonitorInterval 配额监控周期（缺省 5s；测试可压到毫秒级）
 	MonitorInterval time.Duration
+	// InboxTTL 收件区文件存活期（缺省 7 天；终态/已发布/无属主目录超期即清扫，spec §7.3）
+	InboxTTL time.Duration
 }
 
 // Task 直传任务（内存态；重启即 expired 语义——pid 文件清扫兜底）。
@@ -70,6 +72,7 @@ type Task struct {
 	state      string
 	err        string
 	finishedAt time.Time
+	published  bool // 已发布为分享（幂等闸：重复/并发 publish 拒绝——否则重复铸分享+重复拷存储）
 	log        []string
 	pid        int
 	outDir     string // recv 任务的落盘目录
@@ -331,18 +334,24 @@ func newTaskID() string {
 
 // PublishPaths 收件任务的可发布绝对路径（三层防穿越：任务态校验+目录归属+symlink 归一）。
 // 只列顶层常规文件（目录由 share 侧逐文件递归处理不在本期范围）。
+// 幂等闸：已发布过的任务拒绝（重复/并发 publish 会重复铸分享+重复拷存储）。
 func (s *Service) PublishPaths(ctx context.Context, taskID string) ([]string, error) {
 	t, err := s.getTask(taskID)
 	if err != nil {
 		return nil, err
 	}
-	snap := t.Snapshot()
-	if snap.Kind != "recv" || snap.State != StateDone {
-		return nil, fmt.Errorf("仅已完成（done）的接收任务可发布（当前 %s/%s）", snap.Kind, snap.State)
-	}
 	t.mu.Lock()
+	if t.published {
+		t.mu.Unlock()
+		return nil, errors.New("该任务已发布过分享（重复发布被阻止；如需再次分享请重新接收）")
+	}
 	outDir := t.outDir
+	state := t.state
+	kind := t.Kind
 	t.mu.Unlock()
+	if kind != "recv" || state != StateDone {
+		return nil, fmt.Errorf("仅已完成（done）的接收任务可发布（当前 %s/%s）", kind, state)
+	}
 	if outDir == "" {
 		return nil, errors.New("任务无落盘目录")
 	}
@@ -380,6 +389,75 @@ func (s *Service) PublishPaths(ctx context.Context, taskID string) ([]string, er
 		return nil, errors.New("收件目录无文件")
 	}
 	return out, nil
+}
+
+// MarkPublished 置发布标记（handler 在全部文件铸分享成功后调用）。
+func (s *Service) MarkPublished(taskID string) {
+	t, err := s.getTask(taskID)
+	if err != nil {
+		return
+	}
+	t.mu.Lock()
+	t.published = true
+	t.mu.Unlock()
+}
+
+// sweepInbox 收件区 TTL 清扫（spec §7.3 防线落地）：终态/已发布任务目录与
+// 无属主目录（重启后任务表丢失）超 InboxTTL 即删除。只认 16-hex 任务目录名
+// ——管理员手工放进收件区的文件绝不动。
+func (s *Service) sweepInbox() {
+	cfg, ok := s.deps.GetDirect(context.Background())
+	if !ok {
+		return
+	}
+	recvDir := s.effectiveRecvDir(cfg)
+	ttl := s.deps.InboxTTL
+	if ttl <= 0 {
+		ttl = 7 * 24 * time.Hour
+	}
+	entries, err := os.ReadDir(recvDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !isTaskDirName(e.Name()) {
+			continue
+		}
+		dir := filepath.Join(recvDir, e.Name())
+		// 在途任务目录绝不动
+		if t, err := s.getTask(e.Name()); err == nil {
+			t.mu.Lock()
+			active := t.state == StateWaiting || t.state == StateRunning
+			created := t.CreatedAt
+			t.mu.Unlock()
+			if active {
+				continue
+			}
+			if time.Since(created) <= ttl {
+				continue
+			}
+		} else {
+			// 无属主目录（进程重启任务表丢失）：按目录 mtime 判龄
+			info, err := e.Info()
+			if err != nil || time.Since(info.ModTime()) <= ttl {
+				continue
+			}
+		}
+		_ = os.RemoveAll(dir)
+	}
+}
+
+// isTaskDirName 任务目录名形态（16 hex）。
+func isTaskDirName(name string) bool {
+	if len(name) != 16 {
+		return false
+	}
+	for _, c := range name {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') { // 非 hex 即非任务目录名
+			return false
+		}
+	}
+	return true
 }
 
 // pidDir 任务 pid 文件目录（孤儿清扫用）。

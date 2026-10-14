@@ -192,17 +192,23 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 	}
 }
 
-// monitorLoop 配额监控：recv 任务落盘字节超限 → kill（磁盘耗尽 DoS 防线，spec §7.3）。
+// monitorLoop 配额监控 + 收件区 TTL 清扫（节流：生产每小时一轮；测试用小间隔时
+// 每 ~720 tick 一轮，保证小 TTL 用例可触发）。
 func (s *Service) monitorLoop() {
 	defer s.monWg.Done()
 	tick := time.NewTicker(s.deps.MonitorInterval)
 	defer tick.Stop()
+	lastSweep := time.Now()
 	for {
 		select {
 		case <-s.monStop:
 			return
 		case <-tick.C:
 			s.checkQuotas()
+			if time.Since(lastSweep) >= time.Hour || s.deps.MonitorInterval < 10*time.Second && time.Since(lastSweep) >= s.deps.MonitorInterval*720 {
+				s.sweepInbox()
+				lastSweep = time.Now()
+			}
 		}
 	}
 }

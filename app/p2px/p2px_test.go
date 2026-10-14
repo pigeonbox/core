@@ -201,3 +201,63 @@ func TestRecvDoneState(t *testing.T) {
 		t.Fatalf("落盘内容错: %q", data)
 	}
 }
+
+// TestPublishIdempotency 重复发布被拒（幂等闸）。
+func TestPublishIdempotency(t *testing.T) {
+	bin := writeStub(t, "ok")
+	svc := NewService(testDeps(t, bin))
+	defer func() { _ = svc.Stop() }()
+	task, err := svc.Recv(context.Background(), "ABCD-1234-WXYZ")
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for task.Snapshot().State != StateDone && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := svc.PublishPaths(context.Background(), task.ID); err != nil {
+		t.Fatalf("首次发布取路径应成功: %v", err)
+	}
+	svc.MarkPublished(task.ID)
+	if _, err := svc.PublishPaths(context.Background(), task.ID); err == nil {
+		t.Fatal("重复发布应被拒")
+	}
+}
+
+// TestInboxTTLSweep 超 TTL 目录被清扫；新目录与非任务形态目录不动（白盒直调）。
+func TestInboxTTLSweep(t *testing.T) {
+	bin := writeStub(t, "ok")
+	d := testDeps(t, bin)
+	d.InboxTTL = 80 * time.Millisecond
+	svc := NewService(d)
+	defer func() { _ = svc.Stop() }()
+
+	cfg, _ := d.GetDirect(context.Background())
+	old := filepath.Join(cfg.RecvDir, "0123456789abcdef")
+	fresh := filepath.Join(cfg.RecvDir, "abcdef0123456789")
+	custom := filepath.Join(cfg.RecvDir, "admin-stuff") // 非任务形态,绝不动
+	for _, dir := range []string{old, fresh, custom} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "x.bin"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-time.Hour)
+	for _, dir := range []string{old, custom} {
+		if err := os.Chtimes(dir, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc.sweepInbox()
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatal("超期任务目录未被清扫")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatal("新目录被误清扫")
+	}
+	if _, err := os.Stat(custom); err != nil {
+		t.Fatal("非任务形态目录被误清扫")
+	}
+}

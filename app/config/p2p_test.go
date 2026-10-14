@@ -203,3 +203,18 @@ func TestUpdateConfigP2PDirectSubsection(t *testing.T) {
 		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RecvDir: "inbox"}},
 	}))
 }
+
+// TestP2PDirectRelayAddrValidation relay_addr 必须 host:port 形态（评审加固）。
+func TestP2PDirectRelayAddrValidation(t *testing.T) {
+	svc := newTestConfigService(t)
+	ctx := context.Background()
+	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RelayAddr: "http://evil.com/"}},
+	}))
+	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RelayAddr: "noport"}},
+	}))
+	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
+		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RelayAddr: "relay.example.com:56787"}},
+	}))
+}
