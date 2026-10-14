@@ -180,8 +180,11 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	s.removePidFile(t.ID)
-	if t.state == StateCanceled {
-		return // 取消路径已写终态
+	// 终态不覆写:取消/配额杀已写过 failed/canceled 及真因——进程退出码
+	// (signal: killed)只是结果,真因在先写入方(2026-10-14 矩阵测试发现
+	// 配额原因被退出码覆盖,运维只见 killed 不见配额)
+	if t.state == StateCanceled || t.state == StateFailed {
+		return
 	}
 	t.finishedAt = time.Now()
 	if err == nil {

@@ -316,3 +316,29 @@ func TestInviteInbox(t *testing.T) {
 		t.Fatalf("超 TTL 应清空: %d", n)
 	}
 }
+
+// TestQuotaReasonPreserved 配额杀的真因不被进程退出码覆写(矩阵测试发现)。
+func TestQuotaReasonPreserved(t *testing.T) {
+	bin := writeStub(t, "quota")
+	d := testDeps(t, bin)
+	svc := NewService(d)
+	defer func() { _ = svc.Stop() }()
+	task, err := svc.Recv(context.Background(), "ABCD-1234-WXYZ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st := task.Snapshot()
+		if st.State == StateFailed {
+			if !strings.Contains(st.Error, "配额") {
+				t.Fatalf("配额真因被覆写: %q", st.Error)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("未达 failed: %+v", task.Snapshot())
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
