@@ -30,8 +30,11 @@ PigeonBox 业务核心库:18 个域服务(含 config 系统配置中心) + 数�
 
 > **p2px(P2P 设备直传 supervisor)**:standalone 部署模式专属,进程内调度设备直传任务,
 > 数据面 spawn `p2pc` 子进程(PAKE/打洞/QUIC 直传)完成传输;与 federation 同约束——
-> public/admin 拆分模式下不可用。管理面 `/admin/p2p/*` 六端点由 contracts
-> `AdminP2PService`(`idl/p2p.thrift`)定义,经 IDL gen 链接入。
+> public/admin 拆分模式下不可用。管理面 `/admin/p2p/*` 由 contracts
+> `AdminP2PService`(`idl/p2p.thrift`)定义,经 IDL gen 链接入;v0.20.0 起由六端点
+> 扩至**九端点**(新增 invites 待收列表/accept 认领/invite-push 推送),并支持联邦
+> 实例间推送邀请——公开收件 `POST /api/v1/p2p/invite`(P2PPublicService,限流归桶;
+> 口令=bearer,信任级同手工交接)。
 >
 > **mcp**:单端点 19 个工具;2026-10-14 新增 p2p_status / p2p_tasks / p2p_send /
 > p2p_recv 四个 admin 级工具(设备直传管理面,与 p2px 域联动)。
