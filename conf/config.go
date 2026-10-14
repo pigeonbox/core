@@ -109,6 +109,10 @@ type P2PDirectConfig struct {
 	InboxQuotaBytes int64 `json:"inbox_quota_bytes"`
 	// BinaryPath p2pc 路径，留空 = 查找序（PB_P2PC_PATH env > 内置候选）
 	BinaryPath string `json:"binary_path"`
+	// Discoverable 在线名录 opt-in（2026-10-14 邀请信箱）：开启后信箱 watcher
+	// 以 discoverable 注册进 p2pd 名录，可被其他实例推送密封邀请（NAT 后可达）。
+	// 缺省 false=不可发现（名录零敏感但可见性是显式选择）。
+	Discoverable bool `json:"discoverable"`
 }
 
 // FederationConfig P2P 联邦接入（M2；默认关闭。对端服务：github.com/pigeonbox/p2p）。

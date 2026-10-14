@@ -76,6 +76,8 @@ type Deps struct {
 	GhostPairTimeout time.Duration
 	// InboxTTL 收件区文件存活期（缺省 7 天；终态/已发布/无属主目录超期即清扫，spec §7.3）
 	InboxTTL time.Duration
+	// NodeName 名录显示名（站点名；信箱 watcher --name 注入，缺省 p2pc）
+	NodeName string
 }
 
 // Task 直传任务（内存态；重启即 expired 语义——pid 文件清扫兜底）。
@@ -150,6 +152,10 @@ type Service struct {
 	invMu   sync.Mutex
 	invites []Invite // P3 收件箱（内存态，TTL 10min/cap 20）
 
+	// 信箱 watcher（2026-10-14 在线名录+邀请信箱；watcher.go）
+	watchMu sync.Mutex
+	watch   watcherState
+
 	nowFn   func() time.Time // 测试注入；缺省 time.Now
 	monStop chan struct{}
 	monWg   sync.WaitGroup
@@ -209,6 +215,7 @@ func (s *Service) Stop() error {
 		}
 		t.mu.Unlock()
 	}
+	s.stopWatcher("server shutdown") // 信箱 watcher 随 supervisor 收口
 	s.monWg.Wait()
 	return nil
 }

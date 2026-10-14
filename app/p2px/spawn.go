@@ -319,6 +319,7 @@ func (s *Service) monitorLoop() {
 		case <-tick.C:
 			s.checkQuotas()
 			s.checkGhostPairs()
+			s.reconcileWatcher() // 信箱 watcher 期望态对账（非 Task，独立守护）
 			if time.Since(lastSweep) >= time.Hour || s.deps.MonitorInterval < 10*time.Second && time.Since(lastSweep) >= s.deps.MonitorInterval*720 {
 				s.sweepInbox()
 				lastSweep = time.Now()

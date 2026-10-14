@@ -212,6 +212,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	p2pxSvcInstance = p2pxApp.NewService(p2pxApp.Deps{
 		Standalone: func() bool { return config.IsStandalone() },
 		DataDir:    dataDir,
+		NodeName:   config.App.Name, // 名录显示名（信箱 watcher --name；与 federation 同源）
 		GetDirect: func(ctx context.Context) (conf.P2PDirectConfig, bool) {
 			cfg, err := configApp.Default().GetConfig(ctx)
 			if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Direct == nil {
