@@ -54,7 +54,8 @@ func rateLimitBucket(path string) string {
 		strings.HasPrefix(path, "/preview/"),
 		strings.HasPrefix(path, "/qrcode/"),
 		strings.HasPrefix(path, "/openapi.json"),
-		strings.HasPrefix(path, "/api/v1/federation/resolve"):
+		strings.HasPrefix(path, "/api/v1/federation/resolve"),
+		strings.HasPrefix(path, "/api/v1/p2p/invite"):
 		return "download"
 	}
 	return ""

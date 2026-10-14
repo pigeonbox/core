@@ -263,3 +263,61 @@ func AdminP2pPublish(ctx context.Context, c *app.RequestContext) {
 	}
 	okData(c, map[string]any{"share_codes": codes})
 }
+
+// AdminP2pInvites 待收邀请列表（P3）。
+// @router /admin/p2p/invites [GET]
+func AdminP2pInvites(ctx context.Context, c *app.RequestContext) {
+	invites := getP2px().ListInvites()
+	items := make([]map[string]any, 0, len(invites))
+	for _, iv := range invites {
+		items = append(items, map[string]any{
+			"id":          iv.ID,
+			"code":        iv.Code,
+			"from_name":   iv.FromName,
+			"note":        iv.Note,
+			"received_at": iv.ReceivedAt.Format(time.RFC3339),
+			"expires_in":  iv.ExpiresIn,
+		})
+	}
+	okData(c, map[string]any{"invites": items})
+}
+
+// AdminP2pInviteAccept 认领邀请并发起接收（P3）。
+// @router /admin/p2p/invites/accept [POST]
+func AdminP2pInviteAccept(ctx context.Context, c *app.RequestContext) {
+	var req p2p.AdminP2pInviteAcceptReq
+	if err := c.BindAndValidate(&req); err != nil || req.GetInviteID() == "" {
+		badReq(c, "请求体无效（需 invite_id）")
+		return
+	}
+	inv, err := getP2px().TakeInvite(req.GetInviteID())
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	task, err := getP2px().Recv(ctx, inv.Code)
+	audit(ctx, "p2p.invite.accept", inv.ID, err)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	snap := task.Snapshot()
+	okData(c, map[string]any{"task": taskToModel(&snap)})
+}
+
+// AdminP2pInvitePush 把口令推送到目标实例（P3 免口令交接）。
+// @router /admin/p2p/invite-push [POST]
+func AdminP2pInvitePush(ctx context.Context, c *app.RequestContext) {
+	var req p2p.AdminP2pInvitePushReq
+	if err := c.BindAndValidate(&req); err != nil || req.GetCode() == "" || req.GetTargetURL() == "" {
+		badReq(c, "请求体无效（需 code 与 target_url）")
+		return
+	}
+	err := p2px.PushInvite(ctx, req.GetTargetURL(), req.GetCode(), req.GetFromName(), req.GetNote())
+	audit(ctx, "p2p.invite.push", req.GetTargetURL(), err)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	okData(c, map[string]any{"target_url": req.GetTargetURL()})
+}

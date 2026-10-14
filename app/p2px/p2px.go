@@ -122,8 +122,20 @@ type Service struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 
+	invMu   sync.Mutex
+	invites []Invite // P3 收件箱（内存态，TTL 10min/cap 20）
+
+	nowFn   func() time.Time // 测试注入；缺省 time.Now
 	monStop chan struct{}
 	monWg   sync.WaitGroup
+}
+
+// now 当前时间（可注入）。
+func (s *Service) now() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
 }
 
 // NewService 构造（幂等清扫孤儿 + 起配额监控协程）。

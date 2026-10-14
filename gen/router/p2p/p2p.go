@@ -22,11 +22,27 @@ func Register(r *server.Hertz) {
 		{
 			_p2p := _admin.Group("/p2p", _p2pMw()...)
 			_p2p.POST("/cancel", append(_adminp2pcancelMw(), p2p.AdminP2pCancel)...)
+			_p2p.POST("/invite-push", append(_adminp2pinvitepushMw(), p2p.AdminP2pInvitePush)...)
+			_p2p.GET("/invites", append(_adminp2pinvitesMw(), p2p.AdminP2pInvites)...)
 			_p2p.POST("/publish", append(_adminp2ppublishMw(), p2p.AdminP2pPublish)...)
 			_p2p.POST("/recv", append(_adminp2precvMw(), p2p.AdminP2pRecv)...)
 			_p2p.POST("/send", append(_adminp2psendMw(), p2p.AdminP2pSend)...)
 			_p2p.GET("/status", append(_adminp2pstatusMw(), p2p.AdminP2pStatus)...)
 			_p2p.GET("/tasks", append(_adminp2ptasksMw(), p2p.AdminP2pTasks)...)
+			{
+				_invites := _p2p.Group("/invites", _invitesMw()...)
+				_invites.POST("/accept", append(_adminp2pinviteacceptMw(), p2p.AdminP2pInviteAccept)...)
+			}
+		}
+	}
+	{
+		_api := root.Group("/api", _apiMw()...)
+		{
+			_v1 := _api.Group("/v1", _v1Mw()...)
+			{
+				_p2p0 := _v1.Group("/p2p", _p2p0Mw()...)
+				_p2p0.POST("/invite", append(_postp2pinviteMw(), p2p.PostP2PInvite)...)
+			}
 		}
 	}
 }

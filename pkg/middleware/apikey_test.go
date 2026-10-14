@@ -392,3 +392,44 @@ func TestSanitizeHeaderValue(t *testing.T) {
 		}
 	}
 }
+
+// --- AdminOrAdminKey（2026-10-14 P3：pb CLI 直传自动化通道）---
+
+func TestAdminOrAdminKey_AdminKeyPass(t *testing.T) {
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	require.NoError(t, g.Model(&model.User{}).Where("id = ?", u.ID).Update("role", "admin").Error)
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
+	code, body, identity, _ := performProbe(t, []app.HandlerFunc{AdminOrAdminKey()}, "/probe", hdr("X-API-Key", plain))
+	assert.Equal(t, 200, code, body)
+	assert.Equal(t, u.ID, identity["user_id"])
+	assert.Equal(t, "api_key", identity["auth_type"])
+}
+
+func TestAdminOrAdminKey_NonAdminKey403(t *testing.T) {
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active") // role=user——普通 Key 绝不进管理自动化面
+	plain, _ := newFixtureKey(t, g, u.ID, nil)
+	code, _, _, _ := performProbe(t, []app.HandlerFunc{AdminOrAdminKey()}, "/probe", hdr("X-API-Key", plain))
+	assert.Equal(t, 403, code)
+}
+
+func TestAdminOrAdminKey_AdminJWTPass(t *testing.T) {
+	g := newAPIKeyTestEnv(t)
+	auth.SetJWTSecret("test-secret-for-apikey")
+	t.Cleanup(func() { auth.SetJWTSecret("") })
+	u := newFixtureUser(t, g, "active")
+	require.NoError(t, g.Model(&model.User{}).Where("id = ?", u.ID).Update("role", "admin").Error)
+	token, err := auth.GenerateToken(u.ID, u.Username, "admin")
+	require.NoError(t, err)
+	code, body, identity, _ := performProbe(t, []app.HandlerFunc{AdminOrAdminKey()}, "/probe",
+		hdr("Authorization", "Bearer "+token))
+	assert.Equal(t, 200, code, body)
+	assert.Equal(t, u.ID, identity["user_id"])
+}
+
+func TestAdminOrAdminKey_NoCredentials401(t *testing.T) {
+	newAPIKeyTestEnv(t)
+	code, _, _, _ := performProbe(t, []app.HandlerFunc{AdminOrAdminKey()}, "/probe")
+	assert.Equal(t, 401, code)
+}

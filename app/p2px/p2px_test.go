@@ -2,8 +2,10 @@ package p2px
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -259,5 +261,58 @@ func TestInboxTTLSweep(t *testing.T) {
 	}
 	if _, err := os.Stat(custom); err != nil {
 		t.Fatal("非任务形态目录被误清扫")
+	}
+}
+
+// ---- P3 邀请收发件箱 ----
+
+// TestInviteInbox 收件箱:格式校验/去重/满箱/过期/认领出箱。
+func TestInviteInbox(t *testing.T) {
+	bin := writeStub(t, "ok")
+	svc := NewService(testDeps(t, bin))
+	defer func() { _ = svc.Stop() }()
+
+	// 格式校验
+	if _, err := svc.AddInvite("bad-code", "a", ""); err == nil {
+		t.Fatal("坏口令应拒")
+	}
+	// 入箱 + 归一化(小写/无连字符输入)
+	inv, err := svc.AddInvite("KJ8YWCYZE249", "发送站A", "note\n\x01x")
+	if err != nil {
+		t.Fatalf("入箱失败: %v", err)
+	}
+	if inv.Code != "KJ8Y-WCYZ-E249" {
+		t.Fatalf("口令归一化错: %q", inv.Code)
+	}
+	if strings.ContainsAny(inv.Note, "\n\x01") {
+		t.Fatalf("note 未消毒: %q", inv.Note)
+	}
+	// 同码去重
+	if n := len(svc.ListInvites()); n != 1 {
+		t.Fatalf("去重失败: %d", n)
+	}
+	// 认领出箱
+	got, err := svc.TakeInvite(inv.ID)
+	if err != nil || got.Code != "KJ8Y-WCYZ-E249" {
+		t.Fatalf("认领失败: %+v %v", got, err)
+	}
+	if _, err := svc.TakeInvite(inv.ID); err == nil {
+		t.Fatal("重复认领应拒")
+	}
+	// 满箱
+	for i := 0; i < 20; i++ {
+		code := fmt.Sprintf("%04X-%04X-%04X", i, i, i)
+		if _, err := svc.AddInvite(code, "", ""); err != nil {
+			t.Fatalf("第%d 个入箱失败: %v", i, err)
+		}
+	}
+	if _, err := svc.AddInvite("FFFF-FFFF-FFFF", "", ""); err == nil {
+		t.Fatal("满箱应拒")
+	}
+	// 过期清扫(nowFn 注入拨快)
+	base := time.Now()
+	svc.nowFn = func() time.Time { return base.Add(11 * time.Minute) }
+	if n := len(svc.ListInvites()); n != 0 {
+		t.Fatalf("超 TTL 应清空: %d", n)
 	}
 }

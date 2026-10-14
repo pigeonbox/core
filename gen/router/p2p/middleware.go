@@ -14,9 +14,10 @@ func rootMw() []app.HandlerFunc {
 }
 
 func _adminMw() []app.HandlerFunc {
-	// 与 gen/router/admin 同款：/admin 组全挂管理员认证
+	// /admin/p2p 组：admin JWT **或** admin 用户 API Key（pb CLI 直传自动化；
+	// 见 middleware.AdminOrAdminKey 边界注释——非 admin 的 Key 拒绝）
 	return []app.HandlerFunc{
-		middleware.AdminMiddleware(),
+		middleware.AdminOrAdminKey(),
 	}
 }
 
@@ -51,6 +52,46 @@ func _adminp2pstatusMw() []app.HandlerFunc {
 }
 
 func _adminp2ptasksMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _adminp2pinvitepushMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _adminp2pinvitesMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _invitesMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _adminp2pinviteacceptMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _apiMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _v1Mw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _p2p0Mw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _postp2pinviteMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }

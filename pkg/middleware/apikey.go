@@ -289,6 +289,37 @@ func OptionalIdentity() []app.HandlerFunc {
 	return []app.HandlerFunc{OptionalAuthMiddleware(), OptionalAPIKey()}
 }
 
+// AdminOrAdminKey 管理面自动化通道（2026-10-14 P3）：admin JWT（会话/Bearer）
+// 或 **admin 用户**的 API Key（ApiKey 头 / Bearer pbk_* / X-API-Key）。
+// 与 UserOrAPIKey 边界（本文件 §4.1「绝不挂 /admin」）的区分：本中间件的 Key
+// 路径强制 admin 角色复核——非管理员的 Key 一律 403；唯一消费方是 pb CLI 的
+// 直传自动化（/admin/p2p/* 组），不开普通 Key 进管理面的口子。
+func AdminOrAdminKey() app.HandlerFunc {
+	admin := AdminMiddleware()
+	return func(ctx context.Context, c *app.RequestContext) {
+		key, present := extractAPIKey(c)
+		if !present {
+			admin(ctx, c)
+			return
+		}
+		newCtx, err := validateAPIKey(ctx, c, key)
+		if err != nil {
+			respondAPIKeyError(c, err)
+			return
+		}
+		v, _ := c.Get("role")
+		if role, _ := v.(string); role != "admin" {
+			c.JSON(http.StatusForbidden, map[string]interface{}{
+				"code":    http.StatusForbidden,
+				"message": "Admin access required",
+			})
+			c.Abort()
+			return
+		}
+		c.Next(newCtx)
+	}
+}
+
 // UserOrAPIKey 登录凭证二选一：API Key 或 JWT（含黑名单检查，复用 AuthMiddleware 完整语义）。
 // 供 /api/v1 自定义 REST 组替换 transport UserAuth，向第三方开放 Key 访问。
 // 边界（设计文档 §4.1）：绝不挂 /admin；/user/api-keys 保持 JWT-only（Key 不能管 Key）。

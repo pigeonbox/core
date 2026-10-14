@@ -54,6 +54,7 @@ func TestRateLimitBucketCoversRoutes(t *testing.T) {
 		"/api/v1/request/", "/share/text", "/share/file",
 		// download
 		"/anonymous/search/", "/share/metadata/", "/share/select",
+		"/api/v1/p2p/invite",
 		"/request/", "/preview/", "/qrcode/", "/api/v1/federation/resolve",
 	}
 	for _, p := range prefixes {
