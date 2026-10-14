@@ -279,7 +279,7 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 	}
 	// 自动续传环（2026-10-14 GB 级设计）：网络类失败退避重派，p2pc 协议层
 	// 按 offset 断点续传——83.5s 定长墙等瞬断由此降级为分段成本
-	if t.attempts < maxAttempts && isRetryable(t.err) && (t.Kind != "send" || t.Code != "") {
+	if t.attempts < s.deps.MaxAttemptsFor(t) && isRetryable(t.err) && (t.Kind != "send" || t.Code != "") {
 		t.attempts++
 		t.state = StateRetrying
 		delay := retryBackoff << uint(t.attempts-1)

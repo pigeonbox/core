@@ -50,8 +50,10 @@ const (
 	// 自动续传环（2026-10-14 GB 级设计）：网络类失败退避后自动重派同口令
 	// 任务，发端重发公告、收端重跑同目录——p2pc 协议层按 offset 断点续传。
 	// 83.5s 定长墙（transport 已知限制）由此降级为分段成本。
-	maxAttempts  = 6
-	retryBackoff = 5 * time.Second // 指数退避 5/10/20/40/60/60s，收端额外 +3s 错峰（等发端先重发公告）
+	// 预算可经 Deps 覆盖（E2E/特殊部署；缺省 8 次、指数 5s 封顶 60s——
+	// 收端额外 +3s 错峰等发端先重发公告；总重试窗口 ≈5 分钟）
+	maxAttempts  = 8
+	retryBackoff = 5 * time.Second
 )
 
 // Deps supervisor 依赖注入（生产由 bootstrap/wiring 装配；测试注入桩）。
@@ -64,6 +66,8 @@ type Deps struct {
 	GetDirect func(ctx context.Context) (conf.P2PDirectConfig, bool)
 	// MonitorInterval 配额监控周期（缺省 5s；测试可压到毫秒级）
 	MonitorInterval time.Duration
+	// MaxAttempts 自动续传最大重试次数（缺省 8；0=缺省）
+	MaxAttempts int
 	// InboxTTL 收件区文件存活期（缺省 7 天；终态/已发布/无属主目录超期即清扫，spec §7.3）
 	InboxTTL time.Duration
 }
@@ -157,6 +161,9 @@ func NewService(deps Deps) *Service {
 	if deps.MonitorInterval <= 0 {
 		deps.MonitorInterval = 5 * time.Second
 	}
+	if deps.MaxAttempts <= 0 {
+		deps.MaxAttempts = maxAttempts
+	}
 	s := &Service{
 		deps:    deps,
 		tasks:   map[string]*Task{},
@@ -226,7 +233,7 @@ func (s *Service) Cancel(ctx context.Context, taskID string) error {
 	if t.cancel != nil {
 		t.cancel()
 	}
-	t.stopRetry()
+	t.stopRetryLocked()
 	killProcessGroup(t.pid)
 	t.state = StateCanceled
 	t.finishedAt = time.Now()
@@ -282,6 +289,14 @@ func (s *Service) guard(ctx context.Context) (conf.P2PDirectConfig, string, erro
 		return conf.P2PDirectConfig{}, "", fmt.Errorf("在途任务已达上限（%d/%d），请等待完成或取消后再发起", n, defaultMaxConcurrent)
 	}
 	return cfg, bin, nil
+}
+
+// MaxAttemptsFor 生效重试预算（Deps 覆盖 > 缺省）。
+func (d Deps) MaxAttemptsFor(_ *Task) int {
+	if d.MaxAttempts > 0 {
+		return d.MaxAttempts
+	}
+	return maxAttempts
 }
 
 // activeCount 在途（waiting/running）任务数。
@@ -436,14 +451,11 @@ func (s *Service) PublishPaths(ctx context.Context, taskID string) ([]string, er
 	return out, nil
 }
 
-// stopRetry 停重试调度（Cancel 路径；幂等）。
-func (t *Task) stopRetry() {
-	t.mu.Lock()
-	timer := t.retryTimer
-	t.retryTimer = nil
-	t.mu.Unlock()
-	if timer != nil {
-		timer.Stop()
+// stopRetryLocked 停重试调度（调用方须持 t.mu；幂等）。
+func (t *Task) stopRetryLocked() {
+	if t.retryTimer != nil {
+		t.retryTimer.Stop()
+		t.retryTimer = nil
 	}
 }
 
