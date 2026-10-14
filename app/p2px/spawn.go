@@ -29,6 +29,39 @@ func WithInvite(toNode, note string) SendOption {
 	return func(o *sendOpts) { o.inviteTo, o.inviteNote = toNode, note }
 }
 
+// isHex64 node_id 形态校验(2026-10-15 渗透加固:invite_to 进 p2pc argv,
+// 非 hex64 的任意串可被 flag 解析扭成额外位置参数=绕过 send_roots 白名单
+// 的发送路径——入口强校验直接拒绝)。
+func isHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitizeInviteNote 邀请附言消毒:剥控制符+限长(与 P3 收件箱 sanitizeInline
+// 同策略;防 argv 形态意外与下游渲染污染)。
+func sanitizeInviteNote(s string) string {
+	s = strings.TrimSpace(s)
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+		if b.Len() >= 200 {
+			break
+		}
+	}
+	return b.String()
+}
+
 // Send 发起发送任务（白名单校验 → spawn p2pc send → 口令行异步解析进任务）。
 func (s *Service) Send(ctx context.Context, paths []string, opts ...SendOption) (*Task, error) {
 	cfg, bin, err := s.guard(ctx)
@@ -42,13 +75,18 @@ func (s *Service) Send(ctx context.Context, paths []string, opts ...SendOption) 
 	for _, f := range opts {
 		f(&o)
 	}
+	o.inviteTo = strings.ToLower(strings.TrimSpace(o.inviteTo))
+	if o.inviteTo != "" && !isHex64(o.inviteTo) {
+		return nil, fmt.Errorf("invite_to 须为 64 字符 node_id hex")
+	}
+	o.inviteNote = sanitizeInviteNote(o.inviteNote)
 	args := []string{"send"}
 	args = append(args, paths...)
 	args = append(args, s.registryArgs(cfg)...)
 	// 密封邀请(便利非通路):p2pc 侧自带名录段注册+名录 box_pub 密封投递;
 	// --invite-name 站点名,与 watcher 名录显示同源
-	if to := strings.TrimSpace(o.inviteTo); to != "" {
-		args = append(args, "--invite-to", strings.ToLower(to))
+	if o.inviteTo != "" {
+		args = append(args, "--invite-to", o.inviteTo)
 		if s.deps.NodeName != "" {
 			args = append(args, "--invite-name", s.deps.NodeName)
 		}

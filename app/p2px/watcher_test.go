@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,10 +28,10 @@ func writeWatcherStub(t *testing.T, name, body string) string {
 func watcherService(t *testing.T, binPath string) *Service {
 	t.Helper()
 	return NewService(Deps{
-		Standalone:      func() bool { return true },
-		DataDir:         t.TempDir(),
-		MonitorInterval: 15 * time.Millisecond,
-		NodeName:        "测试站",
+		Standalone:       func() bool { return true },
+		DataDir:          t.TempDir(),
+		MonitorInterval:  15 * time.Millisecond,
+		NodeName:         "测试站",
 		GhostPairTimeout: time.Minute,
 		GetDirect: func(context.Context) (conf.P2PDirectConfig, bool) {
 			return conf.P2PDirectConfig{
@@ -177,5 +178,55 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// ---- 渗透回归:invite argv 注入闸(2026-10-15) ----
+
+func TestSendRejectsMalformedInviteTo(t *testing.T) {
+	bin := writeWatcherStub(t, "p2pc", `exec sleep 60`)
+	root := t.TempDir() // 闭包外取一次:GetDirect 每次调用须返回同一目录
+	s := NewService(Deps{
+		Standalone:      func() bool { return true },
+		DataDir:         t.TempDir(),
+		MonitorInterval: 15 * time.Millisecond,
+		GetDirect: func(context.Context) (conf.P2PDirectConfig, bool) {
+			return conf.P2PDirectConfig{
+				Enabled: true, BinaryPath: bin,
+				SendRoots: []string{root},
+			}, true
+		},
+	})
+	defer s.Stop()
+	real, err := filepath.EvalSymlinks(root) // macOS /var→/private/var,白名单归一同源
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(real, "x.txt")
+	_ = os.WriteFile(src, []byte("x"), 0o644)
+
+	for _, bad := range []string{"--key=/etc/passwd", "short", "XXXX", "a/b/c", strings.Repeat("a", 63) + "G"} {
+		_, err := s.Send(context.Background(), []string{src}, WithInvite(bad, "--no-punch --out /tmp"))
+		if err == nil || !strings.Contains(err.Error(), "invite_to") {
+			t.Fatalf("invite_to=%q 应被拒绝: %v", bad, err)
+		}
+	}
+	// 合法 hex64 通过
+	if _, err := s.Send(context.Background(), []string{src}, WithInvite(strings.Repeat("a", 64), "note")); err != nil {
+		t.Fatalf("合法 node_id 不应被拒: %v", err)
+	}
+}
+
+func TestSanitizeInviteNote(t *testing.T) {
+	got := sanitizeInviteNote("  a\x1ab\x7fc\n\td")
+	if got != "abcd" {
+		t.Fatalf("控制符应剥离且去首尾空白: %q", got)
+	}
+	long := sanitizeInviteNote(strings.Repeat("长", 300)) // 每字 3 字节
+	if len(long) != 201 {                                // 写入后判停:上限 200 字节 + 截断时的最后一个 rune(3 字节)
+		t.Fatalf("应限长 ~200 字节: %d", len(long))
+	}
+	if len(long)%3 != 0 {
+		t.Fatalf("不应截断 UTF-8 rune: %d", len(long))
 	}
 }
