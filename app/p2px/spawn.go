@@ -207,8 +207,14 @@ func (s *Service) fireRetry(t *Task) {
 	}
 	spec := t.specSnapshot()
 	if spec == nil {
-		s.finishTask(t, StateFailed, "重试规格缺失")
+		s.finishTask(t, StateFailed, "重派规格缺失")
 		return
+	}
+	// send 重派必须复用原口令：spec.args 在 spawn 时刻冻结（当时口令尚未从
+	// stdout 解析出）——不带 --code 的重派会生成新口令，收端永远在轮询旧
+	// 口令，双侧永久错过 rendezvous（多维度实测抓出）
+	if t.Kind == "send" && t.Code != "" && !sliceHas(spec.args, "--code") {
+		spec.args = append(spec.args, "--code", t.Code)
 	}
 	if _, err := s.spawnPrepared(t, spec.bin, spec.args, spec.outDir, spec.env...); err != nil {
 		s.finishTask(t, StateFailed, "重派失败: "+err.Error())
