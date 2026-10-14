@@ -32,6 +32,7 @@ const (
 	StateDone     = "done"
 	StateFailed   = "failed"
 	StateCanceled = "canceled"
+	StateRetrying = "retrying" // 失败退避中，稍后自动重派（断点续传环）
 )
 
 const (
@@ -46,6 +47,11 @@ const (
 	// defaultMaxConcurrent 在途任务上限（实测评审：无闸会拖垮 NAS 磁盘；
 	// spec §7.2 原设。超出响亮拒绝，取消或等终态后再发起）
 	defaultMaxConcurrent = 2
+	// 自动续传环（2026-10-14 GB 级设计）：网络类失败退避后自动重派同口令
+	// 任务，发端重发公告、收端重跑同目录——p2pc 协议层按 offset 断点续传。
+	// 83.5s 定长墙（transport 已知限制）由此降级为分段成本。
+	maxAttempts  = 6
+	retryBackoff = 5 * time.Second // 指数退避 5/10/20/40/60/60s，收端额外 +3s 错峰（等发端先重发公告）
 )
 
 // Deps supervisor 依赖注入（生产由 bootstrap/wiring 装配；测试注入桩）。
@@ -76,6 +82,9 @@ type Task struct {
 	err        string
 	finishedAt time.Time
 	published  bool // 已发布为分享（幂等闸：重复/并发 publish 拒绝——否则重复铸分享+重复拷存储）
+	attempts   int        // 已尝试次数（自动续传环）
+	spec       *spawnSpec // 重派规格（spawn 时记录）
+	retryTimer *time.Timer
 	log        []string
 	pid        int
 	outDir     string // recv 任务的落盘目录
@@ -91,6 +100,7 @@ type TaskSnapshot struct {
 	Paths      []string
 	BytesDone  int64
 	Error      string
+	Attempts   int
 	CreatedAt  time.Time
 	FinishedAt time.Time
 }
@@ -102,7 +112,8 @@ func (t *Task) Snapshot() TaskSnapshot {
 	return TaskSnapshot{
 		ID: t.ID, Kind: t.Kind, State: t.state, Code: t.Code,
 		Paths: append([]string(nil), t.Paths...), BytesDone: t.BytesDone,
-		Error: t.err, CreatedAt: t.CreatedAt, FinishedAt: t.finishedAt,
+		Error: t.err, Attempts: t.attempts,
+		CreatedAt: t.CreatedAt, FinishedAt: t.finishedAt,
 	}
 }
 
@@ -215,6 +226,7 @@ func (s *Service) Cancel(ctx context.Context, taskID string) error {
 	if t.cancel != nil {
 		t.cancel()
 	}
+	t.stopRetry()
 	killProcessGroup(t.pid)
 	t.state = StateCanceled
 	t.finishedAt = time.Now()
@@ -279,7 +291,7 @@ func (s *Service) activeCount() int {
 	n := 0
 	for _, t := range s.tasks {
 		t.mu.Lock()
-		if t.state == StateWaiting || t.state == StateRunning {
+		if t.state == StateWaiting || t.state == StateRunning || t.state == StateRetrying {
 			n++
 		}
 		t.mu.Unlock()
@@ -422,6 +434,30 @@ func (s *Service) PublishPaths(ctx context.Context, taskID string) ([]string, er
 		return nil, errors.New("收件目录无文件")
 	}
 	return out, nil
+}
+
+// stopRetry 停重试调度（Cancel 路径；幂等）。
+func (t *Task) stopRetry() {
+	t.mu.Lock()
+	timer := t.retryTimer
+	t.retryTimer = nil
+	t.mu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+}
+
+// specSnapshot 取重派规格（并发安全）。
+func (t *Task) specSnapshot() *spawnSpec {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.spec == nil {
+		return nil
+	}
+	cp := *t.spec
+	cp.args = append([]string(nil), t.spec.args...)
+	cp.env = append([]string(nil), t.spec.env...)
+	return &cp
 }
 
 // MarkPublished 置发布标记（handler 在全部文件铸分享成功后调用）。

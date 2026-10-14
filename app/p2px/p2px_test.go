@@ -366,3 +366,70 @@ func TestMaxConcurrentCap(t *testing.T) {
 		t.Fatalf("错误文案应含上限: %v", err)
 	}
 }
+
+// ---- 自动续传环（GB 级设计：网络类失败退避重派，断点续传） ----
+
+// flakyStub 第一次调用写半文件+网络类错误退出;第二次续写余下并成功。
+// 计数落状态文件以跨进程存活（supervisor 每次 spawn 新进程）。
+func writeFlakyStub(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "p2pc")
+	body := `#!/bin/sh
+CNT_FILE="$(dirname "$0")/.invocations"
+N=$(( $(cat "$CNT_FILE" 2>/dev/null || echo 0) + 1 ))
+echo "$N" > "$CNT_FILE"
+OUT=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--out" ]; then OUT="$2"; shift 2; continue; fi
+  shift
+done
+mkdir -p "$OUT"
+if [ "$N" = "1" ]; then
+  head -c 512 /dev/zero > "$OUT/resume.bin"
+  echo "✗ chunk 接收: timeout: no recent network activity" >&2
+  exit 1
+fi
+head -c 1024 /dev/zero > "$OUT/resume.bin"
+exit 0
+`
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestAutoResumeLoop 网络类失败自动重派（断点续传环）:重派→done、次数正确;
+// 配额类失败绝不重试由 TestQuotaReasonPreserved 覆盖。
+func TestAutoResumeLoop(t *testing.T) {
+	bin := writeFlakyStub(t)
+	svc := NewService(testDeps(t, bin))
+	defer func() { _ = svc.Stop() }()
+	task, err := svc.Recv(context.Background(), "ABCD-1234-WXYZ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		st := task.Snapshot()
+		if st.State == StateDone {
+			if st.Attempts != 1 {
+				t.Fatalf("重试次数应=1: %d", st.Attempts)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("未收敛: %+v", st)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// 收端重试同目录 → 第二次调用覆盖写完整 1024 字节
+	paths, err := svc.PublishPaths(context.Background(), task.ID)
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("发布路径: %v %v", paths, err)
+	}
+	if fi, _ := os.Stat(paths[0]); fi.Size() != 1024 {
+		t.Fatalf("最终文件应 1024 字节: %d", fi.Size())
+	}
+	// 配额类失败不重试:由 TestQuotaReasonPreserved 覆盖（错误真因+终态语义一致）
+}

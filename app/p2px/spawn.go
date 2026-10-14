@@ -142,11 +142,90 @@ func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir strin
 	t.mu.Unlock()
 	s.writePidFile(t.ID, cmd.Process.Pid)
 
+	// 记录重派规格（自动续传环：失败退避后同参重spawn；send 重试补 --code 复用口令）
+	retryArgs := args
+	if t.Kind == "send" && t.Code != "" && !sliceHas(args, "--code") {
+		retryArgs = append(append([]string(nil), args...), "--code", t.Code)
+	}
+	t.mu.Lock()
+	t.spec = &spawnSpec{bin: bin, args: retryArgs, outDir: outDir, env: append([]string(nil), extraEnv...)}
+	t.mu.Unlock()
+
 	// stdout 行扫描：口令行（send）→ Code；首个业务行 → running；全部入环形日志
 	go s.scanLines(t, stdout, true)
 	go s.scanLines(t, stderr, false)
 	go s.waitTask(t, cmd)
 	return t, nil
+}
+
+// sliceHas 判断参数表是否已含某旗标（重派防重复追加）。
+func sliceHas(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// spawnSpec 重派规格（自动续传环）。
+type spawnSpec struct {
+	bin    string
+	args   []string
+	outDir string
+	env    []string
+}
+
+// isRetryable 网络类失败分类（自动续传环白名单；未知错误默认不重试——
+// fail-safe：配额/白名单/格式类一律终态，绝不空转）。
+func isRetryable(err string) bool {
+	for _, kw := range []string{
+		"timeout", "no recent network activity", "对端已离开", "已离开",
+		"connection refused", "broken pipe", "EOF", "解析: 全部注册中心", "i/o timeout",
+	} {
+		if strings.Contains(err, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// fireRetry 退避到期重派（自动续传环：同 code 同参数；收端同目录触发
+// p2pc 协议层 offset 断点续传）。
+func (s *Service) fireRetry(t *Task) {
+	t.mu.Lock()
+	if t.state != StateRetrying {
+		t.mu.Unlock()
+		return // 已被取消/终态
+	}
+	t.mu.Unlock()
+	cfg, ok := s.deps.GetDirect(context.Background())
+	if !ok || !cfg.Enabled {
+		s.finishTask(t, StateFailed, "重试时直传已禁用")
+		return
+	}
+	spec := t.specSnapshot()
+	if spec == nil {
+		s.finishTask(t, StateFailed, "重试规格缺失")
+		return
+	}
+	if _, err := s.spawnPrepared(t, spec.bin, spec.args, spec.outDir, spec.env...); err != nil {
+		s.finishTask(t, StateFailed, "重派失败: "+err.Error())
+		return
+	}
+	t.mu.Lock()
+	t.state = StateWaiting
+	t.mu.Unlock()
+}
+
+// finishTask 写终态（重派失败路径复用）。
+func (s *Service) finishTask(t *Task, state, msg string) {
+	t.mu.Lock()
+	t.state = state
+	t.err = msg
+	t.finishedAt = time.Now()
+	t.mu.Unlock()
+	s.removePidFile(t.ID)
 }
 
 // scanLines 行扫描（stderr 原样透传——协议版本不一致等文案直达面板）。
@@ -194,11 +273,27 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 		}
 		return
 	}
-	t.state = StateFailed
 	t.err = fmt.Sprintf("p2pc 退出: %v", err)
 	if len(t.log) > 0 {
 		t.err = t.err + "；" + t.log[len(t.log)-1]
 	}
+	// 自动续传环（2026-10-14 GB 级设计）：网络类失败退避重派，p2pc 协议层
+	// 按 offset 断点续传——83.5s 定长墙等瞬断由此降级为分段成本
+	if t.attempts < maxAttempts && isRetryable(t.err) && (t.Kind != "send" || t.Code != "") {
+		t.attempts++
+		t.state = StateRetrying
+		delay := retryBackoff << uint(t.attempts-1)
+		if delay > 60*time.Second {
+			delay = 60 * time.Second
+		}
+		if t.Kind == "recv" {
+			delay += 3 * time.Second // 错峰：等发端先重发公告
+		}
+		s.removePidFile(t.ID)
+		t.retryTimer = time.AfterFunc(delay, func() { s.fireRetry(t) })
+		return
+	}
+	t.state = StateFailed
 }
 
 // monitorLoop 配额监控 + 收件区 TTL 清扫（节流：生产每小时一轮；测试用小间隔时

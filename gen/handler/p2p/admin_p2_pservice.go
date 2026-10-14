@@ -58,6 +58,7 @@ func taskToModel(t *p2px.TaskSnapshot) *p2p.P2pTask {
 		Paths:     t.Paths,
 		BytesDone: t.BytesDone,
 		Error:     t.Error,
+		Attempts:  int32(t.Attempts),
 		CreatedAt: t.CreatedAt.Format(time.RFC3339),
 	}
 	if !t.FinishedAt.IsZero() {
@@ -134,6 +135,7 @@ func AdminP2pTasks(ctx context.Context, c *app.RequestContext) {
 			"paths":       t.Paths,
 			"bytes_done":  t.BytesDone,
 			"error":       t.Error,
+			"attempts":    t.Attempts,
 			"created_at":  t.CreatedAt.Format(time.RFC3339),
 			"finished_at": finishedOrEmpty(t.FinishedAt),
 		})
