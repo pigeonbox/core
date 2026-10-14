@@ -5,7 +5,7 @@
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![License](https://img.shields.io/github/license/pigeonbox/core)](LICENSE)
 
-PigeonBox 业务核心库:17 个域服务(含 config 系统配置中心) + 数据访问 + 存储抽象 + HTTP 装配(bootstrap)。**不含 main、不含静态资源、不含配置文件**——本模块定位是**被复用的库**,消费方:
+PigeonBox 业务核心库:18 个域服务(含 config 系统配置中心) + 数据访问 + 存储抽象 + HTTP 装配(bootstrap)。**不含 main、不含静态资源、不含配置文件**——本模块定位是**被复用的库**,消费方:
 
 - [`pigeonbox/server`](https://github.com/pigeonbox/server) —— 标准独立部署(自托管)
 - [`pigeonbox/fnos`](https://github.com/pigeonbox/fnos) —— 飞牛 fnOS 应用(单容器库式调用)
@@ -19,7 +19,7 @@ PigeonBox 业务核心库:17 个域服务(含 config 系统配置中心) + 数�
 | 目录 | 说明 |
 |------|------|
 | `bootstrap/` | 库入口:`Bootstrap(configPath)` 拉起全部业务,返回 `*server.Hertz` |
-| `app/` | 17 个域服务:share / chunk / anonymous / presign / admin / config / user / notify / qrcode / setup / storage / federation / mcp / moderation / oidc / preview / request(模块间近零耦合;跨域引用仅 admin→config 与 share→moderation 钩子窄接口,原 presign→share 已消解) |
+| `app/` | 18 个域服务:share / chunk / anonymous / presign / admin / config / user / notify / qrcode / setup / storage / federation / mcp / moderation / oidc / preview / request / p2px(模块间近零耦合;跨域引用仅 admin→config 与 share→moderation 钩子窄接口,原 presign→share 已消解) |
 | `repo/` | 数据访问:db(gorm dao/model)、redis、external;dao 构造**必填 `*gorm.DB`** 依赖注入,全局回退已退役 |
 | `storage/` | 存储抽象(OpenDAL 多后端) |
 | `pkg/` | 12 包横切设施:auth / baseurl / errors / gate / logger / memkv / metrics / middleware / resp / security / transfer / utils |
@@ -27,6 +27,14 @@ PigeonBox 业务核心库:17 个域服务(含 config 系统配置中心) + 数�
 | `preview/` | 文件预览服务 |
 | `conf/` | 配置结构定义 |
 | `gen/` | thrift 生成的 handler / router(模型类型在 [`pigeonbox/contracts`](https://github.com/pigeonbox/contracts)) |
+
+> **p2px(P2P 设备直传 supervisor)**:standalone 部署模式专属,进程内调度设备直传任务,
+> 数据面 spawn `p2pc` 子进程(PAKE/打洞/QUIC 直传)完成传输;与 federation 同约束——
+> public/admin 拆分模式下不可用。管理面 `/admin/p2p/*` 六端点由 contracts
+> `AdminP2PService`(`idl/p2p.thrift`)定义,经 IDL gen 链接入。
+>
+> **mcp**:单端点 19 个工具;2026-10-14 新增 p2p_status / p2p_tasks / p2p_send /
+> p2p_recv 四个 admin 级工具(设备直传管理面,与 p2px 域联动)。
 
 ## 分层职责(继承自原仓库 internal 设计)
 
