@@ -13,6 +13,7 @@ import (
 	configApp "github.com/pigeonbox/core/app/config"
 	federationApp "github.com/pigeonbox/core/app/federation"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
+	p2pxApp "github.com/pigeonbox/core/app/p2px"
 	previewApp "github.com/pigeonbox/core/app/preview"
 	presignApp "github.com/pigeonbox/core/app/presign"
 	requestApp "github.com/pigeonbox/core/app/request"
@@ -206,6 +207,92 @@ func (a mcpFederationAdapter) Resolve(code string) (*mcpApp.FederationResolve, e
 		NodeID: info.NodeID, URL: info.URL, Name: info.Name,
 		ExpiresAt: info.ExpiresAt, SizeHint: info.SizeHint,
 	}, nil
+}
+
+// mcpP2pAdapter mcp.P2pAPI 的 p2px 域适配器（P2b 薄工具，spec §9）。
+// svc 为 nil（未装配）时上报"未装配"事实而非 panic。
+type mcpP2pAdapter struct{ svc *p2pxApp.Service }
+
+func (a mcpP2pAdapter) P2pStatus(ctx context.Context) (mcpApp.P2pStatus, error) {
+	if a.svc == nil {
+		return mcpApp.P2pStatus{}, errors.New("直传 supervisor 未装配")
+	}
+	st, err := a.svc.Status(ctx)
+	if err != nil {
+		return mcpApp.P2pStatus{}, err
+	}
+	return mcpApp.P2pStatus{
+		Available: st.Available, Enabled: st.Enabled, DeployAllowed: st.DeployAllowed,
+		BinaryPath: st.BinaryPath, RegistryURL: st.RegistryURL, RecvDir: st.RecvDir,
+		InboxUsed: st.InboxUsed, InboxQuota: st.InboxQuota,
+	}, nil
+}
+
+func (a mcpP2pAdapter) P2pTasks(ctx context.Context) ([]mcpApp.P2pTaskInfo, error) {
+	if a.svc == nil {
+		return nil, errors.New("直传 supervisor 未装配")
+	}
+	tasks := a.svc.List(ctx)
+	out := make([]mcpApp.P2pTaskInfo, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, mcpApp.P2pTaskInfo{
+			ID: t.ID, Kind: t.Kind, State: t.State, Code: t.Code,
+			BytesDone: t.BytesDone, Error: t.Error,
+			CreatedAt: t.CreatedAt.Format(time.RFC3339),
+			FinishedAt: finishedTimeStr(t.FinishedAt),
+		})
+	}
+	return out, nil
+}
+
+// P2pSend 发起发送（口令由 p2pc stdout 异步解析——有界短轮询等口令，
+// 典型毫秒级；超时则返回空码，MCP 侧提示走 p2p_tasks）。
+func (a mcpP2pAdapter) P2pSend(ctx context.Context, paths []string) (mcpApp.P2pTaskInfo, error) {
+	if a.svc == nil {
+		return mcpApp.P2pTaskInfo{}, errors.New("直传 supervisor 未装配")
+	}
+	task, err := a.svc.Send(ctx, paths)
+	if err != nil {
+		return mcpApp.P2pTaskInfo{}, err
+	}
+	for i := 0; i < 5; i++ {
+		snap := task.Snapshot()
+		if snap.Code != "" {
+			return mcpApp.P2pTaskInfo{
+				ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
+				CreatedAt: snap.CreatedAt.Format(time.RFC3339),
+			}, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	snap := task.Snapshot()
+	return mcpApp.P2pTaskInfo{
+		ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
+		CreatedAt: snap.CreatedAt.Format(time.RFC3339),
+	}, nil
+}
+
+func (a mcpP2pAdapter) P2pRecv(ctx context.Context, code string) (mcpApp.P2pTaskInfo, error) {
+	if a.svc == nil {
+		return mcpApp.P2pTaskInfo{}, errors.New("直传 supervisor 未装配")
+	}
+	task, err := a.svc.Recv(ctx, code)
+	if err != nil {
+		return mcpApp.P2pTaskInfo{}, err
+	}
+	snap := task.Snapshot()
+	return mcpApp.P2pTaskInfo{
+		ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
+		CreatedAt: snap.CreatedAt.Format(time.RFC3339),
+	}, nil
+}
+
+// finishedTimeStr 终态时间字符串（零值 → 空串）。
+func finishedTimeStr(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 // requestShareGateway request.ShareGateway 的 share 域适配器（访客投递 → 归属分享）。

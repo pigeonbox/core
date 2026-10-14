@@ -200,7 +200,7 @@ func TestToolsList_AllTools(t *testing.T) {
 	s := newMCPTestService(t)
 	_, out := rpc(t, s, "tools/list", nil)
 	tools := out["result"].(map[string]any)["tools"].([]any)
-	assert.Len(t, tools, 15)
+	assert.Len(t, tools, 19)
 	names := map[string]bool{}
 	for _, tl := range tools {
 		names[tl.(map[string]any)["name"].(string)] = true
@@ -209,7 +209,8 @@ func TestToolsList_AllTools(t *testing.T) {
 		"get_share", "get_share_content",
 		"download_share_file", "list_shares", "delete_share",
 		"get_system_status", "get_storage_info", "list_users", "cleanup_expired",
-		"federation_status", "federation_resolve"} {
+		"federation_status", "federation_resolve",
+		"p2p_status", "p2p_tasks", "p2p_send", "p2p_recv"} {
 		assert.True(t, names[want], "缺少工具 %s", want)
 	}
 }
@@ -622,4 +623,86 @@ func TestProtocolErrors(t *testing.T) {
 	// ping → 空对象
 	_, out = rpc(t, s, "ping", nil)
 	assert.NotNil(t, out["result"])
+}
+
+// ---- P2P 设备直传工具（P2b）----
+
+// stubP2p mcp.P2pAPI 测试桩。
+type stubP2p struct {
+	sentPaths []string
+	gotCode   string
+}
+
+func (s *stubP2p) P2pStatus(ctx context.Context) (P2pStatus, error) {
+	return P2pStatus{
+		Available: true, Enabled: true, DeployAllowed: true,
+		BinaryPath: "/app/p2pc", RegistryURL: "http://r:56788", RecvDir: "/data/inbox",
+		InboxUsed: 1024, InboxQuota: 4096,
+	}, nil
+}
+func (s *stubP2p) P2pTasks(ctx context.Context) ([]P2pTaskInfo, error) {
+	return []P2pTaskInfo{
+		{ID: "aaaaaaaaaaaaaaaa", Kind: "send", State: "waiting", Code: "ABCD-1234-WXYZ", CreatedAt: "2026-10-14T10:00:00Z"},
+		{ID: "bbbbbbbbbbbbbbbb", Kind: "recv", State: "done", BytesDone: 29, CreatedAt: "2026-10-14T10:01:00Z"},
+	}, nil
+}
+func (s *stubP2p) P2pSend(ctx context.Context, paths []string) (P2pTaskInfo, error) {
+	s.sentPaths = paths
+	return P2pTaskInfo{ID: "cccccccccccccccc", Kind: "send", State: "waiting", Code: "ABCD-1234-WXYZ"}, nil
+}
+func (s *stubP2p) P2pRecv(ctx context.Context, code string) (P2pTaskInfo, error) {
+	s.gotCode = code
+	return P2pTaskInfo{ID: "dddddddddddddddd", Kind: "recv", State: "waiting", Code: code}, nil
+}
+
+// TestP2pTools 直传四工具：admin 作用域；未注入引导态；注入后可调用；游客不可见不可调。
+func TestP2pTools(t *testing.T) {
+	s := newMCPTestService(t)
+
+	// 1) 未注入 → 引导态而非 panic
+	_, out := rpc(t, s, "tools/call", map[string]any{"name": "p2p_status"})
+	content := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "直传")
+
+	// 2) 注入桩后 status/tasks/send/recv 全通
+	stub := &stubP2p{}
+	s.SetP2pService(stub)
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_status"})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "启用: 是")
+	assert.Contains(t, content, "http://r:56788")
+
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_tasks"})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "ABCD-1234-WXYZ")
+	assert.Contains(t, content, "done")
+
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_send", "arguments": map[string]any{
+		"paths": []any{"/data/share/a.txt"},
+	}})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "ABCD-1234-WXYZ")
+	assert.Equal(t, []string{"/data/share/a.txt"}, stub.sentPaths)
+
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_recv", "arguments": map[string]any{
+		"code": "kj8y-wcyz-e249",
+	}})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "KJ8Y-WCYZ-E249")
+	assert.Equal(t, "KJ8Y-WCYZ-E249", stub.gotCode, "口令应归一化大写")
+
+	// 3) 参数校验：send 无 paths / recv 无 code → isError
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_send", "arguments": map[string]any{}})
+	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_recv", "arguments": map[string]any{"code": "  "}})
+	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
+
+	// 4) 游客：工具列表不可见 + 直接调用被拒
+	_, out = rpcAs(t, s, Caller{IP: "10.0.0.9"}, "tools/list", nil)
+	for _, tl := range out["result"].(map[string]any)["tools"].([]any) {
+		name := tl.(map[string]any)["name"].(string)
+		assert.NotContains(t, name, "p2p_", "游客不应可见 %s", name)
+	}
+	_, out = rpcAs(t, s, Caller{IP: "10.0.0.9"}, "tools/call", map[string]any{"name": "p2p_status"})
+	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
 }

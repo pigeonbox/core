@@ -215,6 +215,39 @@ type FederationAPI interface {
 	Resolve(code string) (*FederationResolve, error)
 }
 
+// P2pStatus 直传状态（P2b 设备直传工具展示用）。
+type P2pStatus struct {
+	Available     bool
+	Enabled       bool
+	DeployAllowed bool
+	BinaryPath    string
+	RegistryURL   string
+	RecvDir       string
+	InboxUsed     int64
+	InboxQuota    int64
+}
+
+// P2pTaskInfo 直传任务摘要（P2b）。
+type P2pTaskInfo struct {
+	ID         string
+	Kind       string // send | recv
+	State      string
+	Code       string
+	BytesDone  int64
+	Error      string
+	CreatedAt  string
+	FinishedAt string
+}
+
+// P2pAPI 设备直传服务窄接口（supervisor app/p2px 经适配器桥接；
+// P2b 2026-10-14，spec §9 薄包装——admin 作用域，与 Web 操作页同服务层）。
+type P2pAPI interface {
+	P2pStatus(ctx context.Context) (P2pStatus, error)
+	P2pTasks(ctx context.Context) ([]P2pTaskInfo, error)
+	P2pSend(ctx context.Context, paths []string) (P2pTaskInfo, error)
+	P2pRecv(ctx context.Context, code string) (P2pTaskInfo, error)
+}
+
 // AdminAPI 系统维护类工具所需的 admin 域能力（bootstrap 注入全站唯一实例适配器）。
 type AdminAPI interface {
 	DeleteShareByID(ctx context.Context, id uint) error
@@ -254,6 +287,8 @@ type Service struct {
 	storageSvc     StorageAPI
 	fedSvc         FederationAPI // 读写走 fedMu——P1 后台热切换=运行期写
 	fedMu          sync.RWMutex
+	p2pSvc         P2pAPI // 读写走 p2pMu（装配期注入；P2b 直传工具）
+	p2pMu          sync.RWMutex
 	requestSvc     RequestAPI
 	previewSvc     PreviewAPI
 	version        string
@@ -296,6 +331,20 @@ func (s *Service) currentFederation() FederationAPI {
 	s.fedMu.RLock()
 	defer s.fedMu.RUnlock()
 	return s.fedSvc
+}
+
+// SetP2pService 注入设备直传适配器（P2b；未启用传 nil）。
+func (s *Service) SetP2pService(svc P2pAPI) {
+	s.p2pMu.Lock()
+	defer s.p2pMu.Unlock()
+	s.p2pSvc = svc
+}
+
+// currentP2p 读当前直传适配器（并发安全快照）。
+func (s *Service) currentP2p() P2pAPI {
+	s.p2pMu.RLock()
+	defer s.p2pMu.RUnlock()
+	return s.p2pSvc
 }
 
 // SetRequestService 注入 request 域能力适配器（create_request_code）
@@ -394,6 +443,9 @@ func strProp(desc string) map[string]any {
 func intProp(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
 }
+func arrayProp(desc string) map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
+}
 
 func (s *Service) toolDefs() []toolDef {
 	return []toolDef{
@@ -450,6 +502,15 @@ func (s *Service) toolDefs() []toolDef {
 		{Name: "federation_status", MinScope: scopeAdmin, Description: "P2P 联邦状态（是否启用/节点 ID/注册中心/最近心跳）", InputSchema: objSchema(nil, nil)},
 		{Name: "federation_resolve", MinScope: scopeAdmin, Description: "查询口令在联邦内的源节点（未接入联邦则不可达）", InputSchema: objSchema(map[string]any{
 			"code": strProp("8 位分享码"),
+		}, []string{"code"})},
+		// P2b 设备直传四工具（admin 专属；与 Web「设备直传」操作页同服务层）
+		{Name: "p2p_status", MinScope: scopeAdmin, Description: "P2P 设备直传状态（启用/p2pc 二进制/注册中心/收件区用量）", InputSchema: objSchema(nil, nil)},
+		{Name: "p2p_tasks", MinScope: scopeAdmin, Description: "列出直传任务（口令/方向/状态/字节/错误）", InputSchema: objSchema(nil, nil)},
+		{Name: "p2p_send", MinScope: scopeAdmin, Description: "发起设备直传发送：服务器白名单内路径→生成口令，对端凭码接收（口令窗口约 10 分钟）", InputSchema: objSchema(map[string]any{
+			"paths": arrayProp("要发送的服务器本地绝对路径（须在 send_roots 白名单内）"),
+		}, []string{"paths"})},
+		{Name: "p2p_recv", MinScope: scopeAdmin, Description: "凭口令接收设备直传（文件落收件暂存区）", InputSchema: objSchema(map[string]any{
+			"code": strProp("12 位直传口令，如 XXXX-XXXX-XXXX"),
 		}, []string{"code"})},
 	}
 }
@@ -788,6 +849,95 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		return fmt.Sprintf("联邦路由\n源节点: %s（%s）\n地址: %s\n过期: %s\n大小: %d 字节",
 			info.Name, info.NodeID, info.URL,
 			info.ExpiresAt.Format("2006-01-02 15:04:05"), info.SizeHint), false
+
+	// ---- P2b 设备直传四工具 ----
+	case "p2p_status":
+		p2p := s.currentP2p()
+		if p2p == nil {
+			return "设备直传未装配（构建缺 p2px 域）", false
+		}
+		st, serr := p2p.P2pStatus(ctx)
+		if serr != nil {
+			return "直传状态获取失败: " + serr.Error(), true
+		}
+		if !st.Enabled {
+			return "设备直传未启用（管理后台「P2P 与联邦」分区开启）", false
+		}
+		avail := "否"
+		if st.Available {
+			avail = "是(" + st.BinaryPath + ")"
+		}
+		return fmt.Sprintf("直传状态\n启用: 是\np2pc: %s\n注册中心: %s\n收件区: %s（%d/%d 字节）\nstandalone: %v",
+			avail, st.RegistryURL, st.RecvDir, st.InboxUsed, st.InboxQuota, st.DeployAllowed), false
+
+	case "p2p_tasks":
+		p2p := s.currentP2p()
+		if p2p == nil {
+			return "设备直传未装配", false
+		}
+		tasks, terr := p2p.P2pTasks(ctx)
+		if terr != nil {
+			return "任务列表获取失败: " + terr.Error(), true
+		}
+		if len(tasks) == 0 {
+			return "暂无直传任务", false
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "直传任务（%d）:\n", len(tasks))
+		for _, tk := range tasks {
+			id := tk.ID
+			if len(id) > 8 {
+				id = id[:8]
+			}
+			fmt.Fprintf(&sb, "[%s] %s %s code=%s bytes=%d", id, tk.Kind, tk.State, tk.Code, tk.BytesDone)
+			if tk.Error != "" {
+				fmt.Fprintf(&sb, " err=%s", tk.Error)
+			}
+			sb.WriteString("\n")
+		}
+		return sb.String(), false
+
+	case "p2p_send":
+		p2p := s.currentP2p()
+		if p2p == nil {
+			return "设备直传未装配", false
+		}
+		rawPaths, _ := a["paths"].([]any)
+		paths := make([]string, 0, len(rawPaths))
+		for _, p := range rawPaths {
+			if ps, ok := p.(string); ok && strings.TrimSpace(ps) != "" {
+				paths = append(paths, ps)
+			}
+		}
+		if len(paths) == 0 {
+			return "paths 不能为空（服务器本地绝对路径数组，须命中 send_roots 白名单）", true
+		}
+		task, serr := p2p.P2pSend(ctx, paths)
+		if serr != nil {
+			return "发送任务创建失败: " + serr.Error(), true
+		}
+		if task.Code == "" {
+			return fmt.Sprintf("发送任务已创建 id=%s（口令生成中，稍后 p2p_tasks 查看；口令窗口约 10 分钟）", task.ID), false
+		}
+		return fmt.Sprintf("发送任务已创建 id=%s\n口令: %s（对端凭码接收；口令窗口约 10 分钟）", task.ID, task.Code), false
+
+	case "p2p_recv":
+		p2p := s.currentP2p()
+		if p2p == nil {
+			return "设备直传未装配", false
+		}
+		code := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(argStr("code")), "-", ""))
+		if code == "" {
+			return "code 不能为空（12 位直传口令）", true
+		}
+		if len(code) == 12 {
+			code = code[:4] + "-" + code[4:8] + "-" + code[8:]
+		}
+		task, rerr2 := p2p.P2pRecv(ctx, code)
+		if rerr2 != nil {
+			return "接收任务创建失败: " + rerr2.Error(), true
+		}
+		return fmt.Sprintf("接收任务已发起 id=%s code=%s（文件落收件暂存区）", task.ID, code), false
 
 	case "delete_share":
 		code := argStr("code")

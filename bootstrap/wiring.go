@@ -310,6 +310,7 @@ func initThriftIDLServices(database *gorm.DB) {
 		mcpService.SetShareService(mcpShareAdapter{shareSvc})
 		mcpService.SetStorageService(bootstrapStorage)
 		mcpService.SetFederationService(mcpFederationAdapter{svc: fedRT.instance()})
+		mcpService.SetP2pService(mcpP2pAdapter{svc: p2pxSvcInstance})
 		mcpService.SetRequestService(mcpRequestAdapter{requestSvcInstance})
 		mcpService.SetPreviewService(mcpPreviewAdapter{previewSvcInstance})
 		mcpService.SetMaxFileSize(config.MCP.MaxFileSize)
