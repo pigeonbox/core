@@ -95,3 +95,8 @@ func _postp2pinviteMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _adminp2pdirectoryMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

@@ -158,7 +158,11 @@ func AdminP2pSend(ctx context.Context, c *app.RequestContext) {
 		badReq(c, "请求体无效（需 paths 数组）")
 		return
 	}
-	task, err := getP2px().Send(ctx, req.Paths)
+	opts := []p2px.SendOption{}
+	if to := strings.TrimSpace(req.GetInviteTo()); to != "" {
+		opts = append(opts, p2px.WithInvite(to, req.GetInviteNote()))
+	}
+	task, err := getP2px().Send(ctx, req.Paths, opts...)
 	audit(ctx, "p2p.send", strings.Join(req.Paths, ","), err)
 	if err != nil {
 		badReq(c, err.Error())
@@ -322,4 +326,26 @@ func AdminP2pInvitePush(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	okData(c, map[string]any{"target_url": req.GetTargetURL()})
+}
+
+// AdminP2pDirectory 在线名录透传（2026-10-14 邀请信箱配套:发送卡对端选择器
+// 消费;p2pd 名录零敏感,本层不改写）。
+// @router /admin/p2p/directory [GET]
+func AdminP2pDirectory(ctx context.Context, c *app.RequestContext) {
+	peers, err := getP2px().DirectoryPeers(ctx)
+	if err != nil {
+		c.JSON(consts.StatusInternalServerError, map[string]any{"code": 500, "message": err.Error()})
+		return
+	}
+	out := make([]*p2p.P2pDirectoryPeer, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, &p2p.P2pDirectoryPeer{
+			NodeID:      p.NodeID,
+			Name:        p.Name,
+			URL:         p.URL,
+			BoxPub:      p.BoxPub,
+			OnlineSince: p.OnlineSince,
+		})
+	}
+	okData(c, map[string]any{"peers": out})
 }

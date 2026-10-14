@@ -15,8 +15,22 @@ import (
 	"github.com/pigeonbox/core/conf"
 )
 
+// SendOption 发送任务可选参数。
+type SendOption func(*sendOpts)
+
+type sendOpts struct {
+	inviteTo   string
+	inviteNote string
+}
+
+// WithInvite 发送后向名录对端投递密封邀请(2026-10-14 在线名录:
+// p2pc send --invite-to;发邀请=发端自愿入名录;失败仅 WARN 不影响发送)。
+func WithInvite(toNode, note string) SendOption {
+	return func(o *sendOpts) { o.inviteTo, o.inviteNote = toNode, note }
+}
+
 // Send 发起发送任务（白名单校验 → spawn p2pc send → 口令行异步解析进任务）。
-func (s *Service) Send(ctx context.Context, paths []string) (*Task, error) {
+func (s *Service) Send(ctx context.Context, paths []string, opts ...SendOption) (*Task, error) {
 	cfg, bin, err := s.guard(ctx)
 	if err != nil {
 		return nil, err
@@ -24,9 +38,24 @@ func (s *Service) Send(ctx context.Context, paths []string) (*Task, error) {
 	if err := validateSendPaths(paths, cfg.SendRoots); err != nil {
 		return nil, err
 	}
+	var o sendOpts
+	for _, f := range opts {
+		f(&o)
+	}
 	args := []string{"send"}
 	args = append(args, paths...)
 	args = append(args, s.registryArgs(cfg)...)
+	// 密封邀请(便利非通路):p2pc 侧自带名录段注册+名录 box_pub 密封投递;
+	// --invite-name 站点名,与 watcher 名录显示同源
+	if to := strings.TrimSpace(o.inviteTo); to != "" {
+		args = append(args, "--invite-to", strings.ToLower(to))
+		if s.deps.NodeName != "" {
+			args = append(args, "--invite-name", s.deps.NodeName)
+		}
+		if o.inviteNote != "" {
+			args = append(args, "--invite-note", o.inviteNote)
+		}
+	}
 	return s.spawnPrepared(s.newTask("send", "", paths), bin, args, "")
 }
 

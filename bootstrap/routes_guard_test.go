@@ -81,6 +81,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		// ===== p2p 推送邀请（P3，2026-10-14）=====
 		"POST /api/v1/p2p/invite", "GET /admin/p2p/invites",
 		"POST /admin/p2p/invites/accept", "POST /admin/p2p/invite-push",
+		// ===== p2p 在线名录（2026-10-14 邀请信箱配套）=====
+		"GET /admin/p2p/directory",
 		// ===== storage（IDL）=====
 		"GET /admin/storage", "PUT /admin/storage/config",
 		"POST /admin/storage/switch", "GET /admin/storage/test/:type",
