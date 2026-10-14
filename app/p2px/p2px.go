@@ -43,6 +43,9 @@ const (
 	defaultPublicRegistry = "http://home.enjoye.top:56788"
 	// logRingSize 任务日志环形缓冲行数
 	logRingSize = 256
+	// defaultMaxConcurrent 在途任务上限（实测评审：无闸会拖垮 NAS 磁盘；
+	// spec §7.2 原设。超出响亮拒绝，取消或等终态后再发起）
+	defaultMaxConcurrent = 2
 )
 
 // Deps supervisor 依赖注入（生产由 bootstrap/wiring 装配；测试注入桩）。
@@ -263,7 +266,25 @@ func (s *Service) guard(ctx context.Context) (conf.P2PDirectConfig, string, erro
 	if err != nil {
 		return conf.P2PDirectConfig{}, "", err
 	}
+	if n := s.activeCount(); n >= defaultMaxConcurrent {
+		return conf.P2PDirectConfig{}, "", fmt.Errorf("在途任务已达上限（%d/%d），请等待完成或取消后再发起", n, defaultMaxConcurrent)
+	}
 	return cfg, bin, nil
+}
+
+// activeCount 在途（waiting/running）任务数。
+func (s *Service) activeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, t := range s.tasks {
+		t.mu.Lock()
+		if t.state == StateWaiting || t.state == StateRunning {
+			n++
+		}
+		t.mu.Unlock()
+	}
+	return n
 }
 
 // effectiveRegistry 注册中心缺省回填（spec §5：留空=官方公共）。

@@ -342,3 +342,27 @@ func TestQuotaReasonPreserved(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 	}
 }
+
+// TestMaxConcurrentCap 在途任务上限（实测评审：无闸会拖垮 NAS 磁盘）。
+func TestMaxConcurrentCap(t *testing.T) {
+	bin := writeStub(t, "ok")
+	svc := NewService(testDeps(t, bin))
+	defer func() { _ = svc.Stop() }()
+
+	// 白名单内真实文件（supervisor 校验存在性）
+	cfg, _ := svc.deps.GetDirect(context.Background())
+	src := filepath.Join(cfg.SendRoots[0], "cap.txt")
+	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := svc.Send(context.Background(), []string{src}); err != nil {
+			t.Fatalf("第%d个应成功: %v", i+1, err)
+		}
+	}
+	if _, err := svc.Send(context.Background(), []string{src}); err == nil {
+		t.Fatal("第3个应被上限拒绝")
+	} else if !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("错误文案应含上限: %v", err)
+	}
+}
