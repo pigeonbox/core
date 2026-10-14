@@ -87,7 +87,7 @@ func testDeps(t *testing.T, binPath string) Deps {
 func TestSendParseCodeAndCancel(t *testing.T) {
 	bin := writeStub(t, "ok")
 	svc := NewService(testDeps(t, bin))
-	defer svc.Stop()
+	defer func() { _ = svc.Stop() }()
 
 	// 发送源必须在白名单内且真实存在（supervisor 的 symlink 归一要求存在性）
 	cfg, _ := svc.deps.GetDirect(context.Background())
@@ -123,7 +123,7 @@ func TestSendParseCodeAndCancel(t *testing.T) {
 func TestRecvQuotaKill(t *testing.T) {
 	bin := writeStub(t, "quota")
 	svc := NewService(testDeps(t, bin))
-	defer svc.Stop()
+	defer func() { _ = svc.Stop() }()
 
 	task, err := svc.Recv(context.Background(), "ABCD-1234-WXYZ")
 	if err != nil {
@@ -151,7 +151,7 @@ func TestStandaloneGate(t *testing.T) {
 	d := testDeps(t, bin)
 	d.Standalone = func() bool { return false }
 	svc := NewService(d)
-	defer svc.Stop()
+	defer func() { _ = svc.Stop() }()
 	if _, err := svc.Send(context.Background(), []string{"/tmp/x"}); err == nil {
 		t.Fatal("非 standalone 应拒绝")
 	}
@@ -169,7 +169,7 @@ func TestSendRootsWhitelist(t *testing.T) {
 		return c, ok
 	}
 	svc := NewService(d)
-	defer svc.Stop()
+	defer func() { _ = svc.Stop() }()
 	if _, err := svc.Send(context.Background(), []string{"/etc/passwd"}); err == nil {
 		t.Fatal("白名单外路径应拒绝")
 	}
@@ -179,7 +179,7 @@ func TestSendRootsWhitelist(t *testing.T) {
 func TestRecvDoneState(t *testing.T) {
 	bin := writeStub(t, "ok")
 	svc := NewService(testDeps(t, bin))
-	defer svc.Stop()
+	defer func() { _ = svc.Stop() }()
 	task, err := svc.Recv(context.Background(), "ABCD-1234-WXYZ")
 	if err != nil {
 		t.Fatalf("Recv: %v", err)

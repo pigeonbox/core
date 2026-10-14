@@ -372,7 +372,7 @@ func Cleanup() {
 	fedRT.stop()
 	// 直传子进程先于数据库停：杀在途 p2pc 进程组 + 停配额监控（P2a）
 	if p2pxSvcInstance != nil {
-		p2pxSvcInstance.Stop()
+		_ = p2pxSvcInstance.Stop()
 	}
 
 	if database != nil {
