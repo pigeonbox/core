@@ -241,11 +241,37 @@ type P2pTaskInfo struct {
 
 // P2pAPI 设备直传服务窄接口（supervisor app/p2px 经适配器桥接；
 // P2b 2026-10-14，spec §9 薄包装——admin 作用域，与 Web 操作页同服务层）。
+// 2026-10-15 扩名录与邀请：P2pPeers/P2pInvites/P2pAccept + P2pSend 邀请参数。
 type P2pAPI interface {
 	P2pStatus(ctx context.Context) (P2pStatus, error)
 	P2pTasks(ctx context.Context) ([]P2pTaskInfo, error)
-	P2pSend(ctx context.Context, paths []string) (P2pTaskInfo, error)
+	// P2pSend 发起发送；inviteTo 非空=向名录对端投递密封邀请。
+	P2pSend(ctx context.Context, paths []string, inviteTo, inviteNote string) (P2pTaskInfo, error)
 	P2pRecv(ctx context.Context, code string) (P2pTaskInfo, error)
+	// P2pPeers 在线名录（opt-in 可发现节点）。
+	P2pPeers(ctx context.Context) ([]P2pPeerInfo, error)
+	// P2pInvites 待收邀请箱快照。
+	P2pInvites(ctx context.Context) ([]P2pInviteInfo, error)
+	// P2pAccept 认领邀请并立即发起接收。
+	P2pAccept(ctx context.Context, inviteID string) (P2pTaskInfo, error)
+}
+
+// P2pPeerInfo 在线名录对端（零敏感五字段，p2pd 透传）。
+type P2pPeerInfo struct {
+	NodeID      string `json:"node_id"`
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	BoxPub      string `json:"box_pub"`
+	OnlineSince int64  `json:"online_since"`
+}
+
+// P2pInviteInfo 待收邀请条目（P3 收件箱快照透传）。
+type P2pInviteInfo struct {
+	ID        string `json:"id"`
+	Code      string `json:"code"`
+	FromName  string `json:"from_name"`
+	Note      string `json:"note"`
+	ExpiresIn int64  `json:"expires_in"`
 }
 
 // AdminAPI 系统维护类工具所需的 admin 域能力（bootstrap 注入全站唯一实例适配器）。
@@ -506,12 +532,19 @@ func (s *Service) toolDefs() []toolDef {
 		// P2b 设备直传四工具（admin 专属；与 Web「设备直传」操作页同服务层）
 		{Name: "p2p_status", MinScope: scopeAdmin, Description: "P2P 设备直传状态（启用/p2pc 二进制/注册中心/收件区用量）", InputSchema: objSchema(nil, nil)},
 		{Name: "p2p_tasks", MinScope: scopeAdmin, Description: "列出直传任务（口令/方向/状态/字节/错误）", InputSchema: objSchema(nil, nil)},
-		{Name: "p2p_send", MinScope: scopeAdmin, Description: "发起设备直传发送：服务器白名单内路径→生成口令，对端凭码接收（口令窗口约 10 分钟）", InputSchema: objSchema(map[string]any{
-			"paths": arrayProp("要发送的服务器本地绝对路径（须在 send_roots 白名单内）"),
+		{Name: "p2p_send", MinScope: scopeAdmin, Description: "发起设备直传发送：服务器白名单内路径→生成口令，对端凭码接收（口令窗口约 10 分钟）；可选 invite_to 向在线名录对端投递密封邀请（对端一键接收，NAT 后可达）", InputSchema: objSchema(map[string]any{
+			"paths":       arrayProp("要发送的服务器本地绝对路径（须在 send_roots 白名单内）"),
+			"invite_to":   strProp("选填：名录对端 node_id（64 位 hex，经 p2p_peers 查询）——发送后向其信箱投递密封邀请"),
+			"invite_note": strProp("选填：邀请附言（≤200 字符）"),
 		}, []string{"paths"})},
 		{Name: "p2p_recv", MinScope: scopeAdmin, Description: "凭口令接收设备直传（文件落收件暂存区）", InputSchema: objSchema(map[string]any{
 			"code": strProp("12 位直传口令，如 XXXX-XXXX-XXXX"),
 		}, []string{"code"})},
+		{Name: "p2p_peers", MinScope: scopeAdmin, Description: "在线名录：列出可发现的 P2P 对端（node_id/名称/对外地址/上线时刻；名录 opt-in，零敏感）", InputSchema: objSchema(nil, nil)},
+		{Name: "p2p_invites", MinScope: scopeAdmin, Description: "列出待收邀请（其他实例经名录推送的密封邀请，TTL 10 分钟）", InputSchema: objSchema(nil, nil)},
+		{Name: "p2p_accept", MinScope: scopeAdmin, Description: "认领待收邀请并立即发起接收（等价于 Web 待收面板的「接收」按钮）", InputSchema: objSchema(map[string]any{
+			"invite_id": strProp("待收邀请 id（经 p2p_invites 查询）"),
+		}, []string{"invite_id"})},
 	}
 }
 
@@ -912,14 +945,24 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		if len(paths) == 0 {
 			return "paths 不能为空（服务器本地绝对路径数组，须命中 send_roots 白名单）", true
 		}
-		task, serr := p2p.P2pSend(ctx, paths)
+		inviteTo := strings.ToLower(strings.TrimSpace(argStr("invite_to")))
+		inviteNote := argStr("invite_note")
+		task, serr := p2p.P2pSend(ctx, paths, inviteTo, inviteNote)
 		if serr != nil {
 			return "发送任务创建失败: " + serr.Error(), true
 		}
-		if task.Code == "" {
-			return fmt.Sprintf("发送任务已创建 id=%s（口令生成中，稍后 p2p_tasks 查看；口令窗口约 10 分钟）", task.ID), false
+		invited := ""
+		if inviteTo != "" {
+			head := inviteTo
+			if len(head) > 12 {
+				head = head[:12]
+			}
+			invited = "\n密封邀请: 已投递至名录对端 " + head + "…（失败仅告警不影响发送，详见任务日志）"
 		}
-		return fmt.Sprintf("发送任务已创建 id=%s\n口令: %s（对端凭码接收；口令窗口约 10 分钟）", task.ID, task.Code), false
+		if task.Code == "" {
+			return fmt.Sprintf("发送任务已创建 id=%s（口令生成中，稍后 p2p_tasks 查看；口令窗口约 10 分钟）%s", task.ID, invited), false
+		}
+		return fmt.Sprintf("发送任务已创建 id=%s\n口令: %s（对端凭码接收；口令窗口约 10 分钟）%s", task.ID, task.Code, invited), false
 
 	case "p2p_recv":
 		p2p := s.currentP2p()
@@ -938,6 +981,69 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 			return "接收任务创建失败: " + rerr2.Error(), true
 		}
 		return fmt.Sprintf("接收任务已发起 id=%s code=%s（文件落收件暂存区）", task.ID, code), false
+
+	case "p2p_peers":
+		p2p := s.currentP2p()
+		if p2p == nil {
+			return "设备直传未装配", false
+		}
+		peers, perr := p2p.P2pPeers(ctx)
+		if perr != nil {
+			return "名录查询失败: " + perr.Error(), true
+		}
+		if len(peers) == 0 {
+			return "名录暂无在线对端（对端须开启「可被发现」并保持直传启用）", false
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("在线名录 %d 个对端:\n", len(peers)))
+		for _, p := range peers {
+			sb.WriteString(fmt.Sprintf("- %s\n  node_id: %s\n  对外地址: %s\n", p.Name, p.NodeID, func() string {
+				if p.URL == "" {
+					return "（未公布，NAT 后形态）"
+				}
+				return p.URL
+			}()))
+		}
+		sb.WriteString("经 p2p_send 的 invite_to 向其对端投递密封邀请。")
+		return sb.String(), false
+
+	case "p2p_invites":
+		p2p := s.currentP2p()
+		if p2p == nil {
+			return "设备直传未装配", false
+		}
+		invites, ierr := p2p.P2pInvites(ctx)
+		if ierr != nil {
+			return "待收邀请查询失败: " + ierr.Error(), true
+		}
+		if len(invites) == 0 {
+			return "暂无待收邀请", false
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("待收邀请 %d 条:\n", len(invites)))
+		for _, it := range invites {
+			sb.WriteString(fmt.Sprintf("- id=%s 口令=%s 来自=%s", it.ID, it.Code, it.FromName))
+			if it.Note != "" {
+				sb.WriteString(" 附言=" + it.Note)
+			}
+			sb.WriteString(fmt.Sprintf("（%d 分钟后过期；p2p_accept 认领）\n", it.ExpiresIn/60))
+		}
+		return sb.String(), false
+
+	case "p2p_accept":
+		p2p := s.currentP2p()
+		if p2p == nil {
+			return "设备直传未装配", false
+		}
+		id := strings.TrimSpace(argStr("invite_id"))
+		if id == "" {
+			return "invite_id 不能为空（经 p2p_invites 查询）", true
+		}
+		task, aerr := p2p.P2pAccept(ctx, id)
+		if aerr != nil {
+			return "认领失败: " + aerr.Error(), true
+		}
+		return fmt.Sprintf("已认领邀请，接收任务已发起 id=%s code=%s（完成后 p2p_tasks 查看进度）", task.ID, task.Code), false
 
 	case "delete_share":
 		code := argStr("code")

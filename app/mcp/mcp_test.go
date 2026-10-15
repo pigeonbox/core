@@ -200,7 +200,7 @@ func TestToolsList_AllTools(t *testing.T) {
 	s := newMCPTestService(t)
 	_, out := rpc(t, s, "tools/list", nil)
 	tools := out["result"].(map[string]any)["tools"].([]any)
-	assert.Len(t, tools, 19)
+	assert.Len(t, tools, 22)
 	names := map[string]bool{}
 	for _, tl := range tools {
 		names[tl.(map[string]any)["name"].(string)] = true
@@ -629,8 +629,11 @@ func TestProtocolErrors(t *testing.T) {
 
 // stubP2p mcp.P2pAPI 测试桩。
 type stubP2p struct {
-	sentPaths []string
-	gotCode   string
+	sentPaths  []string
+	gotCode    string
+	inviteTo   string
+	inviteNote string
+	acceptedID string
 }
 
 func (s *stubP2p) P2pStatus(ctx context.Context) (P2pStatus, error) {
@@ -646,13 +649,28 @@ func (s *stubP2p) P2pTasks(ctx context.Context) ([]P2pTaskInfo, error) {
 		{ID: "bbbbbbbbbbbbbbbb", Kind: "recv", State: "done", BytesDone: 29, CreatedAt: "2026-10-14T10:01:00Z"},
 	}, nil
 }
-func (s *stubP2p) P2pSend(ctx context.Context, paths []string) (P2pTaskInfo, error) {
+func (s *stubP2p) P2pSend(ctx context.Context, paths []string, inviteTo, inviteNote string) (P2pTaskInfo, error) {
 	s.sentPaths = paths
+	s.inviteTo, s.inviteNote = inviteTo, inviteNote
 	return P2pTaskInfo{ID: "cccccccccccccccc", Kind: "send", State: "waiting", Code: "ABCD-1234-WXYZ"}, nil
 }
 func (s *stubP2p) P2pRecv(ctx context.Context, code string) (P2pTaskInfo, error) {
 	s.gotCode = code
 	return P2pTaskInfo{ID: "dddddddddddddddd", Kind: "recv", State: "waiting", Code: code}, nil
+}
+func (s *stubP2p) P2pPeers(ctx context.Context) ([]P2pPeerInfo, error) {
+	return []P2pPeerInfo{
+		{NodeID: strings.Repeat("ab", 32), Name: "对端B", URL: "", BoxPub: strings.Repeat("cd", 32), OnlineSince: 1792000000},
+	}, nil
+}
+func (s *stubP2p) P2pInvites(ctx context.Context) ([]P2pInviteInfo, error) {
+	return []P2pInviteInfo{
+		{ID: "invite000000001", Code: "KJ8Y-WCYZ-E249", FromName: "远端站", Note: "季度备份", ExpiresIn: 540},
+	}, nil
+}
+func (s *stubP2p) P2pAccept(ctx context.Context, inviteID string) (P2pTaskInfo, error) {
+	s.acceptedID = inviteID
+	return P2pTaskInfo{ID: "eeeeeeeeeeeeeeee", Kind: "recv", State: "waiting", Code: "KJ8Y-WCYZ-E249"}, nil
 }
 
 // TestP2pTools 直传四工具：admin 作用域；未注入引导态；注入后可调用；游客不可见不可调。
@@ -695,6 +713,37 @@ func TestP2pTools(t *testing.T) {
 	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_send", "arguments": map[string]any{}})
 	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
 	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_recv", "arguments": map[string]any{"code": "  "}})
+	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
+
+	// 3.5) 名录/邀请/认领 + send 邀请参数透传
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_peers"})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "对端B")
+	assert.Contains(t, content, strings.Repeat("ab", 32))
+
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_invites"})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "KJ8Y-WCYZ-E249")
+	assert.Contains(t, content, "远端站")
+
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_accept", "arguments": map[string]any{
+		"invite_id": "invite000000001",
+	}})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "已认领")
+	assert.Equal(t, "invite000000001", stub.acceptedID)
+
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_send", "arguments": map[string]any{
+		"paths":       []any{"/data/share/a.txt"},
+		"invite_to":   strings.Repeat("CD", 32),
+		"invite_note": "走查附言",
+	}})
+	content = out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, content, "密封邀请")
+	assert.Equal(t, strings.ToLower(strings.Repeat("CD", 32)), stub.inviteTo)
+	assert.Equal(t, "走查附言", stub.inviteNote)
+
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "p2p_accept", "arguments": map[string]any{}})
 	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
 
 	// 4) 游客：工具列表不可见 + 直接调用被拒

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	adminApp "github.com/pigeonbox/core/app/admin"
@@ -14,8 +15,8 @@ import (
 	federationApp "github.com/pigeonbox/core/app/federation"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
 	p2pxApp "github.com/pigeonbox/core/app/p2px"
-	previewApp "github.com/pigeonbox/core/app/preview"
 	presignApp "github.com/pigeonbox/core/app/presign"
+	previewApp "github.com/pigeonbox/core/app/preview"
 	requestApp "github.com/pigeonbox/core/app/request"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -238,7 +239,7 @@ func (a mcpP2pAdapter) P2pTasks(ctx context.Context) ([]mcpApp.P2pTaskInfo, erro
 		out = append(out, mcpApp.P2pTaskInfo{
 			ID: t.ID, Kind: t.Kind, State: t.State, Code: t.Code,
 			BytesDone: t.BytesDone, Error: t.Error,
-			CreatedAt: t.CreatedAt.Format(time.RFC3339),
+			CreatedAt:  t.CreatedAt.Format(time.RFC3339),
 			FinishedAt: finishedTimeStr(t.FinishedAt),
 		})
 	}
@@ -247,11 +248,15 @@ func (a mcpP2pAdapter) P2pTasks(ctx context.Context) ([]mcpApp.P2pTaskInfo, erro
 
 // P2pSend 发起发送（口令由 p2pc stdout 异步解析——有界短轮询等口令，
 // 典型毫秒级；超时则返回空码，MCP 侧提示走 p2p_tasks）。
-func (a mcpP2pAdapter) P2pSend(ctx context.Context, paths []string) (mcpApp.P2pTaskInfo, error) {
+func (a mcpP2pAdapter) P2pSend(ctx context.Context, paths []string, inviteTo, inviteNote string) (mcpApp.P2pTaskInfo, error) {
 	if a.svc == nil {
 		return mcpApp.P2pTaskInfo{}, errors.New("直传 supervisor 未装配")
 	}
-	task, err := a.svc.Send(ctx, paths)
+	opts := []p2pxApp.SendOption{}
+	if strings.TrimSpace(inviteTo) != "" {
+		opts = append(opts, p2pxApp.WithInvite(inviteTo, inviteNote))
+	}
+	task, err := a.svc.Send(ctx, paths, opts...)
 	if err != nil {
 		return mcpApp.P2pTaskInfo{}, err
 	}
@@ -278,6 +283,65 @@ func (a mcpP2pAdapter) P2pRecv(ctx context.Context, code string) (mcpApp.P2pTask
 	}
 	task, err := a.svc.Recv(ctx, code)
 	if err != nil {
+		return mcpApp.P2pTaskInfo{}, err
+	}
+	snap := task.Snapshot()
+	return mcpApp.P2pTaskInfo{
+		ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
+		CreatedAt: snap.CreatedAt.Format(time.RFC3339),
+	}, nil
+}
+
+// P2pPeers 在线名录透传（p2px DirectoryPeers；零敏感）。
+func (a mcpP2pAdapter) P2pPeers(ctx context.Context) ([]mcpApp.P2pPeerInfo, error) {
+	if a.svc == nil {
+		return nil, errors.New("直传 supervisor 未装配")
+	}
+	peers, err := a.svc.DirectoryPeers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]mcpApp.P2pPeerInfo, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, mcpApp.P2pPeerInfo{
+			NodeID: p.NodeID, Name: p.Name, URL: p.URL,
+			BoxPub: p.BoxPub, OnlineSince: p.OnlineSince,
+		})
+	}
+	return out, nil
+}
+
+// P2pInvites 待收邀请箱快照（P3 收件箱）。
+func (a mcpP2pAdapter) P2pInvites(ctx context.Context) ([]mcpApp.P2pInviteInfo, error) {
+	if a.svc == nil {
+		return nil, errors.New("直传 supervisor 未装配")
+	}
+	invites := a.svc.ListInvites()
+	out := make([]mcpApp.P2pInviteInfo, 0, len(invites))
+	for _, it := range invites {
+		out = append(out, mcpApp.P2pInviteInfo{
+			ID: it.ID, Code: it.Code, FromName: it.FromName,
+			Note: it.Note, ExpiresIn: it.ExpiresIn,
+		})
+	}
+	return out, nil
+}
+
+// P2pAccept 认领邀请并立即发起接收（与 Web 待收面板 accept 同链路）。
+func (a mcpP2pAdapter) P2pAccept(ctx context.Context, inviteID string) (mcpApp.P2pTaskInfo, error) {
+	if a.svc == nil {
+		return mcpApp.P2pTaskInfo{}, errors.New("直传 supervisor 未装配")
+	}
+	inv, err := a.svc.TakeInvite(inviteID)
+	if err != nil {
+		return mcpApp.P2pTaskInfo{}, err
+	}
+	task, err := a.svc.Recv(ctx, inv.Code)
+	if err != nil {
+		// 认领已出箱但接收发起失败:邀请回箱(重试不丢码)
+		if _, re := a.svc.AddInvite(inv.Code, inv.FromName, inv.Note); re != nil {
+			return mcpApp.P2pTaskInfo{}, fmt.Errorf("接收发起失败且邀请回箱失败(%v): %w", re, err)
+		}
 		return mcpApp.P2pTaskInfo{}, err
 	}
 	snap := task.Snapshot()
