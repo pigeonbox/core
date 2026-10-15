@@ -220,7 +220,7 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 	if tk := security.GenerateDownloadToken(meta.ShareCode); tk != "" {
 		downloadURL += "&token=" + tk
 	}
-	resp.Success(c, &anonmodel.RetrieveData{
+	data := &anonmodel.RetrieveData{
 		FileName:        meta.FileName,
 		FileSize:        meta.FileSize,
 		ContentType:     meta.ContentType,
@@ -228,7 +228,14 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 		RemainingCount:  0, // 剩余次数由 DB 管理，前端如需可单独查询
 		ExpireAt:        0, // 由 DB 决定
 		RequirePassword: meta.RequireAuth,
-	})
+	}
+	// 文本分享取件：契约 share_code 回传（前端跳 /share/{share_code} 详情页展示文本；
+	// 结果页无文本渲染形态，漏传会退化为"截断文件名+下载按钮"形态——2026-10-15 修复）
+	if meta.IsText {
+		shareCode := meta.ShareCode
+		data.ShareCode = &shareCode
+	}
+	resp.Success(c, data)
 }
 
 // Download .

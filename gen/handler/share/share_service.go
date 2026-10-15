@@ -214,6 +214,9 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 		Data: &sharemodel.ShareData{
 			Code: result.Code,
 			URL:  result.FullShareURL,
+			// 文本/文件分享同权铸造 6 位取件码（service 层 mint），响应必须回传——
+			// 此前仅文件端点映射，文本端点漏带导致前端快捷取件卡永不出现
+			PickupCode: strPtrIfNotEmpty(result.PickupCode),
 		},
 	}
 
