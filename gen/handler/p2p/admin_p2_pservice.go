@@ -20,6 +20,7 @@ import (
 	p2p "github.com/pigeonbox/contracts/gen/p2p"
 	"github.com/pigeonbox/core/app/p2px"
 	shareService "github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/utils"
 )
@@ -467,7 +468,14 @@ func AdminP2pInvitePush(ctx context.Context, c *app.RequestContext) {
 func AdminP2pDirectory(ctx context.Context, c *app.RequestContext) {
 	peers, err := getP2px().DirectoryPeers(ctx)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]any{"code": errcode.CodeInternal, "message": err.Error()})
+		// 上游是外部依赖（注册中心）而非本服务内部故障：映射 502 并收敛文案。
+		// 此前裸 500 + err.Error 直出（可能带上游 URL/网络细节），前端又静默
+		// 渲染空下拉，admin 无法区分「没有对端」和「名录服务不可用」。
+		logger.CtxError(ctx, "p2p directory upstream query failed", "err", err)
+		c.JSON(consts.StatusBadGateway, map[string]any{
+			"code":    errcode.CodeInternal,
+			"message": "名录暂时不可用（注册中心波动），请稍后重试",
+		})
 		return
 	}
 	out := make([]*p2p.P2pDirectoryPeer, 0, len(peers))
