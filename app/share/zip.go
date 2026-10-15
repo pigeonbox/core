@@ -12,7 +12,6 @@ import (
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/kit/async"
-	"go.uber.org/zap"
 )
 
 // zipStreamTimeout zip 组装整体超时（异步 goroutine 内的存储读取/写管路上限）。
@@ -96,7 +95,7 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 			buildErr = zerr
 		}
 		if buildErr != nil {
-			logger.Warn("zip stream build failed", zap.String("code", fc.Code), zap.Error(buildErr))
+			logger.CtxWarn(ctx, "zip stream build failed", "code", fc.Code, "err", buildErr)
 			_ = pw.CloseWithError(buildErr)
 			return
 		}

@@ -30,7 +30,6 @@ import (
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/kit/uidgen"
 	"github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -472,7 +471,7 @@ func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousSharePara
 	if err != nil {
 		// 回滚 DB 记录（物理文件未落库，无需清）
 		if dErr := s.fileCodeRepo.Delete(ctx, fc.ID); dErr != nil {
-			logger.Warn("rollback file_code on generate code failed", zap.Uint("id", fc.ID), zap.Error(dErr))
+			logger.CtxWarn(ctx, "rollback file_code on generate code failed", "id", fc.ID, "err", dErr)
 		}
 		return "", err
 	}

@@ -318,7 +318,7 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	if err := s.configRepo.Save(ctx, rec); err != nil {
 		if errors.Is(err, dao.ErrDBNotInitialized) {
 			// DB 不可用时仅更新内存（纯内存运行形态，如部分单测）
-			logger.Warn("system config not persisted: database not initialized")
+			logger.CtxWarn(ctx, "system config not persisted: database not initialized")
 		} else {
 			return err
 		}
@@ -558,6 +558,6 @@ func (s *Service) logConfigOperation(ctx context.Context, action, target string,
 		IP:        ip,
 	}
 	if err := s.adminOperationRepo.Create(ctx, entry); err != nil {
-		logger.Warn("config audit log write failed", zap.String("action", action), zap.Error(err))
+		logger.CtxWarn(ctx, "config audit log write failed", "action", action, "err", err)
 	}
 }

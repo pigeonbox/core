@@ -8,7 +8,6 @@ import (
 
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
-	"go.uber.org/zap"
 )
 
 // GetFiles 获取文件列表
@@ -50,7 +49,7 @@ func (s *Service) PurgeFiles(ctx context.Context, ids []uint) (int64, error) {
 			s.deletePhysicalIfUnreferenced(ctx, fp, id)
 		}
 		if _, err := s.fileCodeRepo.HardDeleteByIDs(ctx, []uint{id}); err != nil {
-			logger.Warn("purge db row failed", zap.Uint("id", id), zap.Error(err))
+			logger.CtxWarn(ctx, "purge db row failed", "id", id, "err", err)
 			continue
 		}
 		purged++
@@ -118,15 +117,15 @@ func (s *Service) deletePhysicalIfUnreferenced(ctx context.Context, filePath str
 	}
 	n, err := s.fileCodeRepo.CountFilePathReferences(ctx, filePath, excludeFileCodeID)
 	if err != nil {
-		logger.Warn("physical delete skipped: reference count failed (leak, janitor reconciles)",
-			zap.String("path", filePath), zap.Error(err))
+		logger.CtxWarn(ctx, "physical delete skipped: reference count failed (leak, janitor reconciles)",
+			"path", filePath, "err", err)
 		return
 	}
 	if n > 0 {
 		return // 仍被其他分享引用（秒传共享对象），保留物理文件
 	}
 	if err := s.storage.DeleteFile(ctx, filePath); err != nil {
-		logger.Warn("delete physical file failed", zap.String("path", filePath), zap.Error(err))
+		logger.CtxWarn(ctx, "delete physical file failed", "path", filePath, "err", err)
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -97,7 +96,7 @@ func (s *Service) logAdminOperation(ctx context.Context, action, target string, 
 		IP:        ip,
 	}
 	if err := s.adminOperationRepo.Create(ctx, entry); err != nil {
-		logger.Warn("admin audit log write failed", zap.String("action", action), zap.Error(err))
+		logger.CtxWarn(ctx, "admin audit log write failed", "action", action, "err", err)
 	}
 }
 

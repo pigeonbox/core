@@ -243,7 +243,7 @@ func (j *Janitor) CleanRemotePresignOrphans(ctx context.Context, olderThan time.
 	removed := 0
 	for _, key := range keys {
 		if err := j.svc.DeleteFile(ctx, key); err != nil {
-			logger.Warn("remote presign orphan delete failed", zap.String("key", key), zap.Error(err))
+			logger.CtxWarn(ctx, "remote presign orphan delete failed", "key", key, "err", err)
 			continue
 		}
 		removed++

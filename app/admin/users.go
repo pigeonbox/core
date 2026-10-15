@@ -9,7 +9,6 @@ import (
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
-	"go.uber.org/zap"
 )
 
 // GetUsers 获取用户列表
@@ -36,7 +35,7 @@ func (s *Service) DeleteUser(ctx context.Context, userID uint) error {
 
 	// 1. 级联软删用户的分享记录（不删物理文件——管理员可从回收站追溯）
 	if err := s.fileCodeRepo.DeleteByUserID(ctx, userID); err != nil {
-		logger.Warn("soft delete user shares failed", zap.Uint("user_id", userID), zap.Error(err))
+		logger.CtxWarn(ctx, "soft delete user shares failed", "user_id", userID, "err", err)
 	}
 
 	// 2. 删除用户记录

@@ -11,7 +11,6 @@ import (
 	"github.com/pigeonbox/core/pkg/metrics"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -168,8 +167,8 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 			displayName = req.Entries[0].FileName
 		}
 		if pickup, err := s.pickupMinter.MintForShare(ctx, fileCode.Code, displayName, totalSize, req.RequireAuth, req.ExpiredAt); err != nil {
-			logger.Warn("mint pickup code failed (non-fatal, multi)",
-				zap.String("code", fileCode.Code), zap.Error(err))
+			logger.CtxWarn(ctx, "mint pickup code failed (non-fatal, multi)",
+				"code", fileCode.Code, "err", err)
 		} else {
 			resp.PickupCode = pickup
 		}
@@ -242,7 +241,7 @@ func (s *Service) GetShareChild(ctx context.Context, code string, fileID uint) (
 func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
 	children, err := s.fileFileRepo.ListByFileCodeID(ctx, fileCodeID)
 	if err != nil {
-		logger.Warn("list children for delete failed", zap.Uint("file_code_id", fileCodeID), zap.Error(err))
+		logger.CtxWarn(ctx, "list children for delete failed", "file_code_id", fileCodeID, "err", err)
 		return
 	}
 	if s.storage == nil {
@@ -256,7 +255,7 @@ func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
 		s.deletePhysicalIfUnreferenced(ctx, c.FilePath, fileCodeID)
 	}
 	if err := s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{fileCodeID}); err != nil {
-		logger.Warn("soft delete child rows failed", zap.Uint("file_code_id", fileCodeID), zap.Error(err))
+		logger.CtxWarn(ctx, "soft delete child rows failed", "file_code_id", fileCodeID, "err", err)
 	}
 }
 

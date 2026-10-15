@@ -10,7 +10,6 @@ import (
 	"context"
 
 	"github.com/pigeonbox/core/pkg/logger"
-	"go.uber.org/zap"
 )
 
 // deletePhysicalIfUnreferenced 物理删除保护：无其他分享引用 filePath 时才删。
@@ -21,14 +20,14 @@ func (s *Service) deletePhysicalIfUnreferenced(ctx context.Context, filePath str
 	}
 	n, err := s.fileCodeRepo.CountFilePathReferences(ctx, filePath, excludeFileCodeID)
 	if err != nil {
-		logger.Warn("physical delete skipped: reference count failed (leak, janitor reconciles)",
-			zap.String("path", filePath), zap.Error(err))
+		logger.CtxWarn(ctx, "physical delete skipped: reference count failed (leak, janitor reconciles)",
+			"path", filePath, "err", err)
 		return
 	}
 	if n > 0 {
 		return // 仍被其他分享引用（秒传共享对象），保留物理文件
 	}
 	if err := s.storage.DeleteFile(ctx, filePath); err != nil {
-		logger.Warn("delete physical file failed", zap.String("path", filePath), zap.Error(err))
+		logger.CtxWarn(ctx, "delete physical file failed", "path", filePath, "err", err)
 	}
 }

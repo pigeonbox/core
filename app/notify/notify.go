@@ -541,7 +541,7 @@ func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, conte
 	}
 	async.GoSafe(func() {
 		if err := s.sendWebhook(ctx, "notify.created", body); err != nil {
-			logger.Warn("webhook push failed", zap.String("url", s.webhookURL), zap.Error(err))
+			logger.CtxWarn(ctx, "webhook push failed", "url", s.webhookURL, "err", err)
 		}
 	})
 }

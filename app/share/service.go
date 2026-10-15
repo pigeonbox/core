@@ -363,8 +363,8 @@ func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp,
 	if s.pickupMinter != nil && !req.Encrypted {
 		if pickup, err := s.pickupMinter.MintForShare(ctx, fileCode.Code,
 			textPreview(req.Text), int64(len(req.Text)), req.RequireAuth, req.ExpiredAt); err != nil {
-			logger.Warn("mint pickup code failed (non-fatal)",
-				zap.String("code", fileCode.Code), zap.Error(err))
+			logger.CtxWarn(ctx, "mint pickup code failed (non-fatal)",
+				"code", fileCode.Code, "err", err)
 		} else {
 			resp.PickupCode = pickup
 		}
@@ -473,7 +473,7 @@ func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize i
 				return &GlobalQuotaExceededError{Used: used, Quota: quota}
 			}
 		} else {
-			logger.Warn("全局存储配额统计失败，本次跳过配额检查", zap.Error(err))
+			logger.CtxWarn(ctx, "全局存储配额统计失败，本次跳过配额检查", "err", err)
 		}
 	}
 	if userID != nil && s.userService != nil {
@@ -551,10 +551,10 @@ func (s *Service) inspectFile(ctx context.Context, meta moderation.UploadMeta) (
 func (s *Service) applyPending(ctx context.Context, id uint, code, reason, ownerIP string) (string, error) {
 	target := model.StatusPendingReview
 	if _, err := s.SetShareStatus(ctx, []uint{id}, target); err != nil {
-		logger.Warn("set pending_review failed, fallback to blocked", zap.String("code", code), zap.Error(err))
+		logger.CtxWarn(ctx, "set pending_review failed, fallback to blocked", "code", code, "err", err)
 		target = model.StatusBlocked
 		if _, berr := s.SetShareStatus(ctx, []uint{id}, target); berr != nil {
-			logger.Error("pending fallback blocked failed, removing share", zap.String("code", code), zap.Error(berr))
+			logger.CtxError(ctx, "pending fallback blocked failed, removing share", "code", code, "err", berr)
 			_ = s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{id}) // 文本分享无子行，no-op
 			_ = s.fileCodeRepo.Delete(ctx, id)
 			return "", &ContentRejectedError{}
@@ -655,8 +655,8 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 				FileHash:     req.FileHash,
 			}
 			if err := s.fileFileRepo.CreateBatch(ctx, []*model.FileCodeFile{child}); err != nil {
-				logger.Warn("write child file row failed (fallback to legacy fields)",
-					zap.String("code", fc.Code), zap.Error(err))
+				logger.CtxWarn(ctx, "write child file row failed (fallback to legacy fields)",
+					"code", fc.Code, "err", err)
 			}
 		}
 	}
@@ -686,8 +686,8 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 	// 6 位取件码铸造（2026-10-07）：非致命——失败仅少一个快捷码，8 位分享码不受影响
 	if s.pickupMinter != nil {
 		if pickup, err := s.pickupMinter.MintForShare(ctx, fileCode.Code, req.Text, req.Size, req.RequireAuth, req.ExpiredAt); err != nil {
-			logger.Warn("mint pickup code failed (non-fatal)",
-				zap.String("code", fileCode.Code), zap.Error(err))
+			logger.CtxWarn(ctx, "mint pickup code failed (non-fatal)",
+				"code", fileCode.Code, "err", err)
 		} else {
 			resp.PickupCode = pickup
 		}
@@ -745,7 +745,7 @@ func (s *Service) DeleteFile(ctx context.Context, fileID uint, userID *uint) err
 		// 更新用户统计（减少存储空间）
 		if s.userService != nil && userID != nil {
 			if err := s.userService.UpdateUserStats(*userID, "storage", -file.Size); err != nil {
-				logger.Warn("update user storage stat failed on delete", zap.Error(err), zap.Uint("user_id", *userID))
+				logger.CtxWarn(ctx, "update user storage stat failed on delete", "err", err, "user_id", *userID)
 			}
 		}
 	}
@@ -797,8 +797,8 @@ func (s *Service) DeleteFileByCode(ctx context.Context, code string, userID uint
 	// 5. 扣减用户 storage 统计（best-effort，失败记日志）
 	if s.userService != nil {
 		if err := s.userService.UpdateUserStats(userID, "storage", -file.Size); err != nil {
-			logger.Warn("update user storage stat failed on delete",
-				zap.Uint("user_id", userID), zap.Int64("size", file.Size), zap.Error(err))
+			logger.CtxWarn(ctx, "update user storage stat failed on delete",
+				"user_id", userID, "size", file.Size, "err", err)
 		}
 	}
 
@@ -869,7 +869,7 @@ func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP
 func (s *Service) RecordViewerAndNotify(ctx context.Context, code, viewerIP, viewerDetail string) error {
 	if err := s.fileCodeRepo.UpdateViewer(ctx, code, viewerIP); err != nil {
 		// 文件可能不存在，记日志后跳过
-		logger.Warn("update viewer failed", zap.String("code", code), zap.Error(err))
+		logger.CtxWarn(ctx, "update viewer failed", "code", code, "err", err)
 		return nil
 	}
 	// 读最新记录判断 owner
@@ -887,7 +887,7 @@ func (s *Service) RecordViewerAndNotify(ctx context.Context, code, viewerIP, vie
 	// 更新 LastNotifiedAt（先更新，避免并发重复通知）
 	now := time.Now()
 	if err := s.fileCodeRepo.UpdateColumns(ctx, fc.ID, map[string]interface{}{"last_notified_at": now}); err != nil {
-		logger.Warn("update last_notified_at failed", zap.Uint("id", fc.ID), zap.Error(err))
+		logger.CtxWarn(ctx, "update last_notified_at failed", "id", fc.ID, "err", err)
 	}
 
 	title := "您的分享已被取件"
