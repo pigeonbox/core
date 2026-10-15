@@ -129,6 +129,7 @@ func CreateDefaultAdmin(database *gorm.DB, cfg *conf.AppConfiguration) error {
 // restoreRuntimeStorage 启动时把 system_configs.runtime_storage 恢复进全局配置。
 // 优先级：env（PB_STORAGE_TYPE/PB_STORAGE_PATH）> DB（管理端在线修改的意图，
 // 晚于 yaml）> yaml。DB 无记录时不动 conf（yaml/env 生效）。
+// 2026-10-15 起 env>DB 已推广为全部托管段统一规则（见 env_reapply.go）。
 func restoreRuntimeStorage() {
 	rs := configApp.Default().LoadRuntimeStorage(context.Background()) // DB 已于 InitDatabase 就绪
 	if rs == nil {

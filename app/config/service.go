@@ -108,6 +108,10 @@ type ReconfigureHooks struct {
 	// spec §6）。返回 error 时 UpdateConfig 透传给管理员——切换失败但配置已持久化
 	// 的分叉必须响亮（spec §12.4），禁止静默。
 	OnP2PFederationChanged func(f *conf.FederationConfig) error
+	// OnOverlayApplied SystemConfig 段 overlay 进全局 conf 之后的回调（bootstrap
+	// 注册 env 恒覆盖重施器：统一优先级 yaml < DB < env，2026-10-15）。持 configMu
+	// 同步调用，实现方只许操作全局 conf/env，不得回调 config service。
+	OnOverlayApplied func()
 }
 
 // SetReconfigureHooks 注册组件热重建钩子（bootstrap 调用）。
@@ -407,6 +411,58 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 	}
 	if sc.P2P.Federation != nil {
 		g.Federation = *sc.P2P.Federation
+	}
+	// env 恒覆盖（统一优先级 yaml < DB < env，2026-10-15）：上面的 DB overlay 整段
+	// 盖掉了启动时 viper 绑定的 env 值，bootstrap 注册的重施器在此恢复 env 语义
+	// （storage 段在 restoreRuntimeStorage 已是同规则）。随后把生效值回镜像进
+	// sc（仅内存；DB 保留提交意图），管理后台读到的恒为生效值。
+	s.hooksMu.RLock()
+	overlayApplied := s.reconfigurers
+	s.hooksMu.RUnlock()
+	if overlayApplied != nil && overlayApplied.OnOverlayApplied != nil {
+		overlayApplied.OnOverlayApplied()
+	}
+	s.syncMirrorFromGlobalLocked(g, sc)
+}
+
+// syncMirrorFromGlobalLocked 把全局 conf 托管段回镜像进 sc（调用方持 configMu；
+// 仅内存，不写库、不触发热重建）。env 恒覆盖后若内存镜像停留在提交值，
+// 管理后台会展示"保存成功但没生效"的假象。g 复用 overlay 的直读（棘轮规则 8）。
+func (s *Service) syncMirrorFromGlobalLocked(g *conf.AppConfiguration, sc *SystemConfig) {
+	if g == nil {
+		return
+	}
+	if sc.UI != nil {
+		ui := g.UI
+		sc.UI = &ui
+	}
+	if sc.UploadEx != nil {
+		ue := g.Upload
+		sc.UploadEx = &ue
+	}
+	if sc.LocalImport != nil {
+		li := g.Upload.LocalImport
+		sc.LocalImport = &li
+	}
+	if sc.Download != nil {
+		d := g.Download
+		sc.Download = &d
+	}
+	if sc.Notify != nil {
+		n := g.Notify
+		sc.Notify = &n
+	}
+	if sc.OIDC != nil {
+		o := g.Security.OIDC
+		sc.OIDC = &o
+	}
+	if sc.APIToken != nil {
+		a := g.Security.APIToken
+		sc.APIToken = &a
+	}
+	if sc.P2P != nil && sc.P2P.Federation != nil {
+		f := g.Federation
+		sc.P2P.Federation = &f
 	}
 }
 

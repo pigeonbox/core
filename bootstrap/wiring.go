@@ -153,7 +153,11 @@ func initThriftIDLServices(database *gorm.DB) {
 			// 配置值与运行态分叉不可静默（评审 P1-1/P1-2）
 			return fedRT.apply(*f)
 		},
+		OnOverlayApplied: func() { ReapplyEnvOverrides(config) },
 	})
+	// 统一配置优先级（yaml < DB < env，2026-10-15）：首次 RestoreAdminSettings
+	// 跑在钩子注册之前（上方第 0 步），此处补一次 env 重施对齐存储段同款规则
+	ReapplyEnvOverrides(config)
 	// 2.4 注入 user service：上传统计（此前从未接线，用户统计恒为 0）
 	// + 存储配额强制检查（user_quota / 用户级 max_storage_quota）
 	userSvc := userService.NewService(database)
