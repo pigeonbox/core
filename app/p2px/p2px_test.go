@@ -469,3 +469,47 @@ func TestTaskLogExposure(t *testing.T) {
 		t.Fatal("不存在任务应报错")
 	}
 }
+
+// TestStateFlipSemantics 状态语义真实化:公告就绪等单机自言自语不算「传输中」,
+// 仅对端接触（PAKE 启动）或字节推进才离开 waiting。
+func TestStateFlipSemantics(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "p2pc")
+	body := `#!/bin/sh
+case "$1" in
+  send)
+    echo "口令: ABCD-1234-WXYZ"
+    echo "等待对端接入..."
+    echo "公告就绪 base=http://r"
+    echo "端口映射成功 external=1.2.3.4"
+    sleep 30
+    ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(testDeps(t, bin))
+	defer func() { _ = svc.Stop() }()
+
+	cfg, _ := svc.deps.GetDirect(context.Background())
+	src := filepath.Join(cfg.SendRoots[0], "sem.txt")
+	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.Send(context.Background(), []string{src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 等 stub 的三行输出被读完
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if lines, lerr := svc.TaskLog(context.Background(), task.ID); lerr == nil && len(lines) >= 3 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st := task.Snapshot().State; st != StateWaiting {
+		t.Fatalf("公告就绪/端口映射不应翻 running, got %s", st)
+	}
+}

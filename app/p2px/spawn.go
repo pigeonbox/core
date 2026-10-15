@@ -368,9 +368,13 @@ func (s *Service) scanLines(t *Task, r interface{ Read([]byte) (int, error) }, i
 				t.Code = strings.TrimSpace(line[i+len("口令："):])
 			}
 		}
-		if t.state == StateWaiting && !strings.HasPrefix(line, "口令") {
+		if t.state == StateWaiting && !strings.HasPrefix(line, "口令") && peerContactLine(line) {
+			// 语义化状态翻转（2026-10-16）：仅对端真实接入（PAKE 启动）才算
+			// 传输中——公告就绪/端口映射等单机自言自语不算,否则发送任务还没
+			// 对端就显示「传输中」,收端幽灵看门狗（只看 waiting）也形同虚设。
+			// 字节推进的翻转在上方进度分支。
 			t.state = StateRunning
-			t.waitingSince = time.Time{} // 出字节/有推进即离开纯等待态
+			t.waitingSince = time.Time{} // 有推进即离开纯等待态
 		}
 		t.log = append(t.log, line)
 		if len(t.log) > logRingSize {
@@ -378,6 +382,17 @@ func (s *Service) scanLines(t *Task, r interface{ Read([]byte) (int, error) }, i
 		}
 		t.mu.Unlock()
 	}
+}
+
+// peerContactLine 判定该行是否代表对端真实接入（发送/接收两侧的 PAKE 启动
+// 措辞,与 client 日志同仓演进）。
+func peerContactLine(line string) bool {
+	for _, kw := range []string{"对端已接入", "已配对且身份核对通过", "开始 PAKE"} {
+		if strings.Contains(line, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseP2pcProgress 解析 p2pc 子进程的进度行（stderr,每 1MB 一条）：
