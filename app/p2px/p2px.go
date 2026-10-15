@@ -186,9 +186,28 @@ func NewService(deps Deps) *Service {
 		monStop: make(chan struct{}),
 	}
 	s.sweepOrphans()
+	s.pruneEndedTasks()
 	s.monWg.Add(1)
 	go s.monitorLoop()
 	return s
+}
+
+// pruneEndedTasks 清理已终态超过 1 小时的任务（内存 map 防无限膨胀；
+// 失败任务常驻会让用户误以为服务持续异常——2026-10-15 易用性扫尾）。
+// 由 NewService 调一次 + monitorLoop 每轮顺带调。
+func (s *Service) pruneEndedTasks() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-time.Hour)
+	for id, t := range s.tasks {
+		t.mu.Lock()
+		done := t.state == StateDone || t.state == StateFailed || t.state == StateCanceled || t.state == "expired"
+		fin := t.finishedAt
+		t.mu.Unlock()
+		if done && !fin.IsZero() && fin.Before(cutoff) {
+			delete(s.tasks, id)
+		}
+	}
 }
 
 // Stop 停机（Cleanup 调用；幂等）：杀全部在途子进程 + 停监控。
