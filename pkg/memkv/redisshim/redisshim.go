@@ -7,7 +7,7 @@
 // 命令结果用 go-redis 的 New*Result 构造器包装，redis.Nil 表不存在——
 // 消费域既有的 redis.Nil 判断两种模式通用，无分叉。
 //
-// 独立成子包是为保住 memkv 主包 stdlib-only 的承诺（本包依赖 go-redis）。
+// 独立成子包是把 redis 客户端依赖隔离在 memkv 主包之外（本包依赖 go-redis）。
 // 历史：anonymous/presign 曾各持一份几乎相同的 memoryKV（且 SetArgs 只在
 // anonymous 侧实现），2026-10-10 合并至此，命令面取两侧超集。
 package redisshim
