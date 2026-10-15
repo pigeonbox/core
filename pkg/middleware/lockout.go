@@ -10,6 +10,7 @@ import (
 
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/kit/async"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -85,16 +86,17 @@ func NewLockout(rdb *redis.Client) *Lockout {
 	return l.withGC()
 }
 
-// withGC 启动内存表周期清扫（Redis 模式下表恒空，空转开销可忽略）
+// withGC 启动内存表周期清扫（Redis 模式下表恒空，空转开销可忽略）。
+// 常驻协程无监督者，GoSafe 兜底防 gcSweep 未来演进引入 panic 带崩进程。
 func (l *Lockout) withGC() *Lockout {
 	l.gcOnce.Do(func() {
-		go func() {
+		async.GoSafe(func() {
 			ticker := time.NewTicker(memLockoutGCPeriod)
 			defer ticker.Stop()
 			for range ticker.C {
 				l.gcSweep()
 			}
-		}()
+		})
 	})
 	return l
 }

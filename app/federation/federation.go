@@ -24,6 +24,7 @@ import (
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/kit/async"
 	"go.uber.org/zap"
 )
 
@@ -258,7 +259,9 @@ func (s *Service) ShareCreated(code string, expiresAt *time.Time) {
 	s.entries[hash] = &entry{expires: expires}
 	s.mu.Unlock()
 
-	go func() {
+	// 异步公告的 fire-and-forget 协程无监督者，announce 走网络面——GoSafe 兜底
+	// 防抖动/驱动异常 panic 带崩进程（失败本就有心跳循环兜底重推）。
+	async.GoSafe(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		delivered := 0
@@ -277,7 +280,7 @@ func (s *Service) ShareCreated(code string, expiresAt *time.Time) {
 			e.confirmed = true
 		}
 		s.mu.Unlock()
-	}()
+	})
 }
 
 // ShareDeleted share 生命周期钩子：撤销公告（best-effort，索引立即移除；
@@ -288,7 +291,9 @@ func (s *Service) ShareDeleted(code string) {
 	delete(s.entries, hash)
 	s.mu.Unlock()
 
-	go func() {
+	// 异步撤销同 ShareCreated：best-effort 协程无监督者，GoSafe 兜底 panic 面
+	//（撤销失败时 registry 条目按公告 TTL 自动过期，不影响正确性）。
+	async.GoSafe(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		for _, cl := range s.clients {
@@ -296,7 +301,7 @@ func (s *Service) ShareDeleted(code string) {
 				logger.Debug("federation 撤销失败(条目 TTL 自动过期)", zap.Error(err))
 			}
 		}
-	}()
+	})
 }
 
 // ResolveInfo 解析结果：口令在联邦内的源节点。

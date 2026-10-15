@@ -11,6 +11,7 @@ import (
 
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
+	"github.com/pigeonbox/kit/async"
 	"go.uber.org/zap"
 )
 
@@ -63,7 +64,9 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 
 	pr, pw := io.Pipe()
 	buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), zipStreamTimeout)
-	go func() {
+	// 组装协程从 HTTP handler 触发、经存储驱动拉流（OpenDAL 14 后端），panic 面
+	// 非空——GoSafe 兜底防驱动异常把下载路径的 panic 放大成进程崩溃。
+	async.GoSafe(func() {
 		defer cancel()
 		zw := zip.NewWriter(pw)
 		var buildErr error
@@ -98,7 +101,7 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 			return
 		}
 		_ = pw.Close()
-	}()
+	})
 	return pr, nil
 }
 

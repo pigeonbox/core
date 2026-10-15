@@ -1,4 +1,4 @@
-// Package memkv 进程内字符串 TTL KV（stdlib-only）：单机内存模式的共享存储原语。
+// Package memkv 进程内字符串 TTL KV（零第三方依赖，kit/async 同为纯标准库实现）：单机内存模式的共享存储原语。
 //
 // 服务对象：Redis 消费方（anonymous/presign 等持窄接口的域）在 redis.host 为空
 // 时的等价兜底——取件码映射、直传会话这类短 TTL 数据。语义对齐 Redis 最小子集：
@@ -14,6 +14,8 @@ package memkv
 import (
 	"sync"
 	"time"
+
+	"github.com/pigeonbox/kit/async"
 )
 
 const (
@@ -136,16 +138,17 @@ func (s *Store) insert(key string, e entry) {
 }
 
 // startGC 惰性启动清扫协程（守护协程，随进程存活——与 lockout 先例一致，
-// Store 为进程级单例量级，不为短生命周期实例设计回收）。
+// Store 为进程级单例量级，不为短生命周期实例设计回收）。常驻无监督，GoSafe
+// 兜底与 lockout 同判。
 func (s *Store) startGC() {
 	s.once.Do(func() {
-		go func() {
+		async.GoSafe(func() {
 			ticker := time.NewTicker(s.gcPeriod)
 			defer ticker.Stop()
 			for range ticker.C {
 				s.sweepLocked()
 			}
-		}()
+		})
 	})
 }
 

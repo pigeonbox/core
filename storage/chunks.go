@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/pigeonbox/core/storage/opendal"
+	"github.com/pigeonbox/kit/async"
 )
 
 // chunkKey 分片对象 key（fs/远端统一 '/' 分隔；fs 侧 filepath.Join 兼容处理）
@@ -53,7 +54,8 @@ func (s *StorageService) MergeChunks(ctx context.Context, uploadID string, total
 		if err := op.WriteStream(ctx, savePath, reader, total); err != nil {
 			return fmt.Errorf("合并分片失败: %w", err)
 		}
-		go func() { _ = s.CleanChunks(context.Background(), uploadID) }()
+		// fire-and-forget 清理走 OpenDAL 驱动，GoSafe 兜底防驱动 panic 带崩进程
+		async.GoSafe(func() { _ = s.CleanChunks(context.Background(), uploadID) })
 		return nil
 	}
 
@@ -84,7 +86,8 @@ func (s *StorageService) MergeChunks(ctx context.Context, uploadID string, total
 		}
 	}
 
-	go func() { _ = s.CleanChunks(context.Background(), uploadID) }()
+	// 同上：本地路径清理虽是纯 fs 操作，与远端路径保持同构兜底
+	async.GoSafe(func() { _ = s.CleanChunks(context.Background(), uploadID) })
 	return nil
 }
 

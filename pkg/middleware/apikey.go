@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/kit/async"
 	"golang.org/x/time/rate"
 )
 
@@ -116,7 +117,9 @@ func allowPerKey(keyID uint, qps, burst int) bool {
 		burst = 2 * qps
 	}
 	perKeyGCOnce.Do(func() {
-		go func() {
+		// 常驻 GC 无监督者，且 Range 内是无 ok 形式类型断言——GoSafe 兜底防
+		// 断言/演进 panic 带崩认证路径所在进程。
+		async.GoSafe(func() {
 			for range time.Tick(10 * time.Minute) {
 				now := time.Now()
 				perKeyLimiters.Range(func(k, v any) bool {
@@ -126,7 +129,7 @@ func allowPerKey(keyID uint, qps, burst int) bool {
 					return true
 				})
 			}
-		}()
+		})
 	})
 	now := time.Now()
 	v, _ := perKeyLimiters.LoadOrStore(keyID, &keyLimiterEntry{

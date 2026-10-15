@@ -41,6 +41,7 @@ import (
 	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/redis"
 	"github.com/pigeonbox/core/storage"
+	"github.com/pigeonbox/kit/async"
 	"go.uber.org/zap"
 
 	configApp "github.com/pigeonbox/core/app/config"
@@ -228,7 +229,9 @@ func startConfigPropagationSubscriber() {
 	} else {
 		propagatedRevision.Store(0)
 	}
-	go func() {
+	// 常驻订阅/对账循环无监督者，applyPropagatedConfig 涉及存储 Reload/通知
+	// 渠道/OIDC 重建，panic 面非空——GoSafe 兜底避免带崩整个副本进程。
+	async.GoSafe(func() {
 		for {
 			sub := rdb.Subscribe(context.Background(), configChangeChannel)
 			for range sub.Channel() {
@@ -238,14 +241,14 @@ func startConfigPropagationSubscriber() {
 			logger.Warn("config propagation subscription lost, retrying in 5s")
 			time.Sleep(5 * time.Second)
 		}
-	}()
-	go func() {
+	})
+	async.GoSafe(func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
 			maybeApplyConfig("poll")
 		}
-	}()
+	})
 	logger.Info("config propagation subscriber started", zap.String("channel", configChangeChannel))
 }
 
