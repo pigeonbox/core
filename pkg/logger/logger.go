@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"gopkg.in/natefinch/lumberjack.v2"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -65,11 +66,11 @@ func Init(cfg *Config) error {
 	// 经 Init，不挂环——面板只呈现 bootstrap 之后的运行日志。
 	ring := newRingCore(level)
 	if cfg.Filename != "" {
-		file, err := os.OpenFile(cfg.Filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		sink, err := openFileSink(cfg)
 		if err != nil {
 			return err
 		}
-		fileCore := zapcore.NewCore(encoder, zapcore.AddSync(file), level)
+		fileCore := zapcore.NewCore(encoder, sink, level)
 		core = zapcore.NewTee(consoleCore, fileCore, ring)
 	} else {
 		core = zapcore.NewTee(consoleCore, ring)
@@ -77,6 +78,31 @@ func Init(cfg *Config) error {
 
 	Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
 	return nil
+}
+
+// openFileSink 按配置构造文件写出端。
+//
+// 行为分叉（2026-10-16 修复：MaxSize/MaxBackups/MaxAge/Compress 四字段此前
+// 定义后从未被消费，日志文件无限增长）：
+//   - MaxSize > 0（显式配置了轮转）→ lumberjack 承接四字段，按大小轮转；
+//   - MaxSize <= 0 → 保持历史 O_APPEND 裸文件行为不变（零配置用户零变化，
+//     不引入意外轮转语义；lumberjack 对 MaxSize=0 会回落 100MB 默认值，
+//     故此处不能用 lumberjack 兜零配置）。
+func openFileSink(cfg *Config) (zapcore.WriteSyncer, error) {
+	if cfg.MaxSize > 0 {
+		return zapcore.AddSync(&lumberjack.Logger{
+			Filename:   cfg.Filename,
+			MaxSize:    cfg.MaxSize,
+			MaxBackups: cfg.MaxBackups,
+			MaxAge:     cfg.MaxAge,
+			Compress:   cfg.Compress,
+		}), nil
+	}
+	file, err := os.OpenFile(cfg.Filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	return zapcore.AddSync(file), nil
 }
 
 func getLevel(level string) zapcore.Level {

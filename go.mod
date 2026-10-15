@@ -33,6 +33,7 @@ require (
 	github.com/pkg/sftp v1.13.11
 	github.com/studio-b12/gowebdav v0.13.0
 	golang.org/x/net v0.60.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (
