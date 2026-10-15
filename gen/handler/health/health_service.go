@@ -14,7 +14,7 @@ import (
 // Health 健康检查
 func Health(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "ok",
 	})
 }
@@ -22,7 +22,7 @@ func Health(ctx context.Context, c *app.RequestContext) {
 // Liveness 存活检查
 func Liveness(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "alive",
 	})
 }
@@ -35,7 +35,7 @@ func Ping(ctx context.Context, c *app.RequestContext) {
 // Readiness 就绪检查
 func Readiness(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "ready",
 	})
 }
@@ -44,7 +44,7 @@ func Readiness(ctx context.Context, c *app.RequestContext) {
 // message 沿用统一响应信封;另附结构化字段供脚本/监控取用。
 func Version(ctx context.Context, c *app.RequestContext) {
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":       200,
+		"code":       0,
 		"message":    version.Version,
 		"version":    version.Version,
 		"commit":     version.BuildCommit,

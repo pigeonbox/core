@@ -46,7 +46,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 	// 无记录回退 yaml（经注入的 DefaultsProvider，修复管理端开关不生效）
 	if !getUserService().RegistrationAllowed(ctx) {
 		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    403,
+			"code":    errcode.CodeForbidden,
 			"message": "用户注册已关闭",
 		})
 		return
@@ -57,7 +57,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -72,7 +72,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 	})
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": err.Error(),
 		})
 		return
@@ -103,7 +103,7 @@ func Login(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -163,7 +163,7 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusOK, map[string]interface{}{
-			"code":    200,
+			"code":    0,
 			"message": "获取成功",
 		})
 		return
@@ -172,7 +172,7 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -182,7 +182,7 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 	user, err := getUserService().GetByID(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "获取用户信息失败",
 		})
 		return
@@ -214,7 +214,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -232,7 +232,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -243,7 +243,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 		Avatar:   req.Avatar,
 	}); err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "更新失败: " + err.Error(),
 		})
 		return
@@ -265,7 +265,7 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -283,7 +283,7 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -291,7 +291,7 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 
 	if err := getUserService().ChangePassword(ctx, userID, req.OldPassword, req.NewPassword); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -320,7 +320,7 @@ func UserStats(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -329,7 +329,7 @@ func UserStats(ctx context.Context, c *app.RequestContext) {
 	stats, err := getUserService().GetStats(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "获取统计失败: " + err.Error(),
 		})
 		return
@@ -373,7 +373,7 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -383,7 +383,7 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	err := c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -403,7 +403,7 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	fileList, err := getUserService().GetUserFiles(ctx, uint(userID), int(page), int(pageSize))
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "获取文件列表失败: " + err.Error(),
 		})
 		return
@@ -436,7 +436,7 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -445,7 +445,7 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 	keys, err := getUserService().ListAPIKeys(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "获取 API Key 失败: " + err.Error(),
 		})
 		return
@@ -467,7 +467,7 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "获取成功",
 		"keys":    respKeys,
 	})
@@ -489,7 +489,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -503,7 +503,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 	}
 	if err := c.Bind(&req); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "请求参数错误: " + err.Error(),
 		})
 		return
@@ -517,7 +517,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 		t, err := time.Parse(time.RFC3339, strings.TrimSpace(req.ExpiresAt))
 		if err != nil {
 			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    400,
+				"code":    errcode.CodeInvalidParam,
 				"message": "expires_at 必须为 RFC3339 格式",
 			})
 			return
@@ -537,7 +537,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 	})
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -545,7 +545,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 
 	// 转换为响应格式
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "API Key 生成成功",
 		"data": map[string]interface{}{
 			"key": result.Key,
@@ -578,7 +578,7 @@ func DeleteAPIKey(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -588,7 +588,7 @@ func DeleteAPIKey(ctx context.Context, c *app.RequestContext) {
 	keyIDStr := c.Param("id")
 	if keyIDStr == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "密钥ID不能为空",
 		})
 		return
@@ -597,7 +597,7 @@ func DeleteAPIKey(ctx context.Context, c *app.RequestContext) {
 	keyID, err := strconv.ParseUint(keyIDStr, 10, 64)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "密钥ID格式错误",
 		})
 		return
@@ -606,14 +606,14 @@ func DeleteAPIKey(ctx context.Context, c *app.RequestContext) {
 	// 调用 service 撤销 API Key
 	if err := getUserService().DeleteAPIKey(ctx, uint(userID), uint(keyID)); err != nil {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    404,
+			"code":    errcode.CodeNotFound,
 			"message": err.Error(),
 		})
 		return
 	}
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "API Key 已撤销",
 	})
 }
@@ -640,7 +640,7 @@ func RevokeAllAPIKeys(ctx context.Context, c *app.RequestContext) {
 	userID, ok := userIDVal.(uint)
 	if !ok {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
 		})
 		return
@@ -649,14 +649,14 @@ func RevokeAllAPIKeys(ctx context.Context, c *app.RequestContext) {
 	revoked, err := getUserService().RevokeAllAPIKeys(ctx, userID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": err.Error(),
 		})
 		return
 	}
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "吊销成功",
 		"data":    map[string]interface{}{"revoked": revoked},
 	})

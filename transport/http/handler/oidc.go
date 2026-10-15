@@ -4,6 +4,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"github.com/pigeonbox/contracts/errcode"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -60,14 +61,14 @@ func clearOIDCNonceCookie(c *app.RequestContext) {
 func OIDCLogin(ctx context.Context, c *app.RequestContext) {
 	svc := getOIDCService()
 	if svc == nil || !svc.Enabled() {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": 404, "message": "OIDC 登录未启用"})
+		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "OIDC 登录未启用"})
 		return
 	}
 	nonce := oidcApp.GenerateNonce()
 	baseURL := getOIDCBaseURL()
 	loginURL, err := svc.LoginURL(ctx, baseURL, nonce)
 	if err != nil {
-		c.JSON(consts.StatusBadGateway, map[string]interface{}{"code": 502, "message": err.Error()})
+		c.JSON(consts.StatusBadGateway, map[string]interface{}{"code": errcode.CodeUnavailable, "message": err.Error()})
 		return
 	}
 	setOIDCNonceCookie(c, nonce)
@@ -79,7 +80,7 @@ func OIDCLogin(ctx context.Context, c *app.RequestContext) {
 func OIDCCallback(ctx context.Context, c *app.RequestContext) {
 	svc := getOIDCService()
 	if svc == nil || !svc.Enabled() {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": 404, "message": "OIDC 登录未启用"})
+		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "OIDC 登录未启用"})
 		return
 	}
 	// nonce Cookie 一次性：无论成败回调结束即作废，旧 code+state 重放不再可用

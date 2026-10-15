@@ -65,21 +65,21 @@ esac
 
 func testDeps(t *testing.T, binPath string) Deps {
 	t.Helper()
-	rootsDir := t.TempDir()  // 夹具目录只建一次——闭包内每次调用 t.TempDir()
-	inboxDir := t.TempDir()  // 会产出新路径,收件区/白名单地址必须稳定
+	rootsDir := t.TempDir() // 夹具目录只建一次——闭包内每次调用 t.TempDir()
+	inboxDir := t.TempDir() // 会产出新路径,收件区/白名单地址必须稳定
 	return Deps{
-		Standalone: func() bool { return true },
-		DataDir:    t.TempDir(),
+		Standalone:      func() bool { return true },
+		DataDir:         t.TempDir(),
 		MonitorInterval: 50 * time.Millisecond,
 		GetDirect: func(ctx context.Context) (conf.P2PDirectConfig, bool) {
 			return conf.P2PDirectConfig{
-				Enabled:        true,
-				RegistryURL:    "http://127.0.0.1:1",
-				SendRoots:      []string{rootsDir},
-				RecvDir:        inboxDir,
-				MaxTaskBytes:   1024 * 1024, // 1MB
+				Enabled:         true,
+				RegistryURL:     "http://127.0.0.1:1",
+				SendRoots:       []string{rootsDir},
+				RecvDir:         inboxDir,
+				MaxTaskBytes:    1024 * 1024, // 1MB
 				InboxQuotaBytes: 10 * 1024 * 1024,
-				BinaryPath:     binPath,
+				BinaryPath:      binPath,
 			}, true
 		},
 	}

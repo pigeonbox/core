@@ -8,7 +8,7 @@ import (
 // ContentDispositionAttachment 构造下载 Content-Disposition（RFC 6266 + 5987）：
 //   - 引号/反斜杠/控制字符消毒防头断义；
 //   - 纯 ASCII 名只给 filename=；
-//   - 非 ASCII 名（中文等）补 filename*=UTF-8''<pct-encoded>，且 filename= 改用
+//   - 非 ASCII 名（中文等）补 filename*=UTF-8”<pct-encoded>，且 filename= 改用
 //     纯 ASCII 兜底名——老客户端（Android 9 下载器等）不认 filename*，遇到裸
 //     UTF-8 字节会把整个头丢弃变成 download.bin，兜底名至少保住扩展名与可辨识度。
 //

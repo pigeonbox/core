@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/pigeonbox/contracts/errcode"
 	qrcode "github.com/pigeonbox/contracts/gen/qrcode"
 	qrcodeservice "github.com/pigeonbox/core/app/qrcode"
 )
@@ -59,7 +60,7 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -68,7 +69,7 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 	// 验证二维码数据
 	if req.Data == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "二维码数据不能为空",
 		})
 		return
@@ -83,7 +84,7 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 	// 验证数据长度
 	if len(req.Data) > 4296 {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "二维码数据过长，最大支持4296个字符",
 		})
 		return
@@ -93,7 +94,7 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 	pngData, err := qrcodeservice.GenerateQRCode(req.Data, size)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "生成二维码失败: " + err.Error(),
 		})
 		return
@@ -126,7 +127,7 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 		base64Data, err := qrcodeservice.GenerateQRCodeBase64(req.Data, size)
 		if err != nil {
 			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-				"code":    500,
+				"code":    errcode.CodeInternal,
 				"message": "生成base64数据失败: " + err.Error(),
 			})
 			return
@@ -155,7 +156,7 @@ func GetQRCode(ctx context.Context, c *app.RequestContext) {
 	storedQR, exists := qrcodeGet(req.ID)
 	if !exists {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    404,
+			"code":    errcode.CodeNotFound,
 			"message": "二维码不存在",
 		})
 		return

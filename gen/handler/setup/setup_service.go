@@ -5,6 +5,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"github.com/pigeonbox/contracts/errcode"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -34,7 +35,7 @@ func CheckInitialization(ctx context.Context, c *app.RequestContext) {
 	initialized, err := getSetupService().IsSystemInitialized(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "检查系统初始化状态失败: " + err.Error(),
 		})
 		return
@@ -56,7 +57,7 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "请求参数错误: " + err.Error(),
 		})
 		return
@@ -65,7 +66,7 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 	// 验证必填字段
 	if err := validateInitializeRequest(&req); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -75,14 +76,14 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 	initialized, err := getSetupService().IsSystemInitialized(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "检查系统初始化状态失败: " + err.Error(),
 		})
 		return
 	}
 	if initialized {
 		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    403,
+			"code":    errcode.CodeForbidden,
 			"message": "系统已初始化，禁止重复初始化",
 		})
 		return
@@ -96,7 +97,7 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 	})
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "系统初始化失败: " + err.Error(),
 		})
 		return

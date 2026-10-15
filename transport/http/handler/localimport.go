@@ -3,6 +3,7 @@ package handler
 
 import (
 	"context"
+	"github.com/pigeonbox/contracts/errcode"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -18,7 +19,7 @@ import (
 // 仅登录用户可用；路径必须落在 upload.local_import.roots 白名单内。
 func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 	if shareSvc == nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "share service 未就绪"})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "share service 未就绪"})
 		return
 	}
 	uid, ok := userIDFromCtx(c)
@@ -35,7 +36,7 @@ func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 		CustomCode  string `json:"custom_code"`
 	}
 	if err := c.BindJSON(&body); err != nil || body.Path == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "请求体无效（需 path）"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "请求体无效（需 path）"})
 		return
 	}
 	if body.ExpireStyle == "" {
@@ -45,7 +46,7 @@ func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 		}
 	}
 	if err := utils.CheckExpireStyleAllowed(body.ExpireStyle); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
 	}
 	passwordHash, ok := resolveSharePassword(c, body.RequireAuth, body.Password)
@@ -64,7 +65,7 @@ func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 		OwnerIP:      middleware.ClientIP(c),
 	})
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
 	}
 
@@ -76,7 +77,7 @@ func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 	})
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "导入成功",
 		"data": map[string]interface{}{
 			"code":      result.Code,

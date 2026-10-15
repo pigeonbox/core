@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/errors"
 	pkgmw "github.com/pigeonbox/core/pkg/middleware"
@@ -143,7 +144,7 @@ func respondUnauthorized(c *app.RequestContext, message string) {
 func respondForbidden(c *app.RequestContext, message string) {
 	c.Abort()
 	c.JSON(http.StatusForbidden, map[string]interface{}{
-		"code":    403,
+		"code":    errcode.CodeForbidden,
 		"message": message,
 	})
 }

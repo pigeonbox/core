@@ -101,7 +101,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -111,21 +111,21 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	// 字节计数打成负数绕过日配额）
 	if req.FileName == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "文件名不能为空",
 		})
 		return
 	}
 	if req.FileSize <= 0 {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "文件大小必须大于0",
 		})
 		return
 	}
 	if req.ChunkSize <= 0 {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "分片大小必须大于0",
 		})
 		return
@@ -134,7 +134,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	// 虚高总数可刷 DB 行/逐片存储写，不足总数制造 Complete 永不满足的僵尸会话
 	if err := chunkService.ValidateChunkPlan(req.FileSize, int64(req.ChunkSize), int(req.TotalChunks)); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -157,7 +157,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	// 排除路径语义（2026-10-05 审计 P0 配套）
 	if !validUploadID(uploadID) {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "文件哈希格式非法（仅支持十六进制/UUID）",
 		})
 		return
@@ -181,7 +181,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 					}
 					if password == "" {
 						c.JSON(consts.StatusBadRequest, map[string]interface{}{
-							"code":    400,
+							"code":    errcode.CodeInvalidParam,
 							"message": "开启密码保护时必须提供密码",
 						})
 						return
@@ -189,7 +189,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 					hash, perr := utils.HashPassword(password)
 					if perr != nil {
 						c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-							"code":    500,
+							"code":    errcode.CodeInternal,
 							"message": "密码处理失败",
 						})
 						return
@@ -275,13 +275,13 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 		// 他人进行中的会话（已含分片数据）→ 409，防截胡（2026-10-05 审计 P1）
 		if errors.Is(err, chunkService.ErrSessionConflict) {
 			c.JSON(consts.StatusConflict, map[string]interface{}{
-				"code":    409,
+				"code":    errcode.CodeConflict,
 				"message": "该文件已有进行中的上传会话，请稍后重试或更换文件",
 			})
 			return
 		}
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "初始化上传失败: " + err.Error(),
 		})
 		return
@@ -318,7 +318,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 
 	if uploadID == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "上传ID不能为空",
 		})
 		return
@@ -327,7 +327,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	chunkIndex, err := strconv.Atoi(chunkIndexStr)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "分片索引格式错误",
 		})
 		return
@@ -338,7 +338,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	// 不存在的 uploadID 跳过校验直接落盘（存储侧彼时无逃逸守卫，构成任意路径写）。
 	if !validUploadID(uploadID) {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "上传ID格式非法",
 		})
 		return
@@ -346,7 +346,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	info, ierr := getChunkService().GetUploadInfo(ctx, uploadID)
 	if ierr != nil {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    404,
+			"code":    errcode.CodeNotFound,
 			"message": "上传记录不存在",
 		})
 		return
@@ -363,7 +363,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	file, err := c.FormFile("chunk")
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "请上传分片文件",
 		})
 		return
@@ -373,7 +373,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	src, err := file.Open()
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "读取文件失败: " + err.Error(),
 		})
 		return
@@ -385,7 +385,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	_, err = io.ReadFull(src, data)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "读取文件内容失败: " + err.Error(),
 		})
 		return
@@ -411,7 +411,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 		}
 		if expected != "" && subtle.ConstantTimeCompare([]byte(digest), []byte(expected)) != 1 {
 			c.JSON(consts.StatusUnprocessableEntity, map[string]interface{}{
-				"code":    422,
+				"code":    errcode.CodeChunkInvalid,
 				"message": "分片哈希校验失败，请重试该分片",
 				"data":    map[string]interface{}{"chunk_index": chunkIndex, "retryable": true},
 			})
@@ -423,7 +423,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	err = getChunkService().SaveChunkData(ctx, uploadID, chunkIndex, data)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "保存分片失败: " + err.Error(),
 		})
 		return
@@ -440,7 +440,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	result, err := getChunkService().UploadChunk(ctx, uploadReq)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "记录分片信息失败: " + err.Error(),
 		})
 		return
@@ -467,7 +467,7 @@ func ChunkUploadStatus(ctx context.Context, c *app.RequestContext) {
 	uploadID := c.Param("upload_id")
 	if uploadID == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "上传ID不能为空",
 		})
 		return
@@ -477,7 +477,7 @@ func ChunkUploadStatus(ctx context.Context, c *app.RequestContext) {
 	info, err := getChunkService().GetUploadInfo(ctx, uploadID)
 	if err != nil {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    404,
+			"code":    errcode.CodeNotFound,
 			"message": "上传记录不存在",
 		})
 		return
@@ -496,7 +496,7 @@ func ChunkUploadStatus(ctx context.Context, c *app.RequestContext) {
 	uploadedIndexes, err := getChunkService().GetUploadedChunkIndexes(ctx, uploadID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "获取上传进度失败: " + err.Error(),
 		})
 		return
@@ -599,7 +599,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	uploadID := c.Param("upload_id")
 	if uploadID == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "上传ID不能为空",
 		})
 		return
@@ -610,7 +610,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -620,7 +620,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	info, err := getChunkService().GetUploadInfo(ctx, uploadID)
 	if err != nil {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    404,
+			"code":    errcode.CodeNotFound,
 			"message": "上传记录不存在",
 		})
 		return
@@ -639,7 +639,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	uploadedIndexes, err := getChunkService().GetUploadedChunkIndexes(ctx, uploadID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "检查上传状态失败: " + err.Error(),
 		})
 		return
@@ -647,7 +647,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 
 	if len(uploadedIndexes) < info.TotalChunks {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": fmt.Sprintf("还有 %d 个分片未上传", info.TotalChunks-len(uploadedIndexes)),
 		})
 		return
@@ -657,7 +657,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	relativePath, err := getChunkService().MergeUpload(ctx, uploadID, info.TotalChunks, info.FileName)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "合并分片失败: " + err.Error(),
 		})
 		return
@@ -735,7 +735,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	// 计算过期时间
 	if err := utils.CheckExpireStyleAllowed(req.ExpireStyle); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return
@@ -771,7 +771,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		}
 		if password == "" {
 			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    400,
+				"code":    errcode.CodeInvalidParam,
 				"message": "开启密码保护时必须提供密码",
 			})
 			return
@@ -779,7 +779,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		hash, pwErr := utils.HashPassword(password)
 		if pwErr != nil {
 			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-				"code":    500,
+				"code":    errcode.CodeInternal,
 				"message": "密码处理失败",
 			})
 			return
@@ -874,7 +874,7 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	uploadID := c.Param("upload_id")
 	if uploadID == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "上传ID不能为空",
 		})
 		return
@@ -886,7 +886,7 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	// RemoveAll(chunks/..) 即删整个 data 根（库+全部上传文件）。
 	if !validUploadID(uploadID) {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "上传ID格式非法",
 		})
 		return
@@ -894,7 +894,7 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	info, ierr := getChunkService().GetUploadInfo(ctx, uploadID)
 	if ierr != nil {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    404,
+			"code":    errcode.CodeNotFound,
 			"message": "上传记录不存在",
 		})
 		return
@@ -917,7 +917,7 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	err = getChunkService().DeleteUpload(ctx, uploadID)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "取消上传失败: " + err.Error(),
 		})
 		return

@@ -9,6 +9,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"github.com/pigeonbox/contracts/errcode"
 	"mime/multipart"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -41,14 +42,14 @@ func totalDeclaredSize(files []*multipart.FileHeader) int64 {
 func GuestSubmitFiles(ctx context.Context, c *app.RequestContext) {
 	svc := getRequestService()
 	if svc == nil || shareSvc == nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "service 未就绪"})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "service 未就绪"})
 		return
 	}
 	token := c.Param("token")
 
 	form, err := c.MultipartForm()
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "解析 multipart 失败: " + err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "解析 multipart 失败: " + err.Error()})
 		return
 	}
 	files := form.File["files"]
@@ -56,13 +57,13 @@ func GuestSubmitFiles(ctx context.Context, c *app.RequestContext) {
 		files = form.File["file"]
 	}
 	if len(files) == 0 || len(files) > 100 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "files 需为 1-100 项"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "files 需为 1-100 项"})
 		return
 	}
 
 	// 预检链接（约束在 Submit 内还会强校验；此处 fail-fast 避免无效落盘）
 	if _, err := svc.GetPublic(ctx, token); err != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": 404, "message": err.Error()})
+		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": err.Error()})
 		return
 	}
 
@@ -83,7 +84,7 @@ func GuestSubmitFiles(ctx context.Context, c *app.RequestContext) {
 	shareResult, err := svc.Submit(ctx, token, stored, guestIP)
 	if err != nil {
 		cleanupStored(ctx, st, stored)
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
 	}
 
@@ -94,7 +95,7 @@ func GuestSubmitFiles(ctx context.Context, c *app.RequestContext) {
 	})
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "投递成功",
 		"data":    map[string]interface{}{"file_count": len(stored)},
 	})

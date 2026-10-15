@@ -85,7 +85,7 @@ func parsePage(c *app.RequestContext) (page, pageSize int) {
 // 契约，只收敛调用点、不改线上响应体。
 func respondLegacyPage(c *app.RequestContext, items any, total int64, page, pageSize int) {
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "success",
 		"data": map[string]interface{}{
 			"items":     items,

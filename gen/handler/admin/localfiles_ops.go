@@ -6,6 +6,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"github.com/pigeonbox/contracts/errcode"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -41,7 +42,7 @@ func AdminListLocalFiles(ctx context.Context, c *app.RequestContext) {
 	entries, err := getOpsShareService().ListLocalFiles(int(req.GetRoot()), req.GetDir())
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminListLocalFilesResp{
-			Code: 400, Message: err.Error(),
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
@@ -68,13 +69,13 @@ func AdminDeleteLocalFile(ctx context.Context, c *app.RequestContext) {
 	_ = c.BindAndValidate(&req)
 	if req.Path == "" {
 		c.JSON(consts.StatusBadRequest, &admin.AdminDeleteLocalFileResp{
-			Code: 400, Message: "缺少 path",
+			Code: errcode.CodeInvalidParam, Message: "缺少 path",
 		})
 		return
 	}
 	if err := getOpsShareService().DeleteLocalFile(int(req.GetRoot()), req.Path); err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminDeleteLocalFileResp{
-			Code: 400, Message: err.Error(),
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
@@ -90,7 +91,7 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminImportLocalFileReq
 	if err := c.BindAndValidate(&req); err != nil || req.Path == "" {
 		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
-			Code: 400, Message: "请求体无效（需 root+path）",
+			Code: errcode.CodeInvalidParam, Message: "请求体无效（需 root+path）",
 		})
 		return
 	}
@@ -104,7 +105,7 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 	}
 	if err := utils.CheckExpireStyleAllowed(expireStyle); err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
-			Code: 400, Message: err.Error(),
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
@@ -112,19 +113,19 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 	if err != nil {
 		if errors.Is(err, utils.ErrPasswordRequired) {
 			c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
-				Code: 400, Message: "开启密码保护时必须提供密码",
+				Code: errcode.CodeInvalidParam, Message: "开启密码保护时必须提供密码",
 			})
 			return
 		}
 		c.JSON(consts.StatusInternalServerError, &admin.AdminImportLocalFileResp{
-			Code: 500, Message: "密码处理失败",
+			Code: errcode.CodeInternal, Message: "密码处理失败",
 		})
 		return
 	}
 	absPath, err := shareService.LocalImportAbsPath(int(req.GetRoot()), req.Path)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
-			Code: 400, Message: err.Error(),
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
@@ -139,7 +140,7 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 	})
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
-			Code: 400, Message: err.Error(),
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
@@ -164,13 +165,13 @@ func AdminTestSMTP(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminTestSMTPReq
 	if err := c.BindAndValidate(&req); err != nil || req.To == "" {
 		c.JSON(consts.StatusBadRequest, &admin.AdminTestSMTPResp{
-			Code: 400, Message: "需要收件邮箱 to",
+			Code: errcode.CodeInvalidParam, Message: "需要收件邮箱 to",
 		})
 		return
 	}
 	if err := customHandler.TestSMTPNow(req.To); err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminTestSMTPResp{
-			Code: 400, Message: err.Error(),
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
@@ -185,7 +186,7 @@ func AdminTestSMTP(ctx context.Context, c *app.RequestContext) {
 func AdminTestOIDC(ctx context.Context, c *app.RequestContext) {
 	if err := customHandler.TestOIDCDiscovery(ctx); err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminTestOIDCResp{
-			Code: 400, Message: err.Error(),
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}

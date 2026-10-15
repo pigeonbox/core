@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"github.com/pigeonbox/contracts/errcode"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -153,7 +154,7 @@ func metricsHandler(ctx context.Context, c *app.RequestContext) {
 	mfs, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "failed to gather metrics: " + err.Error(),
 		})
 		return

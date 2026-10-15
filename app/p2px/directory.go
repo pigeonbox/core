@@ -16,8 +16,8 @@ import (
 type DirectoryPeer struct {
 	NodeID      string `json:"node_id"`
 	Name        string `json:"name"`
-	URL         string `json:"url"`         // 对外基址(NAT 后可为空)
-	BoxPub      string `json:"box_pub"`     // X25519 密封公钥 hex
+	URL         string `json:"url"`          // 对外基址(NAT 后可为空)
+	BoxPub      string `json:"box_pub"`      // X25519 密封公钥 hex
 	OnlineSince int64  `json:"online_since"` // 租约起始 unix 秒
 }
 

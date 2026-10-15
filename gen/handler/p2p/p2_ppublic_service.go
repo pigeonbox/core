@@ -5,6 +5,7 @@ package p2p
 
 import (
 	"context"
+	"github.com/pigeonbox/contracts/errcode"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -23,12 +24,12 @@ func SetInviteNotifier(fn func(fromName, code, note string)) { inviteNotifier = 
 func PostP2PInvite(ctx context.Context, c *app.RequestContext) {
 	var req p2p.PostP2PInviteReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: 400, Message: "请求体无效"})
+		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: errcode.CodeInvalidParam, Message: "请求体无效"})
 		return
 	}
 	inv, err := getP2px().AddInvite(req.GetCode(), req.GetFromName(), req.GetNote())
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: 400, Message: err.Error()})
+		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
 		return
 	}
 	if inviteNotifier != nil {

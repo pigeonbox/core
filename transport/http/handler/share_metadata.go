@@ -5,6 +5,7 @@ package handler
 
 import (
 	"context"
+	"github.com/pigeonbox/contracts/errcode"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -15,18 +16,18 @@ import (
 // ShareMetadata 元数据查询：供取件页渲染文件名/大小/有效期/剩余次数
 func ShareMetadata(ctx context.Context, c *app.RequestContext) {
 	if shareSvc == nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "share service 未就绪"})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "share service 未就绪"})
 		return
 	}
 	code := c.Param("code")
 	if code == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "缺少取件码"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "缺少取件码"})
 		return
 	}
 	meta, err := getShareService().GetShareMetadata(ctx, code)
 	if err != nil {
 		// 不区分「不存在/已过期/被封禁」，统一 404 降低探测面
-		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": 404, "message": "分享不存在或已过期"})
+		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "分享不存在或已过期"})
 		return
 	}
 	resp.Success(c, meta)

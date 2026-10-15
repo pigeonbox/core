@@ -39,7 +39,7 @@ func GetPreview(ctx context.Context, c *app.RequestContext) {
 	code := c.Param("code")
 	if code == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "请提供分享码",
 		})
 		return
@@ -66,7 +66,7 @@ func GetPreview(ctx context.Context, c *app.RequestContext) {
 		case errors.Is(err, previewapp.ErrShareNotFound):
 			// 不区分「不存在/已过期」，统一 404 降低探测面
 			c.JSON(consts.StatusNotFound, map[string]interface{}{
-				"code":    404,
+				"code":    errcode.CodeNotFound,
 				"message": "分享不存在或已过期",
 			})
 		case errors.Is(err, previewapp.ErrShareBlocked):
@@ -79,12 +79,12 @@ func GetPreview(ctx context.Context, c *app.RequestContext) {
 			})
 		case errors.Is(err, previewapp.ErrPreviewBusy):
 			c.JSON(consts.StatusServiceUnavailable, map[string]interface{}{
-				"code":    503,
+				"code":    errcode.CodeUnavailable,
 				"message": "预览生成排队中，请稍后重试",
 			})
 		case errors.Is(err, previewapp.ErrPreviewUnavailable):
 			c.JSON(consts.StatusNotFound, map[string]interface{}{
-				"code":    404,
+				"code":    errcode.CodeNotFound,
 				"message": "预览不可用",
 			})
 		default:
@@ -95,7 +95,7 @@ func GetPreview(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "获取成功",
 		"data":    preview,
 	})

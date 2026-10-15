@@ -16,11 +16,11 @@ import "github.com/pigeonbox/contracts/errcode"
 //	1007 → 10006 Unavailable
 //	1008 → 10005 RateLimit
 const (
-	CodeSuccess            = errcode.CodeSuccess
-	CodeBadRequest         = errcode.CodeInvalidParam
-	CodeUnauthorized       = errcode.CodeUnauthorized
-	CodeForbidden          = errcode.CodeForbidden
-	CodeNotFound           = errcode.CodeNotFound
+	CodeSuccess      = errcode.CodeSuccess
+	CodeBadRequest   = errcode.CodeInvalidParam
+	CodeUnauthorized = errcode.CodeUnauthorized
+	CodeForbidden    = errcode.CodeForbidden
+	CodeNotFound     = errcode.CodeNotFound
 	// CodeConflict=10016：contracts v0.15.1 起可直接引 errcode.CodeConflict（v0.22.0 tag 时
 	// 该常量未发布故本地同值，此处随 deps 仪式切回引用，值不变）。
 	// 侧该常量随下一版 tag 发布，届时改回 errcode.CodeConflict 引用（跨仓

@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pigeonbox/contracts/errcode"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -95,7 +96,7 @@ func deploymentGate() app.HandlerFunc {
 	}
 	return func(ctx context.Context, c *app.RequestContext) {
 		if isAdminPlanePath(string(c.Request.URI().Path())) {
-			c.JSON(consts.StatusNotFound, map[string]interface{}{"code": 404, "message": "not found"})
+			c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "not found"})
 			c.Abort()
 			return
 		}

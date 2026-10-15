@@ -15,6 +15,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"go.uber.org/zap"
 
+	"github.com/pigeonbox/contracts/errcode"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
 	oidcApp "github.com/pigeonbox/core/app/oidc"
 	presignHandler "github.com/pigeonbox/core/gen/handler/presign"
@@ -25,7 +26,6 @@ import (
 	"github.com/pigeonbox/core/repo/db"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
 	customMw "github.com/pigeonbox/core/transport/http/middleware"
-	"github.com/pigeonbox/contracts/errcode"
 )
 
 // customizedRegister 注册自定义路由（不走 thrift IDL 生成）。
@@ -57,7 +57,7 @@ func customizedRegister(r *server.Hertz) {
 			return
 		}
 		if !middleware.CSRFAllowed(c, viaCookie) {
-			c.JSON(consts.StatusForbidden, map[string]interface{}{"code": 403, "message": "缺少 CSRF 头"})
+			c.JSON(consts.StatusForbidden, map[string]interface{}{"code": errcode.CodeForbidden, "message": "缺少 CSRF 头"})
 			return
 		}
 		newToken, err := auth.RefreshToken(ctx, oldToken)
@@ -68,7 +68,7 @@ func customizedRegister(r *server.Hertz) {
 		}
 		middleware.SetSessionCookie(c, newToken, int(auth.SessionExpiry().Seconds()))
 		c.JSON(consts.StatusOK, map[string]interface{}{
-			"code": 200, "message": "ok",
+			"code": 0, "message": "ok",
 			"data": map[string]string{"token": newToken},
 		})
 	})
@@ -152,7 +152,7 @@ func customizedRegister(r *server.Hertz) {
 			auth.RevokeToken(ctx, token, remaining)
 		}
 		middleware.ClearSessionCookie(c)
-		c.JSON(consts.StatusOK, map[string]interface{}{"code": 200, "message": "已退出登录"})
+		c.JSON(consts.StatusOK, map[string]interface{}{"code": 0, "message": "已退出登录"})
 	})
 
 	// ===== 一键吊销全部 API Key（JWT-only：Key 不能管 Key；应急止损，见设计文档 §9.3）=====
@@ -207,7 +207,7 @@ func customizedRegister(r *server.Hertz) {
 		username, _ := c.Get("username")
 		role, _ := c.Get("role")
 		c.JSON(consts.StatusOK, map[string]interface{}{
-			"code":    200,
+			"code":    0,
 			"message": "ok",
 			"data": map[string]interface{}{
 				"id":       uid,
@@ -277,7 +277,7 @@ func customizedRegister(r *server.Hertz) {
 		path := string(c.Request.URI().Path())
 		if isAPIPath(path) {
 			c.JSON(consts.StatusNotFound, map[string]interface{}{
-				"code":    404,
+				"code":    errcode.CodeNotFound,
 				"message": "API endpoint not found",
 			})
 			return

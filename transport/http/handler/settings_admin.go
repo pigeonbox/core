@@ -5,6 +5,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"github.com/pigeonbox/contracts/errcode"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -44,11 +45,11 @@ func TestOIDCDiscovery(ctx context.Context) error {
 func AdminTestSMTP(ctx context.Context, c *app.RequestContext) {
 	var req adminTestSMTPReq
 	if err := c.BindJSON(&req); err != nil || strings.TrimSpace(req.To) == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "需要收件邮箱 to"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "需要收件邮箱 to"})
 		return
 	}
 	if err := TestSMTPNow(req.To); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
 	}
 	resp.SuccessWithMessage(c, "测试邮件已发送", nil)
@@ -58,7 +59,7 @@ func AdminTestSMTP(ctx context.Context, c *app.RequestContext) {
 // 验证当前生效 OIDC 段的 issuer discovery 端点可达且合法。
 func AdminTestOIDC(ctx context.Context, c *app.RequestContext) {
 	if err := TestOIDCDiscovery(ctx); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
 	}
 	resp.SuccessWithMessage(c, "OIDC discovery 验证通过", nil)

@@ -38,12 +38,12 @@ func resolveSharePassword(c *app.RequestContext, requireAuth bool, password stri
 	}
 	if errors.Is(err, utils.ErrPasswordRequired) {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code": 400, "message": "开启密码保护时必须提供密码",
+			"code": errcode.CodeInvalidParam, "message": "开启密码保护时必须提供密码",
 		})
 		return "", false
 	}
 	c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-		"code": 500, "message": "密码处理失败",
+		"code": errcode.CodeInternal, "message": "密码处理失败",
 	})
 	return "", false
 }
@@ -70,7 +70,7 @@ func parsePage(c *app.RequestContext) (page, pageSize int) {
 // 契约，只收敛调用点、不改线上响应体。
 func respondLegacyPage(c *app.RequestContext, items any, total int64, page, pageSize int) {
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "success",
 		"data": map[string]interface{}{
 			"items":     items,
@@ -119,7 +119,7 @@ func saveUploadEntries(ctx context.Context, c *app.RequestContext, st storage.St
 		if serr != nil {
 			cleanupStored(ctx, st, stored)
 			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-				"code": 500, "message": fmt.Sprintf("文件保存失败: %v", serr),
+				"code": errcode.CodeInternal, "message": fmt.Sprintf("文件保存失败: %v", serr),
 			})
 			return nil, false
 		}

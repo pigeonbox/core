@@ -298,7 +298,7 @@ func Mine(ctx context.Context, c *app.RequestContext) {
 	pageSize, _ := strconv.Atoi(string(c.Query("page_size")))
 	data, err := getService().ListForUser(ctx, uid, page, pageSize)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": err.Error()})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
 		return
 	}
 	items := make([]*notifymodel.UserNotifyItemData, 0, len(data.Items))
@@ -342,7 +342,7 @@ func UnreadCount(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getService().UnreadCountForUser(ctx, uid)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": err.Error()})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
 		return
 	}
 	c.JSON(consts.StatusOK, &notifymodel.UnreadCountResp{
@@ -362,12 +362,12 @@ func MarkRead(ctx context.Context, c *app.RequestContext) {
 	// body 可为空（历史语义：只支持全部已读）
 	_ = c.BindAndValidate(&req)
 	if req.All == nil || !*req.All {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "仅支持 all=true"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "仅支持 all=true"})
 		return
 	}
 	n, err := getService().MarkAllReadForUser(ctx, uid)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": err.Error()})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
 		return
 	}
 	c.JSON(consts.StatusOK, &notifymodel.MarkReadResp{

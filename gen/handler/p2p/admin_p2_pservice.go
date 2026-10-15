@@ -7,6 +7,7 @@ package p2p
 import (
 	"context"
 	"fmt"
+	"github.com/pigeonbox/contracts/errcode"
 	"path/filepath"
 	"strings"
 	"time"
@@ -68,11 +69,11 @@ func taskToModel(t *p2px.TaskSnapshot) *p2p.P2pTask {
 }
 
 func badReq(c *app.RequestContext, msg string) {
-	c.JSON(consts.StatusBadRequest, map[string]any{"code": 400, "message": msg})
+	c.JSON(consts.StatusBadRequest, map[string]any{"code": errcode.CodeInvalidParam, "message": msg})
 }
 
 func okData(c *app.RequestContext, data map[string]any) {
-	c.JSON(consts.StatusOK, map[string]any{"code": 200, "message": "success", "data": data})
+	c.JSON(consts.StatusOK, map[string]any{"code": 0, "message": "success", "data": data})
 }
 
 // 审计（与 admin 域同表 admin_operation_logs；wiring 注入写者，nil=跳过）。
@@ -334,7 +335,7 @@ func AdminP2pInvitePush(ctx context.Context, c *app.RequestContext) {
 func AdminP2pDirectory(ctx context.Context, c *app.RequestContext) {
 	peers, err := getP2px().DirectoryPeers(ctx)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]any{"code": 500, "message": err.Error()})
+		c.JSON(consts.StatusInternalServerError, map[string]any{"code": errcode.CodeInternal, "message": err.Error()})
 		return
 	}
 	out := make([]*p2p.P2pDirectoryPeer, 0, len(peers))

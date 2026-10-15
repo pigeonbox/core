@@ -7,6 +7,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/pigeonbox/contracts/errcode"
 	storage "github.com/pigeonbox/contracts/gen/storage"
 	storagesvc "github.com/pigeonbox/core/app/storage"
 )
@@ -25,7 +26,7 @@ func GetStorageInfo(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &storage.GetStorageInfoResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "请求参数错误: " + err.Error(),
 		})
 		return
@@ -35,7 +36,7 @@ func GetStorageInfo(ctx context.Context, c *app.RequestContext) {
 	info, err := storageService.GetStorageInfo(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, &storage.GetStorageInfoResp{
-			Code:    500,
+			Code:    errcode.CodeInternal,
 			Message: "获取存储信息失败: " + err.Error(),
 		})
 		return
@@ -75,7 +76,7 @@ func SwitchStorage(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &storage.SwitchStorageResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "请求参数错误: " + err.Error(),
 		})
 		return
@@ -83,7 +84,7 @@ func SwitchStorage(ctx context.Context, c *app.RequestContext) {
 
 	if req.Type == "" {
 		c.JSON(consts.StatusBadRequest, &storage.SwitchStorageResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "存储类型不能为空",
 		})
 		return
@@ -92,7 +93,7 @@ func SwitchStorage(ctx context.Context, c *app.RequestContext) {
 	// 切换存储
 	if err := storageService.SwitchStorage(ctx, req.Type); err != nil {
 		c.JSON(consts.StatusInternalServerError, &storage.SwitchStorageResp{
-			Code:    500,
+			Code:    errcode.CodeInternal,
 			Message: "存储切换失败: " + err.Error(),
 		})
 		return
@@ -119,7 +120,7 @@ func TestStorageConnection(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &storage.TestStorageConnectionResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "请求参数错误: " + err.Error(),
 		})
 		return
@@ -128,7 +129,7 @@ func TestStorageConnection(ctx context.Context, c *app.RequestContext) {
 	// 测试存储连接
 	if err := storageService.TestStorageConnection(ctx, req.Type); err != nil {
 		c.JSON(consts.StatusBadRequest, &storage.TestStorageConnectionResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "连接测试失败: " + err.Error(),
 		})
 		return
@@ -154,7 +155,7 @@ func UpdateStorageConfig(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &storage.UpdateStorageConfigResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "请求参数错误: " + err.Error(),
 		})
 		return
@@ -162,7 +163,7 @@ func UpdateStorageConfig(ctx context.Context, c *app.RequestContext) {
 
 	if req.Type == "" {
 		c.JSON(consts.StatusBadRequest, &storage.UpdateStorageConfigResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "存储类型不能为空",
 		})
 		return
@@ -182,7 +183,7 @@ func UpdateStorageConfig(ctx context.Context, c *app.RequestContext) {
 	// 更新存储配置
 	if err := storageService.UpdateStorageConfig(ctx, updateReq); err != nil {
 		c.JSON(consts.StatusInternalServerError, &storage.UpdateStorageConfigResp{
-			Code:    500,
+			Code:    errcode.CodeInternal,
 			Message: "配置更新失败: " + err.Error(),
 		})
 		return

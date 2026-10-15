@@ -83,7 +83,7 @@ func parseMultiCommonFromJSON(ctx context.Context, c *app.RequestContext) *multi
 	}
 	if err := json.Unmarshal(c.Request.Body(), &body); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": "请求体解析失败: " + err.Error(),
 		})
 		return nil
@@ -107,7 +107,7 @@ func parseMultiCommonFromForm(ctx context.Context, c *app.RequestContext) *multi
 func finishMultiCommon(ctx context.Context, c *app.RequestContext, expireValue int, expireStyle string, requireAuth bool, password string, encrypted bool, customCode string, note string) *multiCommonParams {
 	if err := utils.CheckExpireStyleAllowed(expireStyle); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"message": err.Error(),
 		})
 		return nil
@@ -164,12 +164,12 @@ func cleanupStored(ctx context.Context, st storage.StorageInterface, entries []s
 // @router /api/v1/share/multi-direct [POST]
 func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 	if shareSvc == nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "share service 未就绪"})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "share service 未就绪"})
 		return
 	}
 	form, err := c.MultipartForm()
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "解析 multipart 失败: " + err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "解析 multipart 失败: " + err.Error()})
 		return
 	}
 	files := form.File["files"]
@@ -177,11 +177,11 @@ func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 		files = form.File["file"] // 兼容单文件字段名
 	}
 	if len(files) == 0 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "请上传文件"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "请上传文件"})
 		return
 	}
 	if len(files) > 100 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "单次分享文件数超过上限（100 个）"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "单次分享文件数超过上限（100 个）"})
 		return
 	}
 
@@ -249,7 +249,7 @@ func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 	})
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "文件上传成功",
 		"data": map[string]interface{}{
 			"code":        shareResult.Code,
@@ -274,7 +274,7 @@ func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 // @router /api/v1/share/multi-bind [POST]
 func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 	if shareSvc == nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "share service 未就绪"})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "share service 未就绪"})
 		return
 	}
 	var body struct {
@@ -290,11 +290,11 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 		Encrypted   bool   `json:"encrypted"`
 	}
 	if err := json.Unmarshal(c.Request.Body(), &body); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "请求体解析失败: " + err.Error()})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "请求体解析失败: " + err.Error()})
 		return
 	}
 	if len(body.Entries) == 0 || len(body.Entries) > 100 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "entries 需为 1-100 项"})
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "entries 需为 1-100 项"})
 		return
 	}
 	p := parseMultiCommonFromJSON(ctx, c)
@@ -326,7 +326,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 	var declared int64
 	for _, e := range body.Entries {
 		if e.UploadID == "" && e.ObjectKey == "" {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": 400, "message": "entry 缺少 upload_id/object_key"})
+			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "entry 缺少 upload_id/object_key"})
 			return
 		}
 		if info, gerr := chunkSvc.GetUploadInfo(ctx, e.UploadID); e.UploadID != "" && gerr == nil {
@@ -365,7 +365,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 			if !strings.HasPrefix(cleanKey, "uploads/") || strings.Contains(cleanKey, "..") {
 				cleanupStored(ctx, st, bound)
 				c.JSON(consts.StatusBadRequest, map[string]interface{}{
-					"code":    400,
+					"code":    errcode.CodeInvalidParam,
 					"message": fmt.Sprintf("object_key 非法（仅接受 uploads/ 下服务端生成的对象）: %s", e.ObjectKey),
 				})
 				return
@@ -383,7 +383,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 			if serr != nil || size <= 0 {
 				cleanupStored(ctx, st, bound)
 				c.JSON(consts.StatusBadRequest, map[string]interface{}{
-					"code":    400,
+					"code":    errcode.CodeInvalidParam,
 					"message": fmt.Sprintf("对象不存在或大小异常: %s", e.ObjectKey),
 				})
 				return
@@ -432,7 +432,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 	})
 
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "分享创建成功",
 		"data": map[string]interface{}{
 			"code":        shareResult.Code,
@@ -450,7 +450,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.Service, st storage.StorageInterface, uploadID string, encrypted bool) (*shareService.StoredFileEntry, string, bool) {
 	info, err := chunkSvc.GetUploadInfo(ctx, uploadID)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": 404, "message": "上传记录不存在: " + uploadID})
+		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "上传记录不存在: " + uploadID})
 		return nil, "", false
 	}
 
@@ -463,7 +463,7 @@ func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.
 	indexes, err := chunkSvc.GetUploadedChunkIndexes(ctx, uploadID)
 	if err != nil || len(indexes) < info.TotalChunks {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    400,
+			"code":    errcode.CodeInvalidParam,
 			"name":    info.FileName,
 			"message": fmt.Sprintf("分片未传完（%d/%d）", len(indexes), info.TotalChunks),
 		})
@@ -472,7 +472,7 @@ func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.
 
 	_, rel := newRelPath(info.FileName)
 	if err := st.MergeChunks(ctx, uploadID, info.TotalChunks, rel); err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "合并分片失败: " + err.Error()})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "合并分片失败: " + err.Error()})
 		return nil, "", false
 	}
 

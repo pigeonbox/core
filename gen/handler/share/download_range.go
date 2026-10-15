@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pigeonbox/contracts/errcode"
 
 	"strconv"
 	"strings"
@@ -100,7 +101,7 @@ func streamFileDownload(ctx context.Context, c *app.RequestContext, filePath, fi
 			case rangeNotSatisfiable:
 				c.Header("Content-Range", fmt.Sprintf("bytes */%d", total))
 				c.JSON(consts.StatusRequestedRangeNotSatisfiable, map[string]interface{}{
-					"code":    416,
+					"code":    errcode.CodeInvalidParam,
 					"message": "请求区间不满足",
 				})
 				return
@@ -120,7 +121,7 @@ func streamFileDownload(ctx context.Context, c *app.RequestContext, filePath, fi
 				}
 				if !errors.Is(rerr, storage.ErrRangeUnsupported) {
 					c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-						"code":    500,
+						"code":    errcode.CodeInternal,
 						"message": fmt.Sprintf("区间读取失败: %v", rerr),
 					})
 					return
@@ -134,7 +135,7 @@ func streamFileDownload(ctx context.Context, c *app.RequestContext, filePath, fi
 	payload, err := getShareService().OpenShareDownload(ctx, filePath)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": fmt.Sprintf("获取文件失败: %v", err),
 		})
 		return

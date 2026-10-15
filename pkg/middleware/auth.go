@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/pkg/auth"
 )
 
@@ -198,7 +199,7 @@ func AuthMiddleware() app.HandlerFunc {
 		token, viaCookie := SessionToken(c)
 		if token == "" {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "未认证（缺少 Bearer 头或会话 Cookie）",
 			})
 			c.Abort()
@@ -209,7 +210,7 @@ func AuthMiddleware() app.HandlerFunc {
 		claims, err := auth.ParseToken(token)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "Invalid or expired token",
 			})
 			c.Abort()
@@ -219,7 +220,7 @@ func AuthMiddleware() app.HandlerFunc {
 		// 注销黑名单检查（logout 端点写入；已注销 token 即刻失效）
 		if auth.IsTokenRevoked(ctx, token) {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "Token has been revoked",
 			})
 			c.Abort()
@@ -229,7 +230,7 @@ func AuthMiddleware() app.HandlerFunc {
 		// CSRF 门禁（仅 Cookie 认证的非安全方法）
 		if !CSRFAllowed(c, viaCookie) {
 			c.JSON(http.StatusForbidden, map[string]interface{}{
-				"code":    http.StatusForbidden,
+				"code":    errcode.CodeForbidden,
 				"message": "缺少 CSRF 头（Cookie 认证的写请求须携带 X-Requested-With: XMLHttpRequest）",
 			})
 			c.Abort()
@@ -239,7 +240,7 @@ func AuthMiddleware() app.HandlerFunc {
 		// 身份复核（封禁/降权/改密即时生效；DB 角色回填 claim）
 		if !identityFresh(ctx, claims) {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "账号状态已变更，请重新登录",
 			})
 			c.Abort()
@@ -280,7 +281,7 @@ func AdminMiddleware() app.HandlerFunc {
 		token, viaCookie := SessionToken(c)
 		if token == "" {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "未认证（缺少 Bearer 头或会话 Cookie）",
 			})
 			c.Abort()
@@ -290,7 +291,7 @@ func AdminMiddleware() app.HandlerFunc {
 		claims, err := auth.ParseToken(token)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "Invalid or expired token",
 			})
 			c.Abort()
@@ -300,7 +301,7 @@ func AdminMiddleware() app.HandlerFunc {
 		// 注销黑名单检查（与 AuthMiddleware 同语义：已注销 token 即刻失效）
 		if auth.IsTokenRevoked(ctx, token) {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "Token has been revoked",
 			})
 			c.Abort()
@@ -310,7 +311,7 @@ func AdminMiddleware() app.HandlerFunc {
 		// CSRF 门禁（仅 Cookie 认证的非安全方法）
 		if !CSRFAllowed(c, viaCookie) {
 			c.JSON(http.StatusForbidden, map[string]interface{}{
-				"code":    http.StatusForbidden,
+				"code":    errcode.CodeForbidden,
 				"message": "缺少 CSRF 头（Cookie 认证的写请求须携带 X-Requested-With: XMLHttpRequest）",
 			})
 			c.Abort()
@@ -320,7 +321,7 @@ func AdminMiddleware() app.HandlerFunc {
 		// 身份复核（封禁/降权即时生效；DB 角色回填 claim 后再判管理员）
 		if !identityFresh(ctx, claims) {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    http.StatusUnauthorized,
+				"code":    errcode.CodeUnauthorized,
 				"message": "账号状态已变更，请重新登录",
 			})
 			c.Abort()
@@ -330,7 +331,7 @@ func AdminMiddleware() app.HandlerFunc {
 		// 角色检查先于任何放行
 		if claims.Role != "admin" {
 			c.JSON(http.StatusForbidden, map[string]interface{}{
-				"code":    http.StatusForbidden,
+				"code":    errcode.CodeForbidden,
 				"message": "Admin access required",
 			})
 			c.Abort()

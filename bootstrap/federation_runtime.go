@@ -29,8 +29,8 @@ type federationRuntime struct {
 	mu         sync.Mutex
 	start      fedStartFunc
 	attach     func(*federationApp.Service) // 挂注入点（share/admin/customHandler/MCP）
-	detach     func()                        // 摘注入点（全部置非类型化 nil——typed-nil 进接口非 nil 的历史坑）
-	standalone func() bool                   // 部署形态注入（棘轮规则 8：不直读全局 conf）
+	detach     func()                       // 摘注入点（全部置非类型化 nil——typed-nil 进接口非 nil 的历史坑）
+	standalone func() bool                  // 部署形态注入（棘轮规则 8：不直读全局 conf）
 	current    *federationApp.Service
 	cfg        conf.FederationConfig
 	nodeName   string

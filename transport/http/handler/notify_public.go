@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"github.com/pigeonbox/contracts/errcode"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -13,7 +14,7 @@ import (
 func ListPublicNotifies(ctx context.Context, c *app.RequestContext) {
 	items, err := getNotifyService().Active(ctx, "")
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": err.Error()})
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
 		return
 	}
 	// 精简字段：公告条只需要展示信息（最多 50 条，前端按级别排序展示）。
@@ -30,5 +31,5 @@ func ListPublicNotifies(ctx context.Context, c *app.RequestContext) {
 			"end_at":   it.EndAt,
 		})
 	}
-	c.JSON(consts.StatusOK, map[string]interface{}{"code": 200, "message": "ok", "data": map[string]interface{}{"items": out}})
+	c.JSON(consts.StatusOK, map[string]interface{}{"code": 0, "message": "ok", "data": map[string]interface{}{"items": out}})
 }

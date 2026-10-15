@@ -62,7 +62,9 @@ func TestFederationRuntimeSwitch(t *testing.T) {
 	// 装配失败：返回 error 且维持旧实例（回滚）
 	keep := r.instance()
 	rWithFail := &federationRuntime{
-		start:   func(cfg conf.FederationConfig, _ string) (*federationApp.Service, error) { return nil, errors.New("boom") },
+		start: func(cfg conf.FederationConfig, _ string) (*federationApp.Service, error) {
+			return nil, errors.New("boom")
+		},
 		current: keep,
 		attach:  r.attach,
 		detach:  r.detach,

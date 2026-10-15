@@ -7,6 +7,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/pigeonbox/contracts/errcode"
 	adminsvc "github.com/pigeonbox/core/app/admin"
 )
 
@@ -30,13 +31,13 @@ func CleanExpiredFiles(ctx context.Context, c *app.RequestContext) {
 	count, freed, err := getAdminService().CleanExpiredFiles(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "清理过期文件失败: " + err.Error(),
 		})
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "清理完成",
 		"data": map[string]interface{}{
 			"deleted_count": count,
@@ -51,13 +52,13 @@ func CleanTempFiles(ctx context.Context, c *app.RequestContext) {
 	count, err := getAdminService().CleanupIncompleteUploads(ctx, 24)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "清理临时文件失败: " + err.Error(),
 		})
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "清理完成",
 		"data": map[string]interface{}{
 			"deleted_count": count,
@@ -70,7 +71,7 @@ func CleanTempFiles(ctx context.Context, c *app.RequestContext) {
 func GetSystemLogs(ctx context.Context, c *app.RequestContext) {
 	logs := []map[string]interface{}{}
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code": 200,
+		"code": 0,
 		"data": logs,
 	})
 }
@@ -84,7 +85,7 @@ func GetSystemInfo(ctx context.Context, c *app.RequestContext) {
 		"arch":       "amd64",
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code": 200,
+		"code": 0,
 		"data": info,
 	})
 }
@@ -99,7 +100,7 @@ func GetStorageStatus(ctx context.Context, c *app.RequestContext) {
 		"available":  true,
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code": 200,
+		"code": 0,
 		"data": status,
 	})
 }
@@ -110,13 +111,13 @@ func OptimizeDatabase(ctx context.Context, c *app.RequestContext) {
 	driver, detail, err := getAdminService().OptimizeDatabase(ctx)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    500,
+			"code":    errcode.CodeInternal,
 			"message": "数据库优化失败: " + err.Error(),
 		})
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    200,
+		"code":    0,
 		"message": "数据库优化完成",
 		"data": map[string]interface{}{
 			"driver": driver,

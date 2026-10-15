@@ -3,6 +3,7 @@ package handler
 
 import (
 	"context"
+	"github.com/pigeonbox/contracts/errcode"
 	"os"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -64,6 +65,6 @@ func OpenAPISpec(_ context.Context, c *app.RequestContext) {
 		}
 	}
 	c.JSON(consts.StatusNotFound, map[string]interface{}{
-		"code": 404, "message": "openapi.json not found",
+		"code": errcode.CodeNotFound, "message": "openapi.json not found",
 	})
 }

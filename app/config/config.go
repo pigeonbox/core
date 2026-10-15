@@ -104,7 +104,7 @@ func defaultSystemConfig() *SystemConfig {
 	cfg := &SystemConfig{}
 	cfg.Base = &BaseConfig{Name: "PigeonBox", Description: "文件分享平台", Port: 8888}
 	cfg.Storage = &StorageSettings{Type: "local", MaxSize: 1024 * 1024 * 1024} // 1GB
-	cfg.Transfer = &TransferSettings{MaxCount: 100, ExpireDefault: 7}         // 7天
+	cfg.Transfer = &TransferSettings{MaxCount: 100, ExpireDefault: 7}          // 7天
 	cfg.User = userSettingsFromYAML()
 	return cfg
 }

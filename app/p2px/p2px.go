@@ -27,8 +27,8 @@ import (
 
 // 任务状态机。
 const (
-	StateWaiting  = "waiting"  // 已 spawn，等待对端接入/传输启动
-	StateRunning  = "running"  // 传输进行中（收到口令行之外的首个输出）
+	StateWaiting  = "waiting" // 已 spawn，等待对端接入/传输启动
+	StateRunning  = "running" // 传输进行中（收到口令行之外的首个输出）
 	StateDone     = "done"
 	StateFailed   = "failed"
 	StateCanceled = "canceled"
@@ -89,19 +89,19 @@ type Task struct {
 	BytesDone int64
 	CreatedAt time.Time
 
-	mu         sync.Mutex
-	state      string
-	err        string
-	finishedAt time.Time
-	published  bool // 已发布为分享（幂等闸：重复/并发 publish 拒绝——否则重复铸分享+重复拷存储）
-	attempts   int        // 已尝试次数（自动续传环）
-	waitingSince time.Time // 进入 waiting 的时刻（收端幽灵配对看门狗用）
-	spec       *spawnSpec // 重派规格（spawn 时记录）
-	retryTimer *time.Timer
-	log        []string
-	pid        int
-	outDir     string // recv 任务的落盘目录
-	cancel     context.CancelFunc
+	mu           sync.Mutex
+	state        string
+	err          string
+	finishedAt   time.Time
+	published    bool       // 已发布为分享（幂等闸：重复/并发 publish 拒绝——否则重复铸分享+重复拷存储）
+	attempts     int        // 已尝试次数（自动续传环）
+	waitingSince time.Time  // 进入 waiting 的时刻（收端幽灵配对看门狗用）
+	spec         *spawnSpec // 重派规格（spawn 时记录）
+	retryTimer   *time.Timer
+	log          []string
+	pid          int
+	outDir       string // recv 任务的落盘目录
+	cancel       context.CancelFunc
 }
 
 // TaskSnapshot 对外只读快照（handler 消费）。

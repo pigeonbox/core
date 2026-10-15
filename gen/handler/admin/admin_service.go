@@ -10,8 +10,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	admin "github.com/pigeonbox/contracts/gen/admin"
 	"github.com/pigeonbox/contracts/errcode"
+	admin "github.com/pigeonbox/contracts/gen/admin"
 	adminsvc "github.com/pigeonbox/core/app/admin"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -38,7 +38,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	err = c.BindAndValidate(&req)
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &admin.AdminLoginResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "请求参数错误: " + err.Error(),
 		})
 		return
@@ -47,7 +47,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	// 参数验证
 	if req.Username == "" || req.Password == "" {
 		c.JSON(consts.StatusBadRequest, &admin.AdminLoginResp{
-			Code:    400,
+			Code:    errcode.CodeInvalidParam,
 			Message: "用户名和密码不能为空",
 		})
 		return
@@ -58,7 +58,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	lockKey := middleware.FormatLockKey("adminlogin", middleware.ClientIP(c), req.Username)
 	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
 		c.JSON(consts.StatusTooManyRequests, &admin.AdminLoginResp{
-			Code:    429,
+			Code:    errcode.CodeRateLimit,
 			Message: "尝试过于频繁，账户已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
 		})
 		return
@@ -100,7 +100,7 @@ func AdminStats(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminStatsReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminStatsResp{Code: 400, Message: err.Error()})
+		c.JSON(consts.StatusOK, &admin.AdminStatsResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
 		return
 	}
 
@@ -134,7 +134,7 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminListFilesReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminListFilesResp{Code: 400, Message: err.Error()})
+		c.JSON(consts.StatusOK, &admin.AdminListFilesResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
 		return
 	}
 
@@ -247,7 +247,7 @@ func AdminListUsers(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminListUsersReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminListUsersResp{Code: 400, Message: err.Error()})
+		c.JSON(consts.StatusOK, &admin.AdminListUsersResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
 		return
 	}
 
@@ -301,7 +301,7 @@ func AdminUpdateUserStatus(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminUpdateUserStatusReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminUpdateUserStatusResp{Code: 400, Message: err.Error()})
+		c.JSON(consts.StatusOK, &admin.AdminUpdateUserStatusResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
 		return
 	}
 
@@ -326,7 +326,7 @@ func AdminGetConfig(ctx context.Context, c *app.RequestContext) {
 	// data = SystemConfig 全量 JSON(v0.13.5 起;此前仅 3 段 typed,ex 段
 	// 永不下发——Config 页 ex 表单永不回填)。自由格式契约,data 随段演进。
 	cfg, err := getAdminService().GetConfig(ctx)
-	resp := map[string]interface{}{"code": 200, "message": "success"}
+	resp := map[string]interface{}{"code": 0, "message": "success"}
 	if err != nil {
 		resp["code"] = 500
 		resp["message"] = err.Error()
@@ -346,11 +346,11 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 	// 局部扁平 JSON（nil 段保留现状），未知键由 json 反序列化自然忽略。
 	cfg := &adminsvc.SystemConfig{}
 	if err := json.Unmarshal(c.Request.Body(), cfg); err != nil {
-		c.JSON(consts.StatusBadRequest, &admin.AdminUpdateConfigResp{Code: 400, Message: err.Error()})
+		c.JSON(consts.StatusBadRequest, &admin.AdminUpdateConfigResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
 		return
 	}
 	if err := getAdminService().UpdateConfig(ctx, cfg); err != nil {
-		c.JSON(consts.StatusInternalServerError, &admin.AdminUpdateConfigResp{Code: 500, Message: err.Error()})
+		c.JSON(consts.StatusInternalServerError, &admin.AdminUpdateConfigResp{Code: errcode.CodeInternal, Message: err.Error()})
 		return
 	}
 	c.JSON(consts.StatusOK, &admin.AdminUpdateConfigResp{Code: 0, Message: "success"})
