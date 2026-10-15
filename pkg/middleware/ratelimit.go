@@ -368,11 +368,10 @@ func (rl *RateLimiter) Middleware(s scope) app.HandlerFunc {
 		}
 		ip := ClientIP(ctx)
 		if !rl.allow(c, s, ip) {
-			if logger.Logger != nil {
-				logger.Logger.Warn("[ratelimit] blocked",
-					zap.String("scope", string(s)),
-					zap.String("ip", ip))
-			}
+			// 门面调用（内部 get() 懒解析），不再手工裸读全局判空
+			logger.Warn("[ratelimit] blocked",
+				zap.String("scope", string(s)),
+				zap.String("ip", ip))
 			resp.NewErrorByCode(ctx, errcode.CodeRateLimit)
 			ctx.Abort()
 			return

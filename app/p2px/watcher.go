@@ -15,8 +15,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pigeonbox/core/pkg/logger"
 	"io"
-	"log"
 
 	"github.com/pigeonbox/core/conf"
 	"os/exec"
@@ -107,7 +107,7 @@ func (s *Service) spawnWatcher(cfg conf.P2PDirectConfig, bin string) error {
 	s.watch.pid = cmd.Process.Pid
 	s.watch.watching = true
 	s.watchMu.Unlock()
-	log.Printf("[p2px] 信箱 watcher 已启动(pid=%d registry=%s)", cmd.Process.Pid, effectiveRegistry(cfg.RegistryURL))
+	logger.Info(fmt.Sprintf("[p2px] 信箱 watcher 已启动(pid=%d registry=%s)", cmd.Process.Pid, effectiveRegistry(cfg.RegistryURL)))
 	go s.scanInvites(stdout)
 	go s.passthroughWatcherStderr(stderr)
 	go s.waitWatcher(cmd)
@@ -131,10 +131,10 @@ func (s *Service) scanInvites(r io.Reader) {
 			continue
 		}
 		if _, err := s.AddInvite(ev.Code, ev.Name, ev.Note); err != nil {
-			log.Printf("[p2px] 名录邀请入箱失败(from=%s): %v", ev.From, err)
+			logger.Warn(fmt.Sprintf("[p2px] 名录邀请入箱失败(from=%s): %v", ev.From, err))
 			continue
 		}
-		log.Printf("[p2px] 收到名录邀请 from=%s code=%s…", ev.From, shortCode(ev.Code))
+		logger.Info(fmt.Sprintf("[p2px] 收到名录邀请 from=%s code=%s…", ev.From, shortCode(ev.Code)))
 	}
 }
 
@@ -143,7 +143,7 @@ func (s *Service) passthroughWatcherStderr(r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
-		log.Printf("[p2px][watcher] %s", sc.Text())
+		logger.Info(fmt.Sprintf("[p2px][watcher] %s", sc.Text()))
 	}
 }
 
@@ -175,7 +175,7 @@ func (s *Service) bumpWatcherBackoff(err error) {
 	}
 	s.watch.retryAt = s.now().Add(delay)
 	s.watchMu.Unlock()
-	log.Printf("[p2px] %v,%v 后重试", err, delay)
+	logger.Warn(fmt.Sprintf("[p2px] %v,%v 后重试", err, delay))
 }
 
 // stopWatcher 停 watcher(期望态不满足/Stop;幂等)。
@@ -191,7 +191,7 @@ func (s *Service) stopWatcher(reason string) {
 	s.watchMu.Unlock()
 	if had {
 		killProcessGroup(pid)
-		log.Printf("[p2px] 信箱 watcher 已停止(%s)", reason)
+		logger.Info(fmt.Sprintf("[p2px] 信箱 watcher 已停止(%s)", reason))
 	}
 }
 

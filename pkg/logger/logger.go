@@ -5,9 +5,9 @@ import (
 	"strings"
 	"sync"
 
-	"gopkg.in/natefinch/lumberjack.v2"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var Logger *zap.Logger
@@ -149,5 +149,6 @@ func Fatal(msg string, fields ...zap.Field) {
 }
 
 func With(fields ...zap.Field) *zap.Logger {
-	return Logger.With(fields...)
+	// 走 get() 懒解析：宿主未 Init 时（库式嵌入/单测）兜底 logger 而非 nil panic。
+	return get().With(fields...)
 }
