@@ -5,6 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/google/uuid"
+	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/resp"
 )
 
@@ -12,7 +13,10 @@ import (
 const TraceIDHeader = "X-Trace-Id"
 
 // CtxKeyTraceID context.Context 中 trace_id 的键。
-type CtxKeyTraceID struct{}
+//
+// 2026-10-16 起真相源下沉 pkg/logger（本包依赖 logger，反向 import 成环），
+// 此处类型别名复用：类型同一性保证 WithValue/Value 配对，历史写入零迁移。
+type CtxKeyTraceID = logger.CtxKeyTraceID
 
 // RequestID 为每个请求生成 / 透传 trace_id（X-Trace-Id）。
 //
@@ -44,9 +48,7 @@ func RequestID() app.HandlerFunc {
 }
 
 // TraceIDFromContext 从 context.Context 提取 trace_id（service / 日志用）。
+// 委托 logger 同名函数（真相源），保留本包导出兼容既有调用点。
 func TraceIDFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(CtxKeyTraceID{}).(string); ok {
-		return v
-	}
-	return ""
+	return logger.TraceIDFromContext(ctx)
 }
