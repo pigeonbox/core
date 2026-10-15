@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/pigeonbox/contracts/errcode"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -52,15 +54,16 @@ func getShare() *shareService.Service {
 
 func taskToModel(t *p2px.TaskSnapshot) *p2p.P2pTask {
 	m := &p2p.P2pTask{
-		ID:        t.ID,
-		Kind:      t.Kind,
-		State:     t.State,
-		Code:      t.Code,
-		Paths:     t.Paths,
-		BytesDone: t.BytesDone,
-		Error:     t.Error,
-		Attempts:  int32(t.Attempts),
-		CreatedAt: t.CreatedAt.Format(time.RFC3339),
+		ID:         t.ID,
+		Kind:       t.Kind,
+		State:      t.State,
+		Code:       t.Code,
+		Paths:      t.Paths,
+		BytesDone:  t.BytesDone,
+		BytesTotal: t.BytesTotal,
+		Error:      t.Error,
+		Attempts:   int32(t.Attempts),
+		CreatedAt:  t.CreatedAt.Format(time.RFC3339),
 	}
 	if !t.FinishedAt.IsZero() {
 		m.FinishedAt = t.FinishedAt.Format(time.RFC3339)
@@ -135,6 +138,7 @@ func AdminP2pTasks(ctx context.Context, c *app.RequestContext) {
 			"code":        t.Code,
 			"paths":       t.Paths,
 			"bytes_done":  t.BytesDone,
+			"bytes_total": t.BytesTotal,
 			"error":       t.Error,
 			"attempts":    t.Attempts,
 			"created_at":  t.CreatedAt.Format(time.RFC3339),
@@ -171,6 +175,123 @@ func AdminP2pSend(ctx context.Context, c *app.RequestContext) {
 	}
 	snap := task.Snapshot()
 	okData(c, map[string]any{"task": taskToModel(&snap)})
+}
+
+// uploadSendMaxFiles 浏览器直发单次文件数上限（p2pc send 参数表容量充足，
+// 上限只防滥用）。
+const uploadSendMaxFiles = 20
+
+// AdminP2pUploadSend 浏览器文件直发（2026-10-15:p2pcweb 体验融入管理台）。
+// multipart files[] 流式落上传临时区 → p2px.SendUploaded 编排（上传目录
+// 自带发送授权,不查 send_roots——见 upload.go 授权模型）→ 任务终态自清理。
+// invite 元数据走 query（与 /admin/p2p/send 同义）。
+// 总量闸 = p2p.direct.max_task_bytes 单任务配额,落盘边写边计,超限即断。
+// @router /admin/p2p/send/upload [POST]
+func AdminP2pUploadSend(ctx context.Context, c *app.RequestContext) {
+	svc := getP2px()
+	quota, err := svc.UploadQuotaBytes(ctx)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	form, err := c.MultipartForm()
+	if err != nil {
+		badReq(c, "解析 multipart 失败: "+err.Error())
+		return
+	}
+	files := form.File["files"]
+	if len(files) == 0 {
+		files = form.File["file"]
+	}
+	if len(files) == 0 || len(files) > uploadSendMaxFiles {
+		badReq(c, fmt.Sprintf("files 需为 1-%d 项", uploadSendMaxFiles))
+		return
+	}
+
+	dir, err := svc.NewUploadDir()
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	paths := make([]string, 0, len(files))
+	var total int64
+	var overflow bool
+	for _, fh := range files {
+		name := uploadSafeName(fh.Filename)
+		dst := filepath.Join(dir, name)
+		src, oerr := fh.Open()
+		if oerr != nil {
+			overflow = true
+			break
+		}
+		f, cerr := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if cerr != nil {
+			_ = src.Close()
+			overflow = true
+			break
+		}
+		n, cerr := io.Copy(f, src)
+		serr := src.Close()
+		ferr := f.Close()
+		if cerr != nil || serr != nil || ferr != nil {
+			overflow = true
+			break
+		}
+		total += n
+		if total > quota {
+			overflow = true
+			break
+		}
+		paths = append(paths, dst)
+	}
+	if overflow {
+		_ = os.RemoveAll(dir) // 半截上传即清,不留垃圾
+		if total > quota {
+			badReq(c, fmt.Sprintf("上传总量超过单任务配额（%d > %d 字节）", total, quota))
+			return
+		}
+		badReq(c, "上传落盘失败")
+		return
+	}
+	if len(paths) == 0 {
+		_ = os.RemoveAll(dir)
+		badReq(c, "缺少 files 字段")
+		return
+	}
+
+	opts := []p2px.SendOption{}
+	if to := strings.TrimSpace(c.Query("invite_to")); to != "" {
+		opts = append(opts, p2px.WithInvite(to, c.Query("invite_note")))
+	}
+	task, err := svc.SendUploaded(ctx, dir, paths, opts...)
+	audit(ctx, "p2p.upload_send", fmt.Sprintf("%d files, %d bytes", len(paths), total), err)
+	if err != nil {
+		_ = os.RemoveAll(dir) // 编排失败（并发上限/未启用等）不留孤儿
+		badReq(c, err.Error())
+		return
+	}
+	snap := task.Snapshot()
+	okData(c, map[string]any{"task": taskToModel(&snap)})
+}
+
+// uploadSafeName 上传文件名消毒：剥路径分量与控制字符,保留中文/空格,
+// 空名兜底,超长截断（对端 manifest 呈现原始名,这里只保落盘安全）。
+func uploadSafeName(name string) string {
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." {
+		name = "file"
+	}
+	if len(name) > 180 {
+		name = name[:180]
+	}
+	return name
 }
 
 // AdminP2pRecv 发起接收。

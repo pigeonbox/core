@@ -100,3 +100,13 @@ func _adminp2pdirectoryMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _sendMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _adminp2puploadsendMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

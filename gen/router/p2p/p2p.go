@@ -34,6 +34,10 @@ func Register(r *server.Hertz) {
 				_invites := _p2p.Group("/invites", _invitesMw()...)
 				_invites.POST("/accept", append(_adminp2pinviteacceptMw(), p2p.AdminP2pInviteAccept)...)
 			}
+			{
+				_send := _p2p.Group("/send", _sendMw()...)
+				_send.POST("/upload", append(_adminp2puploadsendMw(), p2p.AdminP2pUploadSend)...)
+			}
 		}
 	}
 	{

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +22,12 @@ type SendOption func(*sendOpts)
 type sendOpts struct {
 	inviteTo   string
 	inviteNote string
+	uploadDir  string // 浏览器直发的上传会话目录（SendUploaded 专用；终态清理用）
+}
+
+// WithUploadDir 标记本任务源文件来自上传会话目录（终态自动清理）。
+func WithUploadDir(dir string) SendOption {
+	return func(o *sendOpts) { o.uploadDir = dir }
 }
 
 // WithInvite 发送后向名录对端投递密封邀请(2026-10-14 在线名录:
@@ -64,11 +71,21 @@ func sanitizeInviteNote(s string) string {
 
 // Send 发起发送任务（白名单校验 → spawn p2pc send → 口令行异步解析进任务）。
 func (s *Service) Send(ctx context.Context, paths []string, opts ...SendOption) (*Task, error) {
-	cfg, bin, err := s.guard(ctx)
+	cfg, _, err := s.guard(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := validateSendPaths(paths, cfg.SendRoots); err != nil {
+		return nil, err
+	}
+	return s.sendWithAuth(ctx, paths, opts)
+}
+
+// sendWithAuth 发送编排公共体（授权由各入口先行完成：Send 走 validateSendPaths
+// 白名单；SendUploaded 走上传目录前缀校验——upload.go）。
+func (s *Service) sendWithAuth(ctx context.Context, paths []string, opts []SendOption) (*Task, error) {
+	cfg, bin, err := s.guard(ctx)
+	if err != nil {
 		return nil, err
 	}
 	var o sendOpts
@@ -94,7 +111,22 @@ func (s *Service) Send(ctx context.Context, paths []string, opts ...SendOption) 
 			args = append(args, "--invite-note", o.inviteNote)
 		}
 	}
-	return s.spawnPrepared(s.newTask("send", "", paths), bin, args, "")
+	t := s.newTask("send", "", paths)
+	t.BytesTotal = totalSourceSize(paths)
+	t.uploadDir = o.uploadDir
+	return s.spawnPrepared(t, bin, args, "")
+}
+
+// totalSourceSize 发送源总体积（文件 stat 求和；目录略过——0=未知，
+// p2pc 进度行回填权威值，不为大目录在任务创建期做全树遍历）。
+func totalSourceSize(paths []string) int64 {
+	var n int64
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() {
+			n += st.Size()
+		}
+	}
+	return n
 }
 
 // Recv 发起接收任务（口令 → spawn p2pc recv --yes --out <收件区>/<taskID>）。
@@ -299,16 +331,35 @@ func (s *Service) finishTask(t *Task, state, msg string) {
 	t.state = state
 	t.err = msg
 	t.finishedAt = time.Now()
+	dir := t.uploadDir
 	t.mu.Unlock()
 	s.removePidFile(t.ID)
+	removeUploadDirAsync(dir)
 }
 
 // scanLines 行扫描（stderr 原样透传——协议版本不一致等文案直达面板）。
+// p2pc 的 slog 进度行（每 1MB 一条「msg=传输进度 got=N total=M」）在此截获
+// 成 BytesDone/BytesTotal（send 任务从此有实时进度；recv 以目录实测值互斥回填）。
 func (s *Service) scanLines(t *Task, r interface{ Read([]byte) (int, error) }, isStdout bool) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		line := sc.Text()
+		if got, total, ok := parseP2pcProgress(line); ok {
+			t.mu.Lock()
+			if got > t.BytesDone {
+				t.BytesDone = got // 单调闸（stdout/stderr 双流重复或乱序防御）
+			}
+			if total > 0 {
+				t.BytesTotal = total
+			}
+			if t.state == StateWaiting {
+				t.state = StateRunning
+				t.waitingSince = time.Time{}
+			}
+			t.mu.Unlock()
+			continue // 不进日志环：1MB 一条会把 256 行环形缓冲刷成纯进度
+		}
 		t.mu.Lock()
 		if isStdout && t.Code == "" {
 			if i := strings.Index(line, "口令:"); i >= 0 {
@@ -329,6 +380,30 @@ func (s *Service) scanLines(t *Task, r interface{ Read([]byte) (int, error) }, i
 	}
 }
 
+// parseP2pcProgress 解析 p2pc 子进程的进度行（stderr,每 1MB 一条）：
+//   - slog TextHandler 形态: 「…level=INFO msg=传输进度 got=1 total=2」
+//   - slog 默认 handler 形态: 「2026/10/16 12:00:00 INFO 传输进度 got=1 total=2」
+//
+// （p2pc CLI 未 SetDefault,走后者;两形态的 attrs 都是空格分隔 k=v）
+func parseP2pcProgress(line string) (got, total int64, ok bool) {
+	i := strings.Index(line, "传输进度")
+	if i < 0 {
+		return 0, 0, false
+	}
+	for _, f := range strings.Fields(line[i:]) {
+		if v, found := strings.CutPrefix(f, "got="); found {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+				got, ok = n, true
+			}
+		} else if v, found := strings.CutPrefix(f, "total="); found {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+				total = n
+			}
+		}
+	}
+	return got, total, ok
+}
+
 // waitTask 进程退出定终态（退出码即真相）。
 func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 	err := cmd.Wait()
@@ -346,7 +421,12 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 		t.state = StateDone
 		if t.outDir != "" {
 			t.BytesDone = dirSize(t.outDir)
+		} else if t.BytesTotal > 0 {
+			// send 完成即全量（回环快传时进度行可能在两次快照间已跑完,
+			// 不补齐会让完成态显示 0%）
+			t.BytesDone = t.BytesTotal
 		}
+		removeUploadDirAsync(t.uploadDir)
 		return
 	}
 	t.err = fmt.Sprintf("p2pc 退出: %v", err)
@@ -370,6 +450,15 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 		return
 	}
 	t.state = StateFailed
+	removeUploadDirAsync(t.uploadDir)
+}
+
+// removeUploadDirAsync 异步删除浏览器直发的上传临时目录（调用方须已持有
+// t.mu 或已确认 dir 终态；重试路径不得调用——续传还要用源文件）。
+func removeUploadDirAsync(dir string) {
+	if dir != "" {
+		go func() { _ = os.RemoveAll(dir) }()
+	}
 }
 
 // monitorLoop 配额监控 + 收件区 TTL 清扫（节流：生产每小时一轮；测试用小间隔时
@@ -390,6 +479,7 @@ func (s *Service) monitorLoop() {
 			s.pruneEndedTasks()  // 终态任务 >1h 自动清理（防 map 膨胀+失败常驻误吓用户）
 			if time.Since(lastSweep) >= time.Hour || s.deps.MonitorInterval < 10*time.Second && time.Since(lastSweep) >= s.deps.MonitorInterval*720 {
 				s.sweepInbox()
+				s.sweepUploads() // 浏览器直发上传孤儿目录兜底（upload.go）
 				lastSweep = time.Now()
 			}
 		}

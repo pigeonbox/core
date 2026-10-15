@@ -82,12 +82,14 @@ type Deps struct {
 
 // Task 直传任务（内存态；重启即 expired 语义——pid 文件清扫兜底）。
 type Task struct {
-	ID        string
-	Kind      string // send | recv
-	Code      string
-	Paths     []string
-	BytesDone int64
-	CreatedAt time.Time
+	ID         string
+	Kind       string // send | recv
+	Code       string
+	Paths      []string
+	BytesDone  int64
+	BytesTotal int64  // 传输总字节（创建时源体积估计；p2pc 进度行回填权威值；0=未知）
+	uploadDir  string // 浏览器直发的上传会话目录（终态自动清理；普通任务为空）
+	CreatedAt  time.Time
 
 	mu           sync.Mutex
 	state        string
@@ -112,6 +114,7 @@ type TaskSnapshot struct {
 	Code       string
 	Paths      []string
 	BytesDone  int64
+	BytesTotal int64
 	Error      string
 	Attempts   int
 	CreatedAt  time.Time
@@ -124,7 +127,7 @@ func (t *Task) Snapshot() TaskSnapshot {
 	defer t.mu.Unlock()
 	return TaskSnapshot{
 		ID: t.ID, Kind: t.Kind, State: t.state, Code: t.Code,
-		Paths: append([]string(nil), t.Paths...), BytesDone: t.BytesDone,
+		Paths: append([]string(nil), t.Paths...), BytesDone: t.BytesDone, BytesTotal: t.BytesTotal,
 		Error: t.err, Attempts: t.attempts,
 		CreatedAt: t.CreatedAt, FinishedAt: t.finishedAt,
 	}
@@ -274,6 +277,7 @@ func (s *Service) Cancel(ctx context.Context, taskID string) error {
 	t.state = StateCanceled
 	t.finishedAt = time.Now()
 	s.removePidFile(t.ID)
+	removeUploadDirAsync(t.uploadDir)
 	return nil
 }
 
