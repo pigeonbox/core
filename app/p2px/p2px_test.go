@@ -433,3 +433,39 @@ func TestAutoResumeLoop(t *testing.T) {
 	}
 	// 配额类失败不重试:由 TestQuotaReasonPreserved 覆盖（错误真因+终态语义一致）
 }
+
+// TestTaskLogExposure 日志环经 TaskLog 暴露(诊断面;stub 的 stdout/stderr 行齐活)。
+func TestTaskLogExposure(t *testing.T) {
+	bin := writeStub(t, "ok")
+	svc := NewService(testDeps(t, bin))
+	defer func() { _ = svc.Stop() }()
+
+	cfg, _ := svc.deps.GetDirect(context.Background())
+	src := filepath.Join(cfg.SendRoots[0], "logtest.txt")
+	if err := os.WriteFile(src, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.Send(context.Background(), []string{src})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var lines []string
+	for time.Now().Before(deadline) {
+		lines, err = svc.TaskLog(context.Background(), task.ID)
+		if err != nil {
+			t.Fatalf("TaskLog: %v", err)
+		}
+		if len(lines) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "口令") {
+		t.Fatalf("日志环应含口令行, got: %q", joined)
+	}
+	if _, err := svc.TaskLog(context.Background(), "nonexistent"); err == nil {
+		t.Fatal("不存在任务应报错")
+	}
+}

@@ -38,6 +38,13 @@ func Register(r *server.Hertz) {
 				_send := _p2p.Group("/send", _sendMw()...)
 				_send.POST("/upload", append(_adminp2puploadsendMw(), p2p.AdminP2pUploadSend)...)
 			}
+			{
+				_tasks := _p2p.Group("/tasks", _tasksMw()...)
+				{
+					_task_id := _tasks.Group("/:task_id", _task_idMw()...)
+					_task_id.GET("/log", append(_adminp2ptasklogMw(), p2p.AdminP2pTaskLog)...)
+				}
+			}
 		}
 	}
 	{

@@ -258,6 +258,17 @@ func (s *Service) List(ctx context.Context) []*TaskSnapshot {
 	return out
 }
 
+// TaskLog 任务日志环快照（时间正序;诊断面消费——失败免登服务器看 p2pc 输出）。
+func (s *Service) TaskLog(_ context.Context, taskID string) ([]string, error) {
+	t, err := s.getTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.log...), nil
+}
+
 // Cancel 取消任务（kill 进程组）。
 func (s *Service) Cancel(ctx context.Context, taskID string) error {
 	t, err := s.getTask(taskID)

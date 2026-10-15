@@ -76,6 +76,7 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /admin/ratelimit/status", "POST /admin/ratelimit/test",
 		// ===== p2p 设备直传（IDL，P2a 2026-10-14）=====
 		"GET /admin/p2p/status", "GET /admin/p2p/tasks",
+		"GET /admin/p2p/tasks/:task_id/log",
 		"POST /admin/p2p/send", "POST /admin/p2p/recv",
 		"POST /admin/p2p/cancel", "POST /admin/p2p/publish",
 		// ===== p2p 浏览器文件直发（2026-10-15:p2pcweb 体验融入管理台）=====

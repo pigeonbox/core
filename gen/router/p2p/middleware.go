@@ -110,3 +110,18 @@ func _adminp2puploadsendMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _tasksMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _task_idMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _adminp2ptasklogMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

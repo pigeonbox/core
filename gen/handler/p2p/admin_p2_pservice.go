@@ -155,6 +155,17 @@ func finishedOrEmpty(t time.Time) string {
 	return t.Format(time.RFC3339)
 }
 
+// AdminP2pTaskLog 任务日志（p2pc 行级环,时间正序;诊断面——失败免登服务器）。
+// @router /admin/p2p/tasks/:task_id/log [GET]
+func AdminP2pTaskLog(ctx context.Context, c *app.RequestContext) {
+	lines, err := getP2px().TaskLog(ctx, c.Param("task_id"))
+	if err != nil {
+		c.JSON(consts.StatusNotFound, map[string]any{"code": errcode.CodeNotFound, "message": err.Error()})
+		return
+	}
+	okData(c, map[string]any{"lines": lines})
+}
+
 // AdminP2pSend 发起发送。
 // @router /admin/p2p/send [POST]
 func AdminP2pSend(ctx context.Context, c *app.RequestContext) {
