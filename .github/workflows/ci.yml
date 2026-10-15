@@ -37,3 +37,29 @@ jobs:
           BAD=$(go list -deps ./... | grep -E '^github.com/pigeonbox/(server|frontend|fnos)' || true)
           if [ -n "$BAD" ]; then echo "✗ core 违规依赖:"; echo "$BAD"; exit 1; fi
           echo "✓ 依赖方向合规"
+
+  # 生成物对账（CHECK=1）：沙箱里从 IDL 再生成 gen/ 并与提交物比对，IDL 改了没跑
+  # gen-router.sh（或生成物被手改/多出杂散文件）即红。IDL 真相源=contracts，按
+  # core go.mod 钉版检出（不用 main，避免 contracts 领先造成假红）；目录布局对齐
+  # 本地工作区（../contracts），工具链复用 contracts 的 install-tools.sh——hz 运行时
+  # 要调 thriftgo CLI，两个都得装。
+  gen-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: go.sum
+      - name: Checkout contracts (按 core go.mod 钉版)
+        run: |
+          VERSION="$(go list -m -f '{{.Version}}' github.com/pigeonbox/contracts)"
+          echo "contracts @ ${VERSION}"
+          git clone --depth 1 --branch "${VERSION}" \
+            https://github.com/pigeonbox/contracts.git "${GITHUB_WORKSPACE}/../contracts"
+      - name: Install toolchain (contracts install-tools.sh 装 hz + thriftgo)
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          ../contracts/scripts/install-tools.sh
+      - name: Gen drift check (CHECK=1, 不落盘)
+        run: CHECK=1 ./scripts/gen-router.sh
