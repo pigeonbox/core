@@ -21,10 +21,8 @@ const (
 	CodeUnauthorized = errcode.CodeUnauthorized
 	CodeForbidden    = errcode.CodeForbidden
 	CodeNotFound     = errcode.CodeNotFound
-	// CodeConflict=10016：contracts v0.15.1 起可直接引 errcode.CodeConflict（v0.22.0 tag 时
-	// 该常量未发布故本地同值，此处随 deps 仪式切回引用，值不变）。
-	// 侧该常量随下一版 tag 发布，届时改回 errcode.CodeConflict 引用（跨仓
-	// 钉版须先 tag，go.mod 现钉 v0.15.0 不含此常量）。
+	// CodeConflict：contracts v0.15.1 起直接引用 errcode 常量（v0.22.0 tag 时该常量
+	// 未发布曾本地同值，随 deps 仪式切回引用，值不变）。
 	CodeConflict           = errcode.CodeConflict
 	CodeInternalError      = errcode.CodeInternal
 	CodeServiceUnavailable = errcode.CodeUnavailable
