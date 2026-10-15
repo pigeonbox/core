@@ -24,7 +24,7 @@ import (
 func requireLogin(c *app.RequestContext) (uint, bool) {
 	uid, ok := userIDFromCtx(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": 401, "message": "未登录"})
+		c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "未登录"})
 	}
 	return uid, ok
 }

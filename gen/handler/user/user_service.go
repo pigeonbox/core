@@ -79,7 +79,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &usermodel.RegisterResp{
-		Code:    200,
+		Code:    0,
 		Message: "注册成功",
 		Data: &usermodel.UserData{
 			ID:        int64(result.ID),
@@ -125,7 +125,7 @@ func Login(ctx context.Context, c *app.RequestContext) {
 	if err != nil {
 		_, _ = lock.RecordFailure(ctx, lockKey)
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": err.Error(),
 		})
 		return
@@ -137,7 +137,7 @@ func Login(ctx context.Context, c *app.RequestContext) {
 	middleware.SetSessionCookie(c, token, int(auth.SessionExpiry().Seconds()))
 
 	resp := &usermodel.LoginResp{
-		Code:    200,
+		Code:    0,
 		Message: "登录成功",
 		Data: &usermodel.LoginData{
 			Token: token,
@@ -191,7 +191,7 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 	// typed 契约响应(contracts v0.4.0 起 UserData 含 optional role,Role 取址
 	// 保持与原 map 补发相同的"恒发送"语义——omitempty 仅略过 nil 指针)
 	c.JSON(consts.StatusOK, &usermodel.UserInfoResp{
-		Code:    200,
+		Code:    0,
 		Message: "获取成功",
 		Data: &usermodel.UserData{
 			ID:        int64(user.ID),
@@ -224,7 +224,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return
@@ -250,7 +250,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &usermodel.UpdateProfileResp{
-		Code:    200,
+		Code:    0,
 		Message: "更新成功",
 	}
 
@@ -275,7 +275,7 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return
@@ -298,7 +298,7 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &usermodel.ChangePasswordResp{
-		Code:    200,
+		Code:    0,
 		Message: "密码修改成功",
 	}
 
@@ -312,7 +312,7 @@ func UserStats(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return
@@ -344,7 +344,7 @@ func UserStats(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &usermodel.UserStatsResp{
-		Code:    200,
+		Code:    0,
 		Message: "获取成功",
 		Data: &usermodel.UserStats{
 			TotalUploads: int64(stats.TotalUploads),
@@ -364,7 +364,7 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return
@@ -410,7 +410,7 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &usermodel.UserFilesResp{
-		Code:    200,
+		Code:    0,
 		Message: "获取成功",
 		Data:    fileList,
 	}
@@ -427,7 +427,7 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return
@@ -480,7 +480,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return
@@ -569,7 +569,7 @@ func DeleteAPIKey(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return
@@ -632,7 +632,7 @@ func RevokeAllAPIKeys(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    401,
+			"code":    errcode.CodeUnauthorized,
 			"message": "用户未登录",
 		})
 		return

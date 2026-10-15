@@ -112,7 +112,7 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 
 	// 构建响应
 	resp := &qrcode.GenerateQRCodeResp{
-		Code:    200,
+		Code:    0,
 		Message: "生成成功",
 		Data: &qrcode.QRCodeData{
 			ID:   id,

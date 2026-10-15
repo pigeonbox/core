@@ -234,7 +234,7 @@ func respondAPIKeyError(c *app.RequestContext, err error) {
 	if errors.Is(err, errAPITokenDisabled) {
 		c.Abort()
 		c.JSON(http.StatusUnauthorized, map[string]interface{}{
-			"code":    http.StatusUnauthorized,
+			"code":    errcode.CodeUnauthorized,
 			"message": "API token authentication is disabled",
 		})
 		return
@@ -258,7 +258,7 @@ func respondAPIKeyError(c *app.RequestContext, err error) {
 	}
 	c.Abort()
 	c.JSON(http.StatusUnauthorized, map[string]interface{}{
-		"code":    http.StatusUnauthorized,
+		"code":    errcode.CodeUnauthorized,
 		"message": "Invalid API Key",
 	})
 }
@@ -310,7 +310,7 @@ func AdminOrAdminKey() app.HandlerFunc {
 		v, _ := c.Get("role")
 		if role, _ := v.(string); role != "admin" {
 			c.JSON(http.StatusForbidden, map[string]interface{}{
-				"code":    http.StatusForbidden,
+				"code":    errcode.CodeForbidden,
 				"message": "Admin access required",
 			})
 			c.Abort()

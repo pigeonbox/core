@@ -25,6 +25,7 @@ import (
 	"github.com/pigeonbox/core/repo/db"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
 	customMw "github.com/pigeonbox/core/transport/http/middleware"
+	"github.com/pigeonbox/contracts/errcode"
 )
 
 // customizedRegister 注册自定义路由（不走 thrift IDL 生成）。
@@ -52,7 +53,7 @@ func customizedRegister(r *server.Hertz) {
 	r.POST("/api/v1/user/refresh", func(ctx context.Context, c *app.RequestContext) {
 		oldToken, viaCookie := middleware.SessionToken(c)
 		if oldToken == "" {
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": 401, "message": "missing token"})
+			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "missing token"})
 			return
 		}
 		if !middleware.CSRFAllowed(c, viaCookie) {
@@ -62,7 +63,7 @@ func customizedRegister(r *server.Hertz) {
 		newToken, err := auth.RefreshToken(ctx, oldToken)
 		if err != nil {
 			middleware.ClearSessionCookie(c)
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": 401, "message": "token invalid or expired"})
+			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "token invalid or expired"})
 			return
 		}
 		middleware.SetSessionCookie(c, newToken, int(auth.SessionExpiry().Seconds()))
@@ -142,7 +143,7 @@ func customizedRegister(r *server.Hertz) {
 	r.POST("/api/v1/user/logout", func(ctx context.Context, c *app.RequestContext) {
 		token, _ := middleware.SessionToken(c)
 		if token == "" {
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": 401, "message": "missing token"})
+			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "missing token"})
 			return
 		}
 		// 黑名单 TTL = token 剩余有效期（过期后自然失效，无需清理任务）

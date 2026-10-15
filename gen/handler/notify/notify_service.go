@@ -316,7 +316,7 @@ func Mine(ctx context.Context, c *app.RequestContext) {
 		})
 	}
 	c.JSON(consts.StatusOK, &notifymodel.MineResp{
-		Code:    200,
+		Code:    0,
 		Message: "ok",
 		Data: &notifymodel.MineData{
 			Items:      items,
@@ -335,7 +335,7 @@ func UnreadCount(ctx context.Context, c *app.RequestContext) {
 	uid, ok := userIDFromCtxNotify(c)
 	if !ok {
 		c.JSON(consts.StatusOK, &notifymodel.UnreadCountResp{
-			Code: 200, Message: "ok",
+			Code: 0, Message: "ok",
 			Data: &notifymodel.UnreadCountData{Unread: 0},
 		})
 		return
@@ -346,7 +346,7 @@ func UnreadCount(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, &notifymodel.UnreadCountResp{
-		Code: 200, Message: "ok",
+		Code: 0, Message: "ok",
 		Data: &notifymodel.UnreadCountData{Unread: n},
 	})
 }
@@ -371,7 +371,7 @@ func MarkRead(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, &notifymodel.MarkReadResp{
-		Code: 200, Message: "ok",
+		Code: 0, Message: "ok",
 		Data: &notifymodel.MarkReadData{Marked: n},
 	})
 }
@@ -383,7 +383,7 @@ func requireUserID(c *app.RequestContext) (uint, bool) {
 			return id, true
 		}
 	}
-	c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": 401, "message": "未登录"})
+	c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "未登录"})
 	return 0, false
 }
 

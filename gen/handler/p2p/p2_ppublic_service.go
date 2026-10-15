@@ -34,5 +34,5 @@ func PostP2PInvite(ctx context.Context, c *app.RequestContext) {
 	if inviteNotifier != nil {
 		inviteNotifier(inv.FromName, inv.Code, inv.Note) // best-effort,失败不影响收件
 	}
-	c.JSON(consts.StatusOK, &p2p.PostP2PInviteResp{Code: 200, Message: "邀请已送达"})
+	c.JSON(consts.StatusOK, &p2p.PostP2PInviteResp{Code: 0, Message: "邀请已送达"})
 }

@@ -238,7 +238,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 					fullShareURL += "?token=" + tk
 				}
 				c.JSON(consts.StatusOK, &chunkmodel.ChunkUploadInitResp{
-					Code:    200,
+					Code:    0,
 					Message: "文件已存在，秒传成功",
 					Data: &chunkmodel.ChunkUploadInitData{
 						UploadID:      "",
@@ -294,7 +294,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &chunkmodel.ChunkUploadInitResp{
-		Code:    200,
+		Code:    0,
 		Message: "初始化成功",
 		Data: &chunkmodel.ChunkUploadInitData{
 			UploadID:      result.UploadID,
@@ -447,7 +447,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &chunkmodel.ChunkUploadResp{
-		Code:    200,
+		Code:    0,
 		Message: "分片上传成功",
 		Data: &chunkmodel.ChunkUploadData{
 			ChunkIndex: int32(result.ChunkIndex),
@@ -523,7 +523,7 @@ func ChunkUploadStatus(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &chunkmodel.ChunkUploadStatusResp{
-		Code:    200,
+		Code:    0,
 		Message: "获取成功",
 		Data: &chunkmodel.ChunkUploadStatusData{
 			UploadID:        info.UploadID,
@@ -841,7 +841,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &chunkmodel.ChunkUploadCompleteResp{
-		Code:    200,
+		Code:    0,
 		Message: "上传完成",
 		Data: &chunkmodel.ChunkUploadCompleteData{
 			ShareCode: shareResult.Code,
@@ -924,7 +924,7 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &chunkmodel.ChunkUploadCancelResp{
-		Code:    200,
+		Code:    0,
 		Message: "上传已取消",
 	}
 

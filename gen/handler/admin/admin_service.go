@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	admin "github.com/pigeonbox/contracts/gen/admin"
+	"github.com/pigeonbox/contracts/errcode"
 	adminsvc "github.com/pigeonbox/core/app/admin"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -68,7 +69,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	if err != nil {
 		_, _ = lock.RecordFailure(ctx, lockKey)
 		c.JSON(consts.StatusUnauthorized, &admin.AdminLoginResp{
-			Code:    401,
+			Code:    errcode.CodeUnauthorized,
 			Message: err.Error(),
 		})
 		return
@@ -80,7 +81,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 
 	// 返回成功响应
 	resp := &admin.AdminLoginResp{
-		Code:    200,
+		Code:    0,
 		Message: "登录成功",
 		Data: &admin.AdminLoginData{
 			Token:     token,
@@ -104,7 +105,7 @@ func AdminStats(ctx context.Context, c *app.RequestContext) {
 	}
 
 	stats, err := getAdminService().GetStats(ctx)
-	resp := &admin.AdminStatsResp{Code: 200, Message: "success"}
+	resp := &admin.AdminStatsResp{Code: 0, Message: "success"}
 	if err != nil {
 		resp.Code = 500
 		resp.Message = err.Error()
@@ -167,7 +168,7 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 	} else {
 		files, total, err = getAdminService().GetFiles(ctx, page, pageSize, search)
 	}
-	resp := &admin.AdminListFilesResp{Code: 200, Message: "success"}
+	resp := &admin.AdminListFilesResp{Code: 0, Message: "success"}
 	if err != nil {
 		resp.Code = 500
 		resp.Message = err.Error()
@@ -213,7 +214,7 @@ func AdminDeleteFile(ctx context.Context, c *app.RequestContext) {
 	_ = c.BindAndValidate(&req)
 
 	pathParam := c.Param("id")
-	resp := &admin.AdminDeleteFileResp{Code: 200, Message: "success"}
+	resp := &admin.AdminDeleteFileResp{Code: 0, Message: "success"}
 	var err error
 
 	// 尝试按数字 id 删除
@@ -260,7 +261,7 @@ func AdminListUsers(ctx context.Context, c *app.RequestContext) {
 	}
 
 	users, total, err := getAdminService().GetUsers(ctx, page, pageSize)
-	resp := &admin.AdminListUsersResp{Code: 200, Message: "success"}
+	resp := &admin.AdminListUsersResp{Code: 0, Message: "success"}
 	if err != nil {
 		resp.Code = 500
 		resp.Message = err.Error()
@@ -310,7 +311,7 @@ func AdminUpdateUserStatus(ctx context.Context, c *app.RequestContext) {
 		statusStr = "active"
 	}
 	err = getAdminService().UpdateUserStatus(ctx, uint(req.ID), statusStr)
-	resp := &admin.AdminUpdateUserStatusResp{Code: 200, Message: "success"}
+	resp := &admin.AdminUpdateUserStatusResp{Code: 0, Message: "success"}
 	if err != nil {
 		resp.Code = 500
 		resp.Message = err.Error()
@@ -352,5 +353,5 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusInternalServerError, &admin.AdminUpdateConfigResp{Code: 500, Message: err.Error()})
 		return
 	}
-	c.JSON(consts.StatusOK, &admin.AdminUpdateConfigResp{Code: 200, Message: "success"})
+	c.JSON(consts.StatusOK, &admin.AdminUpdateConfigResp{Code: 0, Message: "success"})
 }

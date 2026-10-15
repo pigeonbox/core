@@ -53,7 +53,7 @@ func AdminListLocalFiles(ctx context.Context, c *app.RequestContext) {
 		})
 	}
 	c.JSON(consts.StatusOK, &admin.AdminListLocalFilesResp{
-		Code: 200, Message: "获取成功",
+		Code: 0, Message: "获取成功",
 		Data: &admin.AdminListLocalFilesData{
 			Roots:   shareService.LocalImportRoots(),
 			Entries: items,
@@ -80,7 +80,7 @@ func AdminDeleteLocalFile(ctx context.Context, c *app.RequestContext) {
 	}
 	// wire 增量：data 键不再下发（原恒 null）
 	c.JSON(consts.StatusOK, &admin.AdminDeleteLocalFileResp{
-		Code: 200, Message: "删除成功",
+		Code: 0, Message: "删除成功",
 	})
 }
 
@@ -151,7 +151,7 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 	})
 
 	c.JSON(consts.StatusOK, &admin.AdminImportLocalFileResp{
-		Code: 200, Message: "导入成功",
+		Code: 0, Message: "导入成功",
 		Data: &admin.AdminImportLocalFileData{
 			Code: result.Code, ShareURL: result.FullShareURL,
 		},
@@ -175,7 +175,7 @@ func AdminTestSMTP(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, &admin.AdminTestSMTPResp{
-		Code: 200, Message: "测试邮件已发送",
+		Code: 0, Message: "测试邮件已发送",
 	})
 }
 
@@ -190,7 +190,7 @@ func AdminTestOIDC(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, &admin.AdminTestOIDCResp{
-		Code: 200, Message: "OIDC discovery 验证通过",
+		Code: 0, Message: "OIDC discovery 验证通过",
 	})
 }
 
@@ -241,7 +241,7 @@ func AdminActivities(ctx context.Context, c *app.RequestContext) {
 		items = append(items, &item)
 	}
 	c.JSON(consts.StatusOK, &admin.AdminActivitiesResp{
-		Code: 200, Message: "获取成功",
+		Code: 0, Message: "获取成功",
 		Data: &admin.AdminActivitiesData{
 			Items: items, Total: total, Page: int32(page), PageSize: int32(pageSize),
 		},

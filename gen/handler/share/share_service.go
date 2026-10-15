@@ -209,7 +209,7 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 	})
 
 	resp := &sharemodel.ShareTextResp{
-		Code:    200,
+		Code:    0,
 		Message: "分享成功",
 		Data: &sharemodel.ShareData{
 			Code: result.Code,
@@ -431,7 +431,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 		deduped = boolPtr(true)
 	}
 	resp := &sharemodel.ShareFileResp{
-		Code:    200,
+		Code:    0,
 		Message: message,
 		Data: &sharemodel.ShareData{
 			Code:       shareResult.Code,
@@ -517,8 +517,10 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 			})
 			return
 		case gate.PickupPasswordMissing:
+			// 密码门（缺密码）语义归 20003 分享密码门，不再用 401 字面量；
+			// HTTP 层仍 401，data.has_password 供前端就地展开密码框
 			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    401,
+				"code":    errcode.CodeSharePasswordWrong,
 				"message": "需要密码",
 				"data": map[string]interface{}{
 					"has_password": true,
@@ -585,7 +587,7 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, &sharemodel.GetShareResp{
-		Code:    200,
+		Code:    0,
 		Message: "获取成功",
 		Data:    data,
 	})
@@ -872,7 +874,7 @@ func requireUserID(c *app.RequestContext) (uint, bool) {
 			return id, true
 		}
 	}
-	c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": 401, "message": "未登录"})
+	c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "未登录"})
 	return 0, false
 }
 
@@ -908,7 +910,7 @@ func UserSharesList(ctx context.Context, c *app.RequestContext) {
 	}
 
 	c.JSON(consts.StatusOK, &sharemodel.UserSharesListResp{
-		Code:    200,
+		Code:    0,
 		Message: "ok",
 		Data: &sharemodel.UserSharesListData{
 			Items:      items,
@@ -944,7 +946,7 @@ func UserSharesBatchDelete(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{
-		Code:    200,
+		Code:    0,
 		Message: "ok",
 		Data:    map[string]int32{"deleted": int32(n)},
 	})
@@ -983,7 +985,7 @@ func UserSharesBatchExtend(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{
-		Code:    200,
+		Code:    0,
 		Message: "ok",
 		Data:    map[string]int32{"extended": int32(n)},
 	})
@@ -1014,7 +1016,7 @@ func UserSharesRestore(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "恢复失败: " + err.Error()})
 		return
 	}
-	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{Code: 200, Message: "ok"})
+	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{Code: 0, Message: "ok"})
 }
 
 // UserSharesHardDelete 永久删除（仅已软删除的）
@@ -1042,5 +1044,5 @@ func UserSharesHardDelete(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": 500, "message": "永久删除失败: " + err.Error()})
 		return
 	}
-	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{Code: 200, Message: "ok"})
+	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{Code: 0, Message: "ok"})
 }

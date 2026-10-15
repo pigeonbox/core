@@ -1,24 +1,44 @@
 package errors
 
+import "github.com/pigeonbox/contracts/errcode"
+
+// 统一错误码（2026-10-15）：legacy 1001-1008 退役，常量名保留为 errcode
+// 别名重钉到 contracts/errcode 对应值——全部经由常量的发射点一次性迁移，
+// 无需改任何调用方。wire 上旧值不再出现（破坏性变更，随主/次版本公告，
+// 对照表见文档站 error-codes 页）：
+//
+//	1001 → 10001 InvalidParam
+//	1002 → 10002 Unauthorized
+//	1003 → 10003 Forbidden
+//	1004 → 10004 NotFound
+//	1005 → 10016 Conflict（errcode 新增）
+//	1006 → 10008 Internal
+//	1007 → 10006 Unavailable
+//	1008 → 10005 RateLimit
 const (
-	CodeSuccess            = 0
-	CodeBadRequest         = 1001
-	CodeUnauthorized       = 1002
-	CodeForbidden          = 1003
-	CodeNotFound           = 1004
-	CodeConflict           = 1005
-	CodeInternalError      = 1006
-	CodeServiceUnavailable = 1007
-	CodeTooManyRequests    = 1008
+	CodeSuccess            = errcode.CodeSuccess
+	CodeBadRequest         = errcode.CodeInvalidParam
+	CodeUnauthorized       = errcode.CodeUnauthorized
+	CodeForbidden          = errcode.CodeForbidden
+	CodeNotFound           = errcode.CodeNotFound
+	// CodeConflict=10016 与 contracts/errcode 的 CodeConflict 同值。contracts
+	// 侧该常量随下一版 tag 发布，届时改回 errcode.CodeConflict 引用（跨仓
+	// 钉版须先 tag，go.mod 现钉 v0.15.0 不含此常量）。
+	CodeConflict           = 10016
+	CodeInternalError      = errcode.CodeInternal
+	CodeServiceUnavailable = errcode.CodeUnavailable
+	CodeTooManyRequests    = errcode.CodeRateLimit
 )
 
+// codeMessages 与 errcode 默认文案对齐（调用方传空 message 时的兜底）；
+// 常量即 errcode 值，故此处键值与 contracts 侧文案保持一致。
 var codeMessages = map[int]string{
 	CodeSuccess:            "success",
-	CodeBadRequest:         "bad request",
+	CodeBadRequest:         "invalid parameter",
 	CodeUnauthorized:       "unauthorized",
 	CodeForbidden:          "forbidden",
 	CodeNotFound:           "not found",
-	CodeConflict:           "conflict",
+	CodeConflict:           "resource conflict",
 	CodeInternalError:      "internal server error",
 	CodeServiceUnavailable: "service unavailable",
 	CodeTooManyRequests:    "too many requests",

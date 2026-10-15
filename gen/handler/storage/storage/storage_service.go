@@ -54,7 +54,7 @@ func GetStorageInfo(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &storage.GetStorageInfoResp{
-		Code:    200,
+		Code:    0,
 		Message: "获取成功",
 		Data: &storage.StorageInfoData{
 			Current:        info.Current,
@@ -99,7 +99,7 @@ func SwitchStorage(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &storage.SwitchStorageResp{
-		Code:    200,
+		Code:    0,
 		Message: "切换成功",
 		Data: &storage.SwitchStorageData{
 			Success:     true,
@@ -135,7 +135,7 @@ func TestStorageConnection(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &storage.TestStorageConnectionResp{
-		Code:    200,
+		Code:    0,
 		Message: "连接测试成功",
 		Data: &storage.TestStorageData{
 			Type:   req.Type,
@@ -189,7 +189,7 @@ func UpdateStorageConfig(ctx context.Context, c *app.RequestContext) {
 	}
 
 	resp := &storage.UpdateStorageConfigResp{
-		Code:    200,
+		Code:    0,
 		Message: "存储配置更新成功",
 	}
 
