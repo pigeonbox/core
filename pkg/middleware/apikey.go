@@ -117,13 +117,17 @@ func allowPerKey(keyID uint, qps, burst int) bool {
 		burst = 2 * qps
 	}
 	perKeyGCOnce.Do(func() {
-		// 常驻 GC 无监督者，且 Range 内是无 ok 形式类型断言——GoSafe 兜底防
-		// 断言/演进 panic 带崩认证路径所在进程。
+		// 常驻 GC 无监督者：Range 断言带 ok 检查（条目类型演进错位时跳过而非
+		// panic，不依赖兜底），GoSafe 兜底其余未预期 panic 防带崩认证路径所在进程。
 		async.GoSafe(func() {
 			for range time.Tick(10 * time.Minute) {
 				now := time.Now()
 				perKeyLimiters.Range(func(k, v any) bool {
-					if now.Sub(v.(*keyLimiterEntry).lastAccess) > time.Hour {
+					e, ok := v.(*keyLimiterEntry)
+					if !ok {
+						return true // continue：类型不符跳过，只误伤清理时效不误伤认证
+					}
+					if now.Sub(e.lastAccess) > time.Hour {
 						perKeyLimiters.Delete(k)
 					}
 					return true
