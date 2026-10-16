@@ -131,13 +131,32 @@ func TestSystemConfigSaveUniqueRetryConverges(t *testing.T) {
 	assert.Equal(t, int64(1), cnt)
 }
 
-// TestIsUniqueViolation 撞唯一键双判据（gorm.ErrDuplicatedKey 映射 + sqlite 裸 SQL 子串）。
+// TestIsUniqueViolation 撞唯一键判据表驱动：gorm 映射分支 + 三家驱动裸 SQL
+// 文案（mysql/pg 无需真库，直接喂驱动实际报错文案）+ 反例锁窄匹配。
 func TestIsUniqueViolation(t *testing.T) {
-	assert.True(t, isUniqueViolation(fmt.Errorf("wrapped: %w", gorm.ErrDuplicatedKey)))
-	assert.True(t, isUniqueViolation(errors.New(
-		"INSERT INTO system_configs ...: UNIQUE constraint failed: system_configs.id")))
-	assert.False(t, isUniqueViolation(errors.New("disk I/O error")))
-	assert.False(t, isUniqueViolation(context.DeadlineExceeded))
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"gorm 映射（TranslateError 开启时）", fmt.Errorf("wrapped: %w", gorm.ErrDuplicatedKey), true},
+		{"sqlite 裸 SQL", errors.New(
+			"INSERT INTO system_configs ...: UNIQUE constraint failed: system_configs.id"), true},
+		{"mysql 1062 裸文案", errors.New(
+			"Error 1062: Duplicate entry '1' for key 'system_configs.PRIMARY'"), true},
+		{"pg 23505 裸文案", errors.New(
+			`ERROR: duplicate key value violates unique constraint "system_configs_pkey" (SQLSTATE 23505)`), true},
+		{"mysql 小写不命中（精确大小写）", errors.New(
+			"duplicate entry '1' for key 'PRIMARY'"), false},
+		{"裸 constraint failed 不命中（窄判据）", errors.New("some constraint failed"), false},
+		{"io 错误不命中", errors.New("disk I/O error"), false},
+		{"ctx 超时不命中", context.DeadlineExceeded, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isUniqueViolation(tc.err))
+		})
+	}
 }
 
 // TestSystemConfigSaveNotInitialized 全局 DB 未初始化 fail-fast。

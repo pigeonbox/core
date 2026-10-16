@@ -127,11 +127,21 @@ func (r *SystemConfigRepository) Save(ctx context.Context, rec *model.SystemConf
 	}
 }
 
-// isUniqueViolation 撞唯一键双判据（glebarez/sqlite 不映射 gorm.ErrDuplicatedKey，
-// 补 UNIQUE constraint failed 子串判据，照 app/share/service.go 先例）。
+// isUniqueViolation 撞唯一键判据：gorm.ErrDuplicatedKey 映射（需 gorm
+// TranslateError，core 未开，见 repo/db/database.go——mysql/pg 上该分支恒不
+// 命中）+ 三家驱动裸 SQL 文案子串，照 oekit gorm@v0.2.0/gormx/transaction.go
+// 先例并补 sqlite 分支：
+//   - sqlite  "UNIQUE constraint failed: …"
+//   - mysql   "Error 1062: Duplicate entry …"（大写 D）
+//   - pg      "… duplicate key value violates unique constraint …"（23505，小写）
+//
+// 按各家实际文案精确匹配，保持窄判据不加裸 "constraint failed"。
 func isUniqueViolation(err error) bool {
+	msg := err.Error()
 	return errors.Is(err, gorm.ErrDuplicatedKey) ||
-		strings.Contains(err.Error(), "UNIQUE constraint failed")
+		strings.Contains(msg, "UNIQUE constraint failed") || // sqlite
+		strings.Contains(msg, "Duplicate entry") || // mysql 1062
+		strings.Contains(msg, "duplicate key value") // pg 23505
 }
 
 // isSQLiteBusy SQLite 单写者 busy（含读快照过期后的 BUSY_SNAPSHOT 升级失败；
