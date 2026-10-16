@@ -49,9 +49,18 @@ func TestAssembleZipPanicReleasesReader(t *testing.T) {
 	}()
 
 	assembled := make(chan struct{})
+	rethrown := make(chan bool, 1)
 	go func() {
 		defer close(assembled)
-		defer func() { _ = recover() }() // 模拟外层 GoSafe 的 recover（消费重抛 panic）
+		defer func() {
+			// 锁定「panic 可见」半边语义：补偿后必须原样重抛（生产环境由
+			// 外层 GoSafe 记日志）；吞掉不抛则此处旗标为 false。
+			if r := recover(); r != nil {
+				rethrown <- true
+			} else {
+				rethrown <- false
+			}
+		}() // 模拟外层 GoSafe 的 recover（消费重抛 panic）
 		s.assembleZip(buildCtx, buildCtx, pw, cancel, &model.FileCode{},
 			[]zipItem{{name: "a.txt", rel: "a"}, {name: "b.txt", rel: "b"}})
 	}()
@@ -65,6 +74,12 @@ func TestAssembleZipPanicReleasesReader(t *testing.T) {
 		t.Fatal("读端永久阻塞：panic 后写端未被 CloseWithError 释放")
 	}
 	<-assembled
+	select {
+	case ok := <-rethrown:
+		assert.True(t, ok, "补偿 defer 须原样重抛 panic（panic 可见半边语义），不得吞")
+	case <-time.After(5 * time.Second):
+		t.Fatal("未观察到重抛：组装协程未按预期结束")
+	}
 }
 
 // TestAssembleZipNormalPathCompletes 正常路径对照：抽取 assembleZip 不改变
