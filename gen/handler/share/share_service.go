@@ -451,7 +451,9 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 // @router /share/select/ [GET]
 func GetShare(ctx context.Context, c *app.RequestContext) {
 	code := c.Query("code")
-	password := c.Query("password")
+	// 取件密码经请求头（IDL share.thrift GetShareReq api.header 同步改；
+	// query 形态有访问日志/Referer 泄漏面，2026-10-16 拍板与下载端点同批收敛）
+	password := string(c.GetHeader("X-Share-Password"))
 
 	if code == "" {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
