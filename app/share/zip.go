@@ -11,7 +11,7 @@ import (
 
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/pigeonbox/kit/async"
+	"github.com/oekit/concurrency/async"
 )
 
 // zipStreamTimeout zip 组装整体超时（异步 goroutine 内的存储读取/写管路上限）。

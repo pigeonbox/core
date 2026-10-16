@@ -10,7 +10,7 @@ import (
 
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/kit/async"
+	"github.com/oekit/concurrency/async"
 	"github.com/redis/go-redis/v9"
 )
 

@@ -22,9 +22,9 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
-	"github.com/pigeonbox/kit/async"
-	"github.com/pigeonbox/kit/retry"
-	"github.com/pigeonbox/kit/uidgen"
+	"github.com/oekit/concurrency/async"
+	"github.com/oekit/concurrency/retry"
+	"github.com/oekit/pkg/uidgen"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

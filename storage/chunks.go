@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/pigeonbox/core/storage/opendal"
-	"github.com/pigeonbox/kit/async"
+	"github.com/oekit/concurrency/async"
 )
 
 // chunkKey 分片对象 key（fs/远端统一 '/' 分隔；fs 侧 filepath.Join 兼容处理）

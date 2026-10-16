@@ -1,6 +1,6 @@
 // uploadpath.go 上传相对路径的统一生成收口。
 //
-// 随机码/令牌生成已上收至 github.com/pigeonbox/kit/uidgen（2026-10-05 起）；
+// 随机码/令牌生成已上收至 github.com/oekit/pkg/uidgen（2026-10-05 起）；
 // 上传相对路径 uploads/YYYY/MM/DD/ 的拼接逻辑保留在此。
 package utils
 

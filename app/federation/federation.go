@@ -24,7 +24,7 @@ import (
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
-	"github.com/pigeonbox/kit/async"
+	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 )
 

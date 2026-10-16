@@ -1,4 +1,4 @@
-// Package memkv 进程内字符串 TTL KV（主包仅依赖标准库与 pigeonbox/kit/async，后者为纯标准库实现的外部模块）：单机内存模式的共享存储原语。
+// Package memkv 进程内字符串 TTL KV（主包仅依赖标准库与 oekit/concurrency/async，后者为纯标准库实现的外部模块）：单机内存模式的共享存储原语。
 //
 // 服务对象：Redis 消费方（anonymous/presign 等持窄接口的域）在 redis.host 为空
 // 时的等价兜底——取件码映射、直传会话这类短 TTL 数据。语义对齐 Redis 最小子集：
@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pigeonbox/kit/async"
+	"github.com/oekit/concurrency/async"
 )
 
 const (

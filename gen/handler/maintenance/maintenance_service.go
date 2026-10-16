@@ -10,7 +10,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/pigeonbox/contracts/errcode"
 	adminsvc "github.com/pigeonbox/core/app/admin"
-	"github.com/pigeonbox/kit/version"
+	"github.com/oekit/core/version"
 )
 
 var adminService *adminsvc.Service

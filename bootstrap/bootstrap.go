@@ -24,7 +24,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/redis"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
-	"github.com/pigeonbox/kit/async"
+	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

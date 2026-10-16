@@ -8,7 +8,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/pigeonbox/kit/version"
+	"github.com/oekit/core/version"
 )
 
 // Health 健康检查

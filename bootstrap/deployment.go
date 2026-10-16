@@ -41,7 +41,7 @@ import (
 	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/redis"
 	"github.com/pigeonbox/core/storage"
-	"github.com/pigeonbox/kit/async"
+	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 
 	configApp "github.com/pigeonbox/core/app/config"

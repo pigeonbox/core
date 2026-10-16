@@ -26,8 +26,8 @@ import (
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/pigeonbox/kit/httpjson"
-	"github.com/pigeonbox/kit/singleflight"
+	"github.com/oekit/pkg/httpjson"
+	"github.com/oekit/concurrency/singleflight"
 )
 
 // ErrAccountDisabled 匹配命中的本地账号已被禁用（回调不发 JWT，2026-10-08 加固）

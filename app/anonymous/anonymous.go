@@ -28,7 +28,7 @@ import (
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/pigeonbox/kit/uidgen"
+	"github.com/oekit/pkg/uidgen"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )

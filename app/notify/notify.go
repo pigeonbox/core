@@ -21,8 +21,8 @@ import (
 	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/pigeonbox/kit/async"
-	"github.com/pigeonbox/kit/httpjson"
+	"github.com/oekit/concurrency/async"
+	"github.com/oekit/pkg/httpjson"
 )
 
 // webhookHTTPClient webhook 推送专用客户端（5s 超时；推送失败静默记日志不重试）。

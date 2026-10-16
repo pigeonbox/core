@@ -8,7 +8,7 @@ import (
 
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/storage"
-	"github.com/pigeonbox/kit/version"
+	"github.com/oekit/core/version"
 )
 
 // SystemInfo 系统信息
