@@ -6,6 +6,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 
 	adminApp "github.com/pigeonbox/core/app/admin"
@@ -22,13 +23,17 @@ func startExpiredFileCleanup(svc *adminApp.Service) {
 	defer ticker.Stop()
 	ctx := context.Background()
 	for range ticker.C {
-		if n, freed, err := svc.CleanExpiredFiles(ctx); err != nil {
-			logger.Error("expired file cleanup failed", zap.Error(err))
-		} else if n > 0 {
-			logger.Info("expired files cleaned",
-				zap.Int64("count", n),
-				zap.Int64("freed_bytes", freed))
-		}
+		// 单轮 panic 收编（RunSafe 同步恢复→全局 zap panic handler）：
+		// 否则一轮 panic 打死 goroutine，定时清理从此静默停摆；下一轮 ticker 照常跑
+		async.RunSafe(func() {
+			if n, freed, err := svc.CleanExpiredFiles(ctx); err != nil {
+				logger.Error("expired file cleanup failed", zap.Error(err))
+			} else if n > 0 {
+				logger.Info("expired files cleaned",
+					zap.Int64("count", n),
+					zap.Int64("freed_bytes", freed))
+			}
+		})
 	}
 }
 
@@ -46,28 +51,31 @@ func startMaintenanceJanitor() {
 	time.Sleep(10 * time.Minute)
 	ctx := context.Background()
 	run := func() {
-		if _, removed, err := j.ReconcileOrphans(ctx); err != nil {
-			logger.Warn("orphan reconcile failed", zap.Error(err))
-		} else if removed > 0 {
-			logger.Info("orphan files removed", zap.Int("count", removed))
-		}
-		if n, err := j.CleanupLogs(ctx); err != nil {
-			logger.Warn("log retention cleanup failed", zap.Error(err))
-		} else if n > 0 {
-			logger.Info("retention logs cleaned", zap.Int64("count", n))
-		}
-		if dirs, err := j.CleanupStaleUploads(ctx, 24*time.Hour); err != nil {
-			logger.Warn("stale chunk session cleanup failed", zap.Error(err))
-		} else if dirs > 0 {
-			logger.Info("stale chunk dirs cleaned", zap.Int("count", dirs))
-		}
-		// 远端 presign 孤儿清理（Init 后未 Complete 的直传残留；
-		// 本地后端自动跳过，由 ReconcileOrphans 覆盖）
-		if n, err := j.CleanRemotePresignOrphans(ctx, 24*time.Hour); err != nil {
-			logger.Warn("remote presign orphan cleanup failed", zap.Error(err))
-		} else if n > 0 {
-			logger.Info("remote presign orphan objects removed", zap.Int("count", n))
-		}
+		// 单轮 panic 收编（同 startExpiredFileCleanup）：一轮炸掉不终止对账循环
+		async.RunSafe(func() {
+			if _, removed, err := j.ReconcileOrphans(ctx); err != nil {
+				logger.Warn("orphan reconcile failed", zap.Error(err))
+			} else if removed > 0 {
+				logger.Info("orphan files removed", zap.Int("count", removed))
+			}
+			if n, err := j.CleanupLogs(ctx); err != nil {
+				logger.Warn("log retention cleanup failed", zap.Error(err))
+			} else if n > 0 {
+				logger.Info("retention logs cleaned", zap.Int64("count", n))
+			}
+			if dirs, err := j.CleanupStaleUploads(ctx, 24*time.Hour); err != nil {
+				logger.Warn("stale chunk session cleanup failed", zap.Error(err))
+			} else if dirs > 0 {
+				logger.Info("stale chunk dirs cleaned", zap.Int("count", dirs))
+			}
+			// 远端 presign 孤儿清理（Init 后未 Complete 的直传残留；
+			// 本地后端自动跳过，由 ReconcileOrphans 覆盖）
+			if n, err := j.CleanRemotePresignOrphans(ctx, 24*time.Hour); err != nil {
+				logger.Warn("remote presign orphan cleanup failed", zap.Error(err))
+			} else if n > 0 {
+				logger.Info("remote presign orphan objects removed", zap.Int("count", n))
+			}
+		})
 	}
 	run()
 	ticker := time.NewTicker(24 * time.Hour)

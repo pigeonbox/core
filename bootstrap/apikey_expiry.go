@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 
 	notifyApp "github.com/pigeonbox/core/app/notify"
@@ -26,30 +27,34 @@ func startAPIKeyExpiryNotify() {
 	notifySvc := notifyApp.NewService(db.GetDB())   // 装配层显式句柄
 
 	run := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		keys, err := repo.ListExpiringWithin(ctx, time.Now().Add(apiKeyExpiryNotifyWindow))
-		if err != nil {
-			logger.Warn("api key expiry scan failed", zap.Error(err))
-			return
-		}
-		for _, k := range keys {
-			content := fmt.Sprintf("API Key「%s」（前缀 %s…）将于 %s 过期。若仍在使用请续期（吊销后重建），不再使用建议立即吊销。",
-				k.Name, k.Prefix, k.ExpiresAt.Format("2006-01-02 15:04"))
-			if err := notifySvc.CreateForUserSimple(ctx, k.UserID,
-				"API Key 即将过期", content, "system", "warning"); err != nil {
-				logger.Warn("api key expiry notify failed",
-					zap.Uint("key_id", k.ID), zap.Error(err))
-				continue
+		// 单轮 panic 收编（RunSafe 同步恢复→全局 zap panic handler，同 tasks.go）：
+		// 否则一轮 panic 打死 goroutine，临期通知从此静默停摆
+		async.RunSafe(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			keys, err := repo.ListExpiringWithin(ctx, time.Now().Add(apiKeyExpiryNotifyWindow))
+			if err != nil {
+				logger.Warn("api key expiry scan failed", zap.Error(err))
+				return
 			}
-			if err := repo.MarkExpiryNotified(ctx, k.ID); err != nil {
-				logger.Warn("api key expiry mark failed",
-					zap.Uint("key_id", k.ID), zap.Error(err))
+			for _, k := range keys {
+				content := fmt.Sprintf("API Key「%s」（前缀 %s…）将于 %s 过期。若仍在使用请续期（吊销后重建），不再使用建议立即吊销。",
+					k.Name, k.Prefix, k.ExpiresAt.Format("2006-01-02 15:04"))
+				if err := notifySvc.CreateForUserSimple(ctx, k.UserID,
+					"API Key 即将过期", content, "system", "warning"); err != nil {
+					logger.Warn("api key expiry notify failed",
+						zap.Uint("key_id", k.ID), zap.Error(err))
+					continue
+				}
+				if err := repo.MarkExpiryNotified(ctx, k.ID); err != nil {
+					logger.Warn("api key expiry mark failed",
+						zap.Uint("key_id", k.ID), zap.Error(err))
+				}
 			}
-		}
-		if len(keys) > 0 {
-			logger.Info("api key expiry notifications sent", zap.Int("count", len(keys)))
-		}
+			if len(keys) > 0 {
+				logger.Info("api key expiry notifications sent", zap.Int("count", len(keys)))
+			}
+		})
 	}
 
 	run() // 启动即扫一轮
