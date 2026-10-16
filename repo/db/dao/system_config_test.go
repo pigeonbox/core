@@ -102,7 +102,7 @@ func TestSystemConfigSaveUniqueRetryConverges(t *testing.T) {
 	ctx := context.Background()
 
 	var primed bool
-	g.Callback().Create().Before("gorm:create").Register("rival_write", func(tx *gorm.DB) {
+	_ = g.Callback().Create().Before("gorm:create").Register("rival_write", func(tx *gorm.DB) {
 		if primed {
 			return
 		}

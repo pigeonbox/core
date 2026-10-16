@@ -65,7 +65,7 @@ echo '{"event":"invite","code":"BBBB-BBBB-BBBB","from":"bbbb","name":"发送站B
 exec sleep 60
 `)
 	s := watcherService(t, bin)
-	defer s.Stop()
+	defer func() { _ = s.Stop() }()
 
 	got := waitInvites(t, s, 2, 5*time.Second)
 	if len(got) < 2 {
@@ -116,7 +116,7 @@ echo "{\"event\":\"invite\",\"code\":\"CCCC-$ID-CCCC\",\"from\":\"cccc\",\"name\
 	if runs < 2 {
 		t.Fatalf("watcher 进程死后应被守护重启(≥2 轮),实得 %d 轮邀请", runs)
 	}
-	s.Stop()
+	_ = s.Stop()
 }
 
 func TestWatcherDisabledNoSpawn(t *testing.T) {
@@ -130,7 +130,7 @@ func TestWatcherDisabledNoSpawn(t *testing.T) {
 			return conf.P2PDirectConfig{Enabled: true, Discoverable: false, BinaryPath: bin}, true
 		},
 	})
-	defer s.Stop()
+	defer func() { _ = s.Stop() }()
 	time.Sleep(150 * time.Millisecond) // 若误拉起,stub 会立即投喂
 	if got := s.ListInvites(); len(got) != 0 {
 		t.Fatalf("discoverable 关闭不得收邀请,实得 %d", len(got))
@@ -144,7 +144,7 @@ func TestWatcherDisabledNoSpawn(t *testing.T) {
 			return conf.P2PDirectConfig{Enabled: true, Discoverable: true, BinaryPath: "/nonexistent/p2pc"}, true
 		},
 	})
-	defer s2.Stop()
+	defer func() { _ = s2.Stop() }()
 	time.Sleep(150 * time.Millisecond)
 	if got := s2.ListInvites(); len(got) != 0 {
 		t.Fatalf("二进制缺失不得收邀请,实得 %d", len(got))
@@ -197,7 +197,7 @@ func TestSendRejectsMalformedInviteTo(t *testing.T) {
 			}, true
 		},
 	})
-	defer s.Stop()
+	defer func() { _ = s.Stop() }()
 	real, err := filepath.EvalSymlinks(root) // macOS /var→/private/var,白名单归一同源
 	if err != nil {
 		t.Fatal(err)

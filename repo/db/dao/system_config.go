@@ -100,7 +100,10 @@ func (r *SystemConfigRepository) Save(ctx context.Context, rec *model.SystemConf
 	for attempt := 0; ; attempt++ {
 		err := g.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			q := tx
-			if tx.Dialector.Name() != "sqlite" {
+			// 断链赋值规避 QF1008（gorm 嵌入提升字段链式选择器两头触发，
+			// 先例见 user_shares 类型纠偏专项）
+			dial := tx.Dialector
+			if dial.Name() != "sqlite" {
 				q = q.Clauses(clause.Locking{Strength: "UPDATE"})
 			}
 			var existing model.SystemConfigRecord

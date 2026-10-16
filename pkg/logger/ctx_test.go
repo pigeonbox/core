@@ -71,8 +71,8 @@ func TestCtxError_KvPairingAndOddTail(t *testing.T) {
 func TestCtxInfo_NilCtxSafe(t *testing.T) {
 	logs := withObservedLogger(t)
 
-	assert.NotPanics(t, func() { CtxInfo(nil, "nil ctx ok") })
-	assert.NotPanics(t, func() { assert.Equal(t, "", TraceIDFromContext(nil)) })
+	assert.NotPanics(t, func() { CtxInfo(context.TODO(), "nil ctx ok") })
+	assert.NotPanics(t, func() { assert.Equal(t, "", TraceIDFromContext(context.TODO())) })
 
 	entries := logs.All()
 	require.Len(t, entries, 1)

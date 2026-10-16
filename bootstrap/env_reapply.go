@@ -57,7 +57,7 @@ func setConfPath(root reflect.Value, path, raw string) error {
 	parts := strings.Split(path, ".")
 	cur := root
 	for i, p := range parts {
-		if cur.Kind() == reflect.Ptr {
+		if cur.Kind() == reflect.Pointer {
 			if cur.IsNil() {
 				return fmt.Errorf("nil segment at %q", strings.Join(parts[:i], "."))
 			}
@@ -98,7 +98,7 @@ func findConfField(structVal reflect.Value, tag string) reflect.Value {
 // 字符串切片叶按 CSV 拆分——envBindings 里的列表键全部走 splitCSV 语义）。
 func setConfLeaf(field reflect.Value, raw string) error {
 	t := field.Type()
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		if field.IsNil() {
 			field.Set(reflect.New(t.Elem()))
 		}
