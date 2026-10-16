@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ErrDBNotInitialized 全局 DB 未初始化（如纯内存单测、bootstrap 早期阶段）。
@@ -77,20 +79,66 @@ func (r *SystemConfigRepository) Get(ctx context.Context) (*model.SystemConfigRe
 	return &rec, nil
 }
 
+// errRetryableConflict 可写冲突哨兵（不外泄）：唯一键撞键（MySQL gap-lock
+// 并发首写窗口）或 SQLite 单写者快照过期（BUSY_SNAPSHOT/locked——事务内先读
+// 后写，读快照建立后他方已提交）。不在事务内直接转更新——已建立的
+// 一致性快照看不到并发胜出行（MySQL RR / SQLite WAL 皆然），
+// 必须新事务新快照才可达更新路径。
+var errRetryableConflict = errors.New("dao: system_config write conflict, retry once")
+
 // Save 保存配置：已存在则更新首行，否则创建（保证全表至多一行）。
+// 事务+行锁+撞键重试语义参考 oekit/pkg gormx（MIT）：
+//   - 事务内锁读防并发双 Create；glebarez/sqlite 不支持 FOR UPDATE，跳行锁
+//     （sqlite 单写者语义由事务本身保证，照 oekit gormrepo 先例）
+//   - Create 撞键/单写者 busy（并发首写窗口）→ 整体重试一次，新事务
+//     锁读必见胜出行，转更新路径收敛（重试仅一次，防活锁）
 func (r *SystemConfigRepository) Save(ctx context.Context, rec *model.SystemConfigRecord) error {
 	g := r.db()
 	if g == nil {
 		return ErrDBNotInitialized
 	}
-	existing, err := r.Get(ctx)
-	if err != nil {
+	for attempt := 0; ; attempt++ {
+		err := g.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			q := tx
+			if tx.Dialector.Name() != "sqlite" {
+				q = q.Clauses(clause.Locking{Strength: "UPDATE"})
+			}
+			var existing model.SystemConfigRecord
+			rerr := q.First(&existing).Error
+			if rerr != nil && !errors.Is(rerr, gorm.ErrRecordNotFound) {
+				return rerr
+			}
+			if rerr == nil {
+				rec.ID, rec.CreatedAt = existing.ID, existing.CreatedAt
+				return tx.Model(&existing).UpdateColumn("data", rec.Data).Error
+			}
+			if cerr := tx.Create(rec).Error; cerr != nil {
+				if isUniqueViolation(cerr) || isSQLiteBusy(cerr) {
+					return errRetryableConflict
+				}
+				return cerr
+			}
+			return nil
+		})
+		if attempt == 0 && errors.Is(err, errRetryableConflict) {
+			continue // 重试一次：新事务新快照，锁读必见并发胜出行
+		}
 		return err
 	}
-	if existing == nil {
-		return g.WithContext(ctx).Create(rec).Error
-	}
-	rec.ID = existing.ID
-	rec.CreatedAt = existing.CreatedAt
-	return g.WithContext(ctx).Model(existing).UpdateColumn("data", rec.Data).Error
+}
+
+// isUniqueViolation 撞唯一键双判据（glebarez/sqlite 不映射 gorm.ErrDuplicatedKey，
+// 补 UNIQUE constraint failed 子串判据，照 app/share/service.go 先例）。
+func isUniqueViolation(err error) bool {
+	return errors.Is(err, gorm.ErrDuplicatedKey) ||
+		strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// isSQLiteBusy SQLite 单写者 busy（含读快照过期后的 BUSY_SNAPSHOT 升级失败；
+// 驱动报错文案不一，按子串匹配）。
+func isSQLiteBusy(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked") ||
+		strings.Contains(msg, "SQLITE_BUSY")
 }

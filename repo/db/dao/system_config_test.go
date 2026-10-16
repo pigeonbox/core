@@ -1,0 +1,148 @@
+package dao
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"github.com/pigeonbox/core/repo/db/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+// newSystemConfigTestDB 开一个隔离的 :memory: 库并迁移 system_configs 表。
+// glebarez/sqlite 的 :memory: 每条连接是独立库，必须钉死单连接
+//（同 inject_test.go 的 newInjectTestDB 处理方式），并发事务由连接池串行化。
+func newSystemConfigTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, g.AutoMigrate(&model.SystemConfigRecord{}))
+	sqlDB, err := g.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	return g
+}
+
+// TestSystemConfigSaveConcurrentConverges 并发 Save 收敛单行：N 路并发携带
+// 不同 data 的 Save 不得双行、不得泄漏错误，终态必为其中一份完整 data。
+func TestSystemConfigSaveConcurrentConverges(t *testing.T) {
+	g := newSystemConfigTestDB(t)
+	repo := NewSystemConfigRepository(g)
+	ctx := context.Background()
+
+	const n = 20
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = repo.Save(ctx, &model.SystemConfigRecord{Data: fmt.Sprintf(`{"v":%d}`, i)})
+		}(i)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		require.NoError(t, err, "goroutine %d Save 报错", i)
+	}
+
+	var cnt int64
+	require.NoError(t, g.Model(&model.SystemConfigRecord{}).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt, "并发 Save 后必须收敛到单行")
+
+	var rec model.SystemConfigRecord
+	require.NoError(t, g.First(&rec).Error)
+	assert.Regexp(t, `^\{"v":\d+\}$`, rec.Data, "终态 data 必为某一并发方完整一份")
+}
+
+// TestSystemConfigSaveUpdatePreservesIdentity 已有行时 Save 走更新路径：
+// 不新增行，保留原 ID/CreatedAt，data 全量替换。
+func TestSystemConfigSaveUpdatePreservesIdentity(t *testing.T) {
+	g := newSystemConfigTestDB(t)
+	repo := NewSystemConfigRepository(g)
+	ctx := context.Background()
+
+	require.NoError(t, repo.Save(ctx, &model.SystemConfigRecord{Data: `{"v":1}`}))
+	saved, err := repo.Get(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+
+	require.NoError(t, repo.Save(ctx, &model.SystemConfigRecord{Data: `{"v":2}`}))
+	got, err := repo.Get(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, saved.ID, got.ID, "更新路径不得换行")
+	assert.Equal(t, saved.CreatedAt.Unix(), got.CreatedAt.Unix(), "CreatedAt 须保留")
+	assert.Equal(t, `{"v":2}`, got.Data)
+
+	var cnt int64
+	require.NoError(t, g.Model(&model.SystemConfigRecord{}).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt)
+}
+
+// TestSystemConfigSaveUniqueRetryConverges 撞键重试收敛（确定性复现并发首写）：
+// 本事务锁读已确认无行、Create 执行前的瞬间，竞争连接插入并提交唯一行——
+// 本事务 Create 撞真实唯一约束（或单写者快照过期 busy），Save 须整体重试一次、
+// 新事务看到胜出行并转更新路径收敛，不泄漏错误、不产生第二行。
+// 用文件库+双连接（:memory: 每连接独立库无法复现跨连接竞争，故不用钉单连接）。
+func TestSystemConfigSaveUniqueRetryConverges(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "syscfg.db") +
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	g, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, g.AutoMigrate(&model.SystemConfigRecord{}))
+	rival, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+
+	repo := NewSystemConfigRepository(g)
+	ctx := context.Background()
+
+	var primed bool
+	g.Callback().Create().Before("gorm:create").Register("rival_write", func(tx *gorm.DB) {
+		if primed {
+			return
+		}
+		primed = true
+		// 竞争首写：另一连接落库提交唯一行；同时把本事务的插入目标改为
+		// 与胜出行冲突的主键，令本次 Create 实际撞键。
+		require.NoError(t, rival.Exec(
+			`INSERT INTO system_configs (id, created_at, updated_at, data)
+			 VALUES (1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '{"v":1}')`).Error)
+		if rec, ok := tx.Statement.Dest.(*model.SystemConfigRecord); ok {
+			rec.ID = 1
+		}
+	})
+
+	require.NoError(t, repo.Save(ctx, &model.SystemConfigRecord{Data: `{"v":2}`}),
+		"撞键后应整体重试一次并收敛，不得外泄错误")
+
+	got, err := repo.Get(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, uint(1), got.ID, "重试应看到胜出行并走更新路径")
+	assert.Equal(t, `{"v":2}`, got.Data, "重试须转更新路径收敛为第二份数据")
+
+	var cnt int64
+	require.NoError(t, g.Model(&model.SystemConfigRecord{}).Count(&cnt).Error)
+	assert.Equal(t, int64(1), cnt)
+}
+
+// TestIsUniqueViolation 撞唯一键双判据（gorm.ErrDuplicatedKey 映射 + sqlite 裸 SQL 子串）。
+func TestIsUniqueViolation(t *testing.T) {
+	assert.True(t, isUniqueViolation(fmt.Errorf("wrapped: %w", gorm.ErrDuplicatedKey)))
+	assert.True(t, isUniqueViolation(errors.New(
+		"INSERT INTO system_configs ...: UNIQUE constraint failed: system_configs.id")))
+	assert.False(t, isUniqueViolation(errors.New("disk I/O error")))
+	assert.False(t, isUniqueViolation(context.DeadlineExceeded))
+}
+
+// TestSystemConfigSaveNotInitialized 全局 DB 未初始化 fail-fast。
+func TestSystemConfigSaveNotInitialized(t *testing.T) {
+	repo := NewSystemConfigRepository(nil)
+	err := repo.Save(context.Background(), &model.SystemConfigRecord{Data: "{}"})
+	assert.ErrorIs(t, err, ErrDBNotInitialized)
+}
