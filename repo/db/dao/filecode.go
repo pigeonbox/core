@@ -176,11 +176,12 @@ func (r *FileCodeRepository) List(ctx context.Context, page, pageSize int, searc
 
 	query := r.db().WithContext(ctx).Model(&model.FileCode{})
 
-	// 搜索条件
+	// 搜索条件（pickup_code 纳入 LIKE 链，对齐用户面/管理端 ListWithFilter——
+	// 2026-10-09 遗留缺口：管理面老 List 搜 6 位取件码不命中；NULL 列 LIKE 恒不匹配，无副作用）
 	if search != "" {
 		pattern, esc := LikeContains(search)
-		query = query.Where("code LIKE ? OR prefix LIKE ? OR suffix LIKE ? "+esc,
-			pattern, pattern, pattern)
+		query = query.Where("code LIKE ? OR prefix LIKE ? OR suffix LIKE ? OR pickup_code LIKE ?"+esc,
+			pattern, pattern, pattern, pattern)
 	}
 
 	return paginate[model.FileCode](query.Order("created_at DESC"), page, pageSize)

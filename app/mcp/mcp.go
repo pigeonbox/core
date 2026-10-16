@@ -507,25 +507,25 @@ func (s *Service) toolDefs() []toolDef {
 			"expire_style": strProp("过期样式：minute/hour/day/week/month/year，默认 day"),
 		}, nil)},
 		{Name: "preview_share", MinScope: scopeUser, Description: "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）", InputSchema: objSchema(map[string]any{
-			"code":     strProp("分享码（8 位）或自定义口令"),
+			"code":     strProp("分享码（8 位）、6 位取件码或自定义口令"),
 			"password": strProp("密码保护分享的取件密码"),
 		}, []string{"code"})},
-		{Name: "get_share", MinScope: scopeAdmin, Description: "按分享码查询分享信息（不消耗取件次数）", InputSchema: objSchema(map[string]any{
-			"code": strProp("分享码（8 位）或自定义口令"),
+		{Name: "get_share", MinScope: scopeAdmin, Description: "按分享码或 6 位取件码查询分享信息（不消耗取件次数）", InputSchema: objSchema(map[string]any{
+			"code": strProp("分享码（8 位）、6 位取件码或自定义口令"),
 		}, []string{"code"})},
 		{Name: "get_share_content", MinScope: scopeAdmin, Description: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）", InputSchema: objSchema(map[string]any{
-			"code": strProp("分享码（8 位）或自定义口令"),
+			"code": strProp("分享码（8 位）、6 位取件码或自定义口令"),
 		}, []string{"code"})},
 		{Name: "download_share_file", MinScope: scopeAdmin, Description: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）", InputSchema: objSchema(map[string]any{
-			"code": strProp("分享码（8 位）或自定义口令"),
+			"code": strProp("分享码（8 位）、6 位取件码或自定义口令"),
 		}, []string{"code"})},
-		{Name: "list_shares", MinScope: scopeAdmin, Description: "分页列出全站分享记录（可按分享码/文件名搜索）", InputSchema: objSchema(map[string]any{
+		{Name: "list_shares", MinScope: scopeAdmin, Description: "分页列出全站分享记录（可按分享码/取件码/文件名搜索）", InputSchema: objSchema(map[string]any{
 			"page":      intProp("页码，默认 1"),
 			"page_size": intProp("每页条数，默认 20，上限 100"),
 			"keyword":   strProp("搜索关键字（取件码）"),
 		}, nil)},
 		{Name: "delete_share", MinScope: scopeAdmin, Description: "删除指定分享（DB 记录 + 物理文件，写审计日志）", InputSchema: objSchema(map[string]any{
-			"code": strProp("分享码（8 位）或自定义口令"),
+			"code": strProp("分享码（8 位）、6 位取件码或自定义口令"),
 		}, []string{"code"})},
 		{Name: "get_system_status", MinScope: scopeAdmin, Description: "系统运行状态（文件/用户/上传统计）", InputSchema: objSchema(nil, nil)},
 		{Name: "get_storage_info", MinScope: scopeAdmin, Description: "存储使用状态（类型/容量/文件数）", InputSchema: objSchema(nil, nil)},
@@ -536,7 +536,7 @@ func (s *Service) toolDefs() []toolDef {
 		{Name: "cleanup_expired", MinScope: scopeAdmin, Description: "清理全部过期分享（DB + 物理文件）", InputSchema: objSchema(nil, nil)},
 		{Name: "federation_status", MinScope: scopeAdmin, Description: "P2P 联邦状态（是否启用/节点 ID/注册中心/最近心跳）", InputSchema: objSchema(nil, nil)},
 		{Name: "federation_resolve", MinScope: scopeAdmin, Description: "查询口令在联邦内的源节点（未接入联邦则不可达）", InputSchema: objSchema(map[string]any{
-			"code": strProp("分享码（8 位）或自定义口令"),
+			"code": strProp("分享码（8 位）、6 位取件码或自定义口令"),
 		}, []string{"code"})},
 		// P2b 设备直传四工具（admin 专属；与 Web「设备直传」操作页同服务层）
 		{Name: "p2p_status", MinScope: scopeAdmin, Description: "P2P 设备直传状态（启用/p2pc 二进制/注册中心/收件区用量）", InputSchema: objSchema(nil, nil)},
@@ -657,7 +657,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "get_share":
 		code := argStr("code")
-		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
+		fc, err := s.resolveFileCode(ctx, code)
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
@@ -678,7 +678,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		fc.Code, pickup, kind, displayFileName(fc), fc.Size, fc.ExpiredCount, fc.UsedCount, expire, fc.CreatedAt.Format("2006-01-02 15:04:05"))
 		// P0 多文件：附子文件清单（仅文件分享且存在子表行时）
 		if s.shareSvc != nil && !fc.IsTextShare() {
-			if items, lerr := s.shareSvc.ShareFiles(ctx, code); lerr == nil && len(items) > 1 {
+			if items, lerr := s.shareSvc.ShareFiles(ctx, fc.Code); lerr == nil && len(items) > 1 {
 				out += fmt.Sprintf("\n文件清单（%d 个）:", len(items))
 				for _, it := range items {
 					out += fmt.Sprintf("\n  - %s（%d 字节）", it.Name, it.Size)
@@ -774,8 +774,16 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		if s.previewSvc == nil {
 			return "preview service 未注入", true
 		}
+		// 6 位取件码换算分享码为最佳努力：解析失败透传原码，由 preview 域
+		// 自行报不存在（不存在性校验 preview 域本就有，此处只做码型翻译）。
+		previewCode := argStr("code")
+		if s.fileCodeRepo != nil {
+			if fc, rerr := s.resolveFileCode(ctx, previewCode); rerr == nil {
+				previewCode = fc.Code
+			}
+		}
 		res, err := s.previewSvc.Preview(ctx, PreviewReq{
-			Code:     argStr("code"),
+			Code:     previewCode,
 			UserID:   caller.userPtr(),
 			ClientIP: caller.IP,
 			Password: argStr("password"),
@@ -784,7 +792,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 			return "预览失败: " + err.Error(), true
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "预览 %s\n类型: %s\nMIME: %s\n大小: %d 字节", argStr("code"), res.PreviewType, res.MimeType, res.FileSize)
+		fmt.Fprintf(&b, "预览 %s\n类型: %s\nMIME: %s\n大小: %d 字节", previewCode, res.PreviewType, res.MimeType, res.FileSize)
 		if res.Width > 0 {
 			fmt.Fprintf(&b, "\n尺寸: %dx%d", res.Width, res.Height)
 		}
@@ -806,17 +814,17 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "get_share_content":
 		code := argStr("code")
-		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
+		fc, err := s.resolveFileCode(ctx, code)
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
 		if fc.IsTextShare() {
-			return fmt.Sprintf("文本分享 %s 内容（%d 字节）\n----\n%s\n----", code, len(fc.Text), fc.Text), false
+			return fmt.Sprintf("文本分享 %s 内容（%d 字节）\n----\n%s\n----", fc.Code, len(fc.Text), fc.Text), false
 		}
 		if s.shareSvc == nil {
-			return fmt.Sprintf("文件分享 %s：%s（%d 字节）", code, displayFileName(fc), fc.Size), false
+			return fmt.Sprintf("文件分享 %s：%s（%d 字节）", fc.Code, displayFileName(fc), fc.Size), false
 		}
-		items, lerr := s.shareSvc.ShareFiles(ctx, code)
+		items, lerr := s.shareSvc.ShareFiles(ctx, fc.Code)
 		if lerr != nil || len(items) == 0 {
 			return fmt.Sprintf("文件分享 %s：%s（%d 字节）", code, displayFileName(fc), fc.Size), false
 		}
@@ -829,7 +837,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "download_share_file":
 		code := argStr("code")
-		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
+		fc, err := s.resolveFileCode(ctx, code)
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
@@ -841,7 +849,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		}
 		// 多文件分享主路径非用户预期内容，拒绝并引导（清单见 get_share_content）
 		if s.shareSvc != nil {
-			if items, lerr := s.shareSvc.ShareFiles(ctx, code); lerr == nil && len(items) > 1 {
+			if items, lerr := s.shareSvc.ShareFiles(ctx, fc.Code); lerr == nil && len(items) > 1 {
 				return fmt.Sprintf("多文件分享（%d 个）不支持整体下载，请用分享链接在 Web 端打包下载，或按文件分别处理", len(items)), true
 			}
 		}
@@ -1060,7 +1068,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 
 	case "delete_share":
 		code := argStr("code")
-		fc, err := s.fileCodeRepo.GetByCode(ctx, code)
+		fc, err := s.resolveFileCode(ctx, code)
 		if err != nil {
 			return "分享不存在: " + code, true
 		}
@@ -1070,7 +1078,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		if err := s.adminSvc.DeleteShareByID(ctx, fc.ID); err != nil {
 			return "删除失败: " + err.Error(), true
 		}
-		return fmt.Sprintf("已删除分享 %s（%s）", code, displayFileName(fc)), false
+		return fmt.Sprintf("已删除分享 %s（%s）", fc.Code, displayFileName(fc)), false
 
 	case "get_system_status":
 		if msg, missing := s.adminReady(); missing {
@@ -1205,6 +1213,21 @@ func shareCreatedText(name, text string, created ShareCreated, hasPassword, isFi
 		fmt.Fprintf(&b, "\n命令行取件: wget --content-disposition \"%s\"", anonymousDownloadURL(created.FullShareURL, created.Code))
 	}
 	return b.String()
+}
+
+// resolveFileCode 把工具输入解析为分享记录：恰 6 位输入先按取件码查 DB 真相源
+// （pickup_code 列，语义对齐匿名取件链路 lookupShareCode 的回退序），未命中再按
+// 分享码/自定义口令直查 code 列。此前管理类工具只收分享码，而管理员手里常只有
+// 取件码（用户报障口径），6 位码会直接「分享不存在」。
+func (s *Service) resolveFileCode(ctx context.Context, input string) (*model.FileCode, error) {
+	code := strings.TrimSpace(input)
+	if len(code) == 6 {
+		code = strings.ToUpper(code)
+		if fc, err := s.fileCodeRepo.GetByPickupCode(ctx, code); err == nil && fc != nil {
+			return fc, nil
+		}
+	}
+	return s.fileCodeRepo.GetByCode(ctx, code)
 }
 
 // escapeMD Markdown 链接显示文本转义（[]() 两组括号）。

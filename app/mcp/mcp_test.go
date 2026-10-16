@@ -367,6 +367,34 @@ func TestToolsCall_TextShareRoundtrip(t *testing.T) {
 	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
 }
 
+// TestResolveFileCodeByPickup 管理类工具凭 6 位取件码直查（resolveFileCode：
+// pickup_code 列优先语义，含小写输入归一化）+ list_shares 按取件码搜索命中
+// （管理面 List LIKE 链含 pickup_code）。
+func TestResolveFileCodeByPickup(t *testing.T) {
+	s, g := newMCPTestServiceWithDB(t)
+	pickup := "ZK3M4N"
+	fc := &model.FileCode{Code: "ab12cd34", PickupCode: &pickup}
+	require.NoError(t, g.Create(fc).Error)
+
+	// get_share 小写取件码直查（归一化大写后命中 pickup 列）
+	_, out := rpc(t, s, "tools/call", map[string]any{
+		"name": "get_share", "arguments": map[string]any{"code": "zk3m4n"},
+	})
+	info := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, info, "ab12cd34")
+
+	// list_shares 按取件码搜索命中
+	_, out = rpc(t, s, "tools/call", map[string]any{"name": "list_shares", "arguments": map[string]any{"keyword": pickup}})
+	listing := out["result"].(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string)
+	assert.Contains(t, listing, "ab12cd34")
+
+	// 未占用的 6 位码仍报不存在
+	_, out = rpc(t, s, "tools/call", map[string]any{
+		"name": "get_share", "arguments": map[string]any{"code": "ZZZZ99"},
+	})
+	assert.Equal(t, true, out["result"].(map[string]any)["isError"])
+}
+
 func extractCode(content string) string {
 	marker := "分享码: "
 	idx := strings.Index(content, marker)
@@ -378,6 +406,20 @@ func extractCode(content string) string {
 		return ""
 	}
 	return rest[:8]
+}
+
+// extractPickup 提取创建输出里的 6 位取件码（"取件码（6 位）: ABC123"）。
+func extractPickup(content string) string {
+	marker := "取件码（6 位）: "
+	idx := strings.Index(content, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := content[idx+len(marker):]
+	if len(rest) < 6 {
+		return ""
+	}
+	return rest[:6]
 }
 
 func TestToolsCall_TextSharePassword(t *testing.T) {
