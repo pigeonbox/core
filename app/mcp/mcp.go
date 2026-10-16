@@ -285,13 +285,22 @@ type AdminAPI interface {
 
 // ShareAPI 分享创建/查询工具所需的 share 域能力。
 type ShareAPI interface {
-	// CreateTextShare 创建文本分享，返回 (取件码, 完整链接)。userID=nil 匿名归因。
+	// CreateTextShare 创建文本分享。userID=nil 匿名归因。
 	CreateTextShare(ctx context.Context, text string, expireValue int, expireStyle string,
-		requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (code, fullURL string, err error)
+		requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (ShareCreated, error)
 	// ShareBytes 内存内容建文件分享（MCP 通道：落存储 + 配额/审核/白名单链路）。
-	ShareBytes(ctx context.Context, opts FileShareOpts) (code, fullURL string, err error)
+	ShareBytes(ctx context.Context, opts FileShareOpts) (ShareCreated, error)
 	// ShareFiles 取分享的子文件清单。
 	ShareFiles(ctx context.Context, code string) ([]ShareFileInfo, error)
+}
+
+// ShareCreated 分享创建结果：分享码（链接标识，8 位/自定义口令）+ 6 位取件码
+// （E2E 密文等未铸造场景为空）+ 完整分享链接。两码并列输出，杜绝把分享码
+// 误标成取件码（2026-10-16 双码收敛：主推取件码）。
+type ShareCreated struct {
+	Code         string
+	PickupCode   string
+	FullShareURL string
 }
 
 // RequestAPI 寄件码工具所需的 request 域能力（bootstrap 注入域适配器）。
@@ -498,25 +507,25 @@ func (s *Service) toolDefs() []toolDef {
 			"expire_style": strProp("过期样式：minute/hour/day/week/month/year，默认 day"),
 		}, nil)},
 		{Name: "preview_share", MinScope: scopeUser, Description: "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）", InputSchema: objSchema(map[string]any{
-			"code":     strProp("8 位分享码"),
+			"code":     strProp("分享码（8 位）或自定义口令"),
 			"password": strProp("密码保护分享的取件密码"),
 		}, []string{"code"})},
-		{Name: "get_share", MinScope: scopeAdmin, Description: "按取件码查询分享信息（不消耗取件次数）", InputSchema: objSchema(map[string]any{
-			"code": strProp("8 位分享码"),
+		{Name: "get_share", MinScope: scopeAdmin, Description: "按分享码查询分享信息（不消耗取件次数）", InputSchema: objSchema(map[string]any{
+			"code": strProp("分享码（8 位）或自定义口令"),
 		}, []string{"code"})},
 		{Name: "get_share_content", MinScope: scopeAdmin, Description: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）", InputSchema: objSchema(map[string]any{
-			"code": strProp("8 位分享码"),
+			"code": strProp("分享码（8 位）或自定义口令"),
 		}, []string{"code"})},
 		{Name: "download_share_file", MinScope: scopeAdmin, Description: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）", InputSchema: objSchema(map[string]any{
-			"code": strProp("8 位分享码"),
+			"code": strProp("分享码（8 位）或自定义口令"),
 		}, []string{"code"})},
-		{Name: "list_shares", MinScope: scopeAdmin, Description: "分页列出全站分享记录（可按取件码/文件名搜索）", InputSchema: objSchema(map[string]any{
+		{Name: "list_shares", MinScope: scopeAdmin, Description: "分页列出全站分享记录（可按分享码/文件名搜索）", InputSchema: objSchema(map[string]any{
 			"page":      intProp("页码，默认 1"),
 			"page_size": intProp("每页条数，默认 20，上限 100"),
 			"keyword":   strProp("搜索关键字（取件码）"),
 		}, nil)},
 		{Name: "delete_share", MinScope: scopeAdmin, Description: "删除指定分享（DB 记录 + 物理文件，写审计日志）", InputSchema: objSchema(map[string]any{
-			"code": strProp("8 位分享码"),
+			"code": strProp("分享码（8 位）或自定义口令"),
 		}, []string{"code"})},
 		{Name: "get_system_status", MinScope: scopeAdmin, Description: "系统运行状态（文件/用户/上传统计）", InputSchema: objSchema(nil, nil)},
 		{Name: "get_storage_info", MinScope: scopeAdmin, Description: "存储使用状态（类型/容量/文件数）", InputSchema: objSchema(nil, nil)},
@@ -527,7 +536,7 @@ func (s *Service) toolDefs() []toolDef {
 		{Name: "cleanup_expired", MinScope: scopeAdmin, Description: "清理全部过期分享（DB + 物理文件）", InputSchema: objSchema(nil, nil)},
 		{Name: "federation_status", MinScope: scopeAdmin, Description: "P2P 联邦状态（是否启用/节点 ID/注册中心/最近心跳）", InputSchema: objSchema(nil, nil)},
 		{Name: "federation_resolve", MinScope: scopeAdmin, Description: "查询口令在联邦内的源节点（未接入联邦则不可达）", InputSchema: objSchema(map[string]any{
-			"code": strProp("8 位分享码"),
+			"code": strProp("分享码（8 位）或自定义口令"),
 		}, []string{"code"})},
 		// P2b 设备直传四工具（admin 专属；与 Web「设备直传」操作页同服务层）
 		{Name: "p2p_status", MinScope: scopeAdmin, Description: "P2P 设备直传状态（启用/p2pc 二进制/注册中心/收件区用量）", InputSchema: objSchema(nil, nil)},
@@ -638,13 +647,13 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 			}
 			passwordHash = hash
 		}
-		code, fullURL, err := s.shareSvc.CreateTextShare(ctx, text,
+		created, err := s.shareSvc.CreateTextShare(ctx, text,
 			argInt("expire_value", 1), style, passwordHash != "", passwordHash,
 			caller.userPtr(), mcpOwnerIP(caller), callerCustomCode(caller, argStr("custom_code")))
 		if err != nil {
 			return "创建分享失败: " + err.Error(), true
 		}
-		return shareCreatedText("", text, code, fullURL, passwordHash != "", false), false
+		return shareCreatedText("", text, created, passwordHash != "", false), false
 
 	case "get_share":
 		code := argStr("code")
@@ -652,17 +661,21 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
-		expire := "永久"
-		if fc.ExpiredAt != nil {
-			expire = fc.ExpiredAt.Format("2006-01-02 15:04:05")
-		}
-		// 文件分享的 Text 存原始文件名（非空），须用 IsTextShare 判定（Text 非空且无文件路径）
-		kind := "文件"
-		if fc.IsTextShare() {
-			kind = "文本"
-		}
-		out := fmt.Sprintf("分享信息\n取件码: %s\n类型: %s\n内容/文件名: %s\n大小: %d 字节\n剩余次数: %d（-1 不限）\n已用次数: %d\n过期时间: %s\n创建时间: %s",
-			fc.Code, kind, displayFileName(fc), fc.Size, fc.ExpiredCount, fc.UsedCount, expire, fc.CreatedAt.Format("2006-01-02 15:04:05"))
+	expire := "永久"
+	if fc.ExpiredAt != nil {
+		expire = fc.ExpiredAt.Format("2006-01-02 15:04:05")
+	}
+	pickup := "—（未铸造）"
+	if fc.PickupCode != nil && *fc.PickupCode != "" {
+		pickup = *fc.PickupCode
+	}
+	// 文件分享的 Text 存原始文件名（非空），须用 IsTextShare 判定（Text 非空且无文件路径）
+	kind := "文件"
+	if fc.IsTextShare() {
+		kind = "文本"
+	}
+	out := fmt.Sprintf("分享信息\n分享码: %s\n取件码: %s\n类型: %s\n内容/文件名: %s\n大小: %d 字节\n剩余次数: %d（-1 不限）\n已用次数: %d\n过期时间: %s\n创建时间: %s",
+		fc.Code, pickup, kind, displayFileName(fc), fc.Size, fc.ExpiredCount, fc.UsedCount, expire, fc.CreatedAt.Format("2006-01-02 15:04:05"))
 		// P0 多文件：附子文件清单（仅文件分享且存在子表行时）
 		if s.shareSvc != nil && !fc.IsTextShare() {
 			if items, lerr := s.shareSvc.ShareFiles(ctx, code); lerr == nil && len(items) > 1 {
@@ -725,7 +738,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 			}
 			passwordHash = hash
 		}
-		code, fullURL, err := s.shareSvc.ShareBytes(ctx, FileShareOpts{
+		created, err := s.shareSvc.ShareBytes(ctx, FileShareOpts{
 			FileName: name, Content: content,
 			ExpireValue: argInt("expire_value", 1), ExpireStyle: style,
 			PasswordHash: passwordHash, CustomCode: callerCustomCode(caller, argStr("custom_code")),
@@ -734,7 +747,7 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		if err != nil {
 			return "创建文件分享失败: " + err.Error(), true
 		}
-		return shareCreatedText(name, "", code, fullURL, passwordHash != "", true), false
+		return shareCreatedText(name, "", created, passwordHash != "", true), false
 
 	case "create_request_code":
 		if caller.UserID == 0 {
@@ -1168,23 +1181,28 @@ func callerCustomCode(c Caller, code string) string {
 	return code
 }
 
-// shareCreatedText 分享创建成功输出：取件码 + 链接 + Markdown 链接（AI 直接引用）
-// + 命令行取件命令（无密码文件分享；密码分享须经取件页验密，直链闸门会拒绝）。
-// name 为文件名（文件分享）；text 为文本内容（文本分享取前 20 字符做展示名）。
-func shareCreatedText(name, text, code, fullURL string, hasPassword, isFile bool) string {
+// shareCreatedText 分享创建成功输出：取件码（6 位，未铸造时省略）+ 分享码 + 链接
+// + Markdown 链接（AI 直接引用）+ 命令行取件命令（无密码文件分享；密码分享须经
+// 取件页验密，直链闸门会拒绝）。name 为文件名（文件分享）；text 为文本内容（文本
+// 分享取前 20 字符做展示名）。
+func shareCreatedText(name, text string, created ShareCreated, hasPassword, isFile bool) string {
 	display := name
 	if !isFile {
 		display = displayFileName(&model.FileCode{Text: text})
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "分享创建成功\n取件码: %s\n分享链接: %s", code, fullURL)
+	fmt.Fprintf(&b, "分享创建成功\n")
+	if created.PickupCode != "" {
+		fmt.Fprintf(&b, "取件码（6 位）: %s\n", created.PickupCode)
+	}
+	fmt.Fprintf(&b, "分享码: %s\n分享链接: %s", created.Code, created.FullShareURL)
 	if display != "" {
-		fmt.Fprintf(&b, "\nMarkdown: [%s](%s)", escapeMD(display), fullURL)
+		fmt.Fprintf(&b, "\nMarkdown: [%s](%s)", escapeMD(display), created.FullShareURL)
 	}
 	if hasPassword {
 		b.WriteString("\n已开启密码保护：命令行取件需先经取件页验密")
 	} else if isFile {
-		fmt.Fprintf(&b, "\n命令行取件: wget --content-disposition \"%s\"", anonymousDownloadURL(fullURL, code))
+		fmt.Fprintf(&b, "\n命令行取件: wget --content-disposition \"%s\"", anonymousDownloadURL(created.FullShareURL, created.Code))
 	}
 	return b.String()
 }

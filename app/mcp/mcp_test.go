@@ -48,15 +48,15 @@ func (nopStorage) GetFileReader(_ context.Context, _ string) (io.ReadCloser, int
 type shareAPIAdapter struct{ svc *shareApp.Service }
 
 func (a shareAPIAdapter) CreateTextShare(ctx context.Context, text string, expireValue int, expireStyle string,
-	requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (string, string, error) {
+	requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (ShareCreated, error) {
 	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, userID, ownerIP, false, customCode)
 	if err != nil {
-		return "", "", err
+		return ShareCreated{}, err
 	}
-	return resp.Code, resp.FullShareURL, nil
+	return ShareCreated{Code: resp.Code, PickupCode: resp.PickupCode, FullShareURL: resp.FullShareURL}, nil
 }
 
-func (a shareAPIAdapter) ShareBytes(ctx context.Context, opts FileShareOpts) (string, string, error) {
+func (a shareAPIAdapter) ShareBytes(ctx context.Context, opts FileShareOpts) (ShareCreated, error) {
 	resp, err := a.svc.ShareBytes(ctx, shareApp.ShareBytesOpts{
 		FileName: opts.FileName, Content: opts.Content,
 		ExpireValue: opts.ExpireValue, ExpireStyle: opts.ExpireStyle,
@@ -64,9 +64,9 @@ func (a shareAPIAdapter) ShareBytes(ctx context.Context, opts FileShareOpts) (st
 		UserID: opts.UserID, OwnerIP: opts.OwnerIP,
 	})
 	if err != nil {
-		return "", "", err
+		return ShareCreated{}, err
 	}
-	return resp.Code, resp.FullShareURL, nil
+	return ShareCreated{Code: resp.Code, PickupCode: resp.PickupCode, FullShareURL: resp.FullShareURL}, nil
 }
 
 func (a shareAPIAdapter) ShareFiles(ctx context.Context, code string) ([]ShareFileInfo, error) {
@@ -336,7 +336,7 @@ func TestToolsCall_TextShareRoundtrip(t *testing.T) {
 	content := result["content"].([]any)[0].(map[string]any)["text"].(string)
 	assert.Contains(t, content, "分享创建成功")
 
-	// 提取取件码（"取件码: XXXXXXXX"）
+	// 提取分享码（"分享码: XXXXXXXX"，get_share 等按分享码查询）
 	code := extractCode(content)
 	require.Len(t, code, 8)
 
@@ -368,7 +368,7 @@ func TestToolsCall_TextShareRoundtrip(t *testing.T) {
 }
 
 func extractCode(content string) string {
-	marker := "取件码: "
+	marker := "分享码: "
 	idx := strings.Index(content, marker)
 	if idx < 0 {
 		return ""

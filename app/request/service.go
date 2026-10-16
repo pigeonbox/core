@@ -29,9 +29,10 @@ const (
 
 // ShareResult 投递落地结果（调用方需要的最小字段）。
 type ShareResult struct {
-	ID   uint
-	Code string
-	Size int64
+	ID         uint
+	Code       string
+	PickupCode string // 6 位取件码（未铸造为空）
+	Size       int64
 }
 
 // ShareCreateRequest 投递转分享的装配参数（网关实现适配为具体分享域的请求）。
@@ -184,8 +185,8 @@ func (s *Service) Submit(ctx context.Context, token string, entries []storage.St
 	// 用量累计 + 通知主人（best-effort）
 	_ = s.reqRepo.IncrementUsage(ctx, token, total)
 	if s.notify != nil {
-		detail := fmt.Sprintf("投递链接: %s\n文件数: %d\n总大小: %d 字节\n投递人 IP: %s\n取件码: %s",
-			token[:8]+"…", len(entries), total, guestIP, resp.Code)
+		detail := fmt.Sprintf("投递链接: %s\n文件数: %d\n总大小: %d 字节\n投递人 IP: %s\n分享码: %s\n取件码: %s",
+			token[:8]+"…", len(entries), total, guestIP, resp.Code, resp.PickupCode)
 		_ = s.notify.CreateForUserSimple(ctx, ownerID, "您收到一份新投递", detail, "request_received", "info")
 	}
 	return resp, nil

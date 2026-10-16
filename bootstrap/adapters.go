@@ -113,7 +113,7 @@ func (a mcpAdminAdapter) CleanExpired(ctx context.Context) (int64, int64, error)
 // mcpShareAdapter mcp.ShareAPI 的 share 域适配器。
 type mcpShareAdapter struct{ svc *shareService.Service }
 
-func (a mcpShareAdapter) ShareBytes(ctx context.Context, opts mcpApp.FileShareOpts) (string, string, error) {
+func (a mcpShareAdapter) ShareBytes(ctx context.Context, opts mcpApp.FileShareOpts) (mcpApp.ShareCreated, error) {
 	resp, err := a.svc.ShareBytes(ctx, shareService.ShareBytesOpts{
 		FileName: opts.FileName, Content: opts.Content,
 		ExpireValue: opts.ExpireValue, ExpireStyle: opts.ExpireStyle,
@@ -121,18 +121,18 @@ func (a mcpShareAdapter) ShareBytes(ctx context.Context, opts mcpApp.FileShareOp
 		UserID: opts.UserID, OwnerIP: opts.OwnerIP,
 	})
 	if err != nil {
-		return "", "", err
+		return mcpApp.ShareCreated{}, err
 	}
-	return resp.Code, resp.FullShareURL, nil
+	return mcpApp.ShareCreated{Code: resp.Code, PickupCode: resp.PickupCode, FullShareURL: resp.FullShareURL}, nil
 }
 
 func (a mcpShareAdapter) CreateTextShare(ctx context.Context, text string, expireValue int, expireStyle string,
-	requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (string, string, error) {
+	requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (mcpApp.ShareCreated, error) {
 	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, userID, ownerIP, false, customCode)
 	if err != nil {
-		return "", "", err
+		return mcpApp.ShareCreated{}, err
 	}
-	return resp.Code, resp.FullShareURL, nil
+	return mcpApp.ShareCreated{Code: resp.Code, PickupCode: resp.PickupCode, FullShareURL: resp.FullShareURL}, nil
 }
 
 func (a mcpShareAdapter) ShareFiles(ctx context.Context, code string) ([]mcpApp.ShareFileInfo, error) {
@@ -376,7 +376,7 @@ func (g requestShareGateway) CreateFromFileEntries(ctx context.Context, req *req
 	if err != nil {
 		return nil, err
 	}
-	return &requestApp.ShareResult{ID: resp.ID, Code: resp.Code, Size: resp.Size}, nil
+	return &requestApp.ShareResult{ID: resp.ID, Code: resp.Code, PickupCode: resp.PickupCode, Size: resp.Size}, nil
 }
 
 // presignShareAdapter presign.ShareServiceInterface 的 share 域适配器
