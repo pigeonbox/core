@@ -66,42 +66,58 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 	// 组装协程从 HTTP handler 触发、经存储驱动拉流（OpenDAL 14 后端），panic 面
 	// 非空——GoSafe 兜底防驱动异常把下载路径的 panic 放大成进程崩溃。
 	async.GoSafe(func() {
-		defer cancel()
-		zw := zip.NewWriter(pw)
-		var buildErr error
-		for _, e := range entries {
-			rc, size, gerr := s.storage.GetFileReader(buildCtx, e.rel)
-			if gerr != nil {
-				buildErr = fmt.Errorf("读取文件 %s 失败: %w", e.name, gerr)
-				break
-			}
-			hdr := &zip.FileHeader{
-				Name:     e.name,
-				Method:   zip.Deflate,
-				Modified: time.Now(),
-			}
-			// 大文件免压缩收益低且耗 CPU：未知类型统一 Deflate，文本收益明显
-			fw, cerr := zw.CreateHeader(hdr)
-			if cerr == nil {
-				_, cerr = io.CopyN(fw, rc, size) // size 已知：不依赖 EOF 语义（S3 读端 EOF 行为一致）
-			}
-			_ = rc.Close()
-			if cerr != nil {
-				buildErr = fmt.Errorf("打包文件 %s 失败: %w", e.name, cerr)
-				break
-			}
-		}
-		if zerr := zw.Close(); zerr != nil && buildErr == nil {
-			buildErr = zerr
-		}
-		if buildErr != nil {
-			logger.CtxWarn(ctx, "zip stream build failed", "code", fc.Code, "err", buildErr)
-			_ = pw.CloseWithError(buildErr)
-			return
-		}
-		_ = pw.Close()
+		s.assembleZip(ctx, buildCtx, pw, cancel, fc, entries)
 	})
 	return pr, nil
+}
+
+// assembleZip 逐文件从存储拉流组装 zip 写入 pw（ZipStream 组装协程体，独立成
+// 方法便于单测注入 panic）。
+// panic 侧补偿：GoSafe 外层 recover 只兜不关——存储驱动 panic 后写端 pw 不会被
+// CloseWithError，下载读端将永久挂起（旧行为=进程崩溃重启）。故此处最先注册
+// 补偿 defer（LIFO 最后执行，紧包其余清理）：先把 panic 引导为读端 error，
+// 再原样重抛给外层 GoSafe 记日志——「panic 可见 + 读端不挂」双语义。
+func (s *Service) assembleZip(logCtx, buildCtx context.Context, pw *io.PipeWriter, cancel context.CancelFunc, fc *model.FileCode, entries []zipItem) {
+	defer func() {
+		if r := recover(); r != nil {
+			_ = pw.CloseWithError(fmt.Errorf("zip stream panic: %v", r))
+			panic(r) // 重抛：panic 可见性不降，仍由外层 GoSafe 记日志
+		}
+	}()
+	defer cancel()
+	zw := zip.NewWriter(pw)
+	var buildErr error
+	for _, e := range entries {
+		rc, size, gerr := s.storage.GetFileReader(buildCtx, e.rel)
+		if gerr != nil {
+			buildErr = fmt.Errorf("读取文件 %s 失败: %w", e.name, gerr)
+			break
+		}
+		hdr := &zip.FileHeader{
+			Name:     e.name,
+			Method:   zip.Deflate,
+			Modified: time.Now(),
+		}
+		// 大文件免压缩收益低且耗 CPU：未知类型统一 Deflate，文本收益明显
+		fw, cerr := zw.CreateHeader(hdr)
+		if cerr == nil {
+			_, cerr = io.CopyN(fw, rc, size) // size 已知：不依赖 EOF 语义（S3 读端 EOF 行为一致）
+		}
+		_ = rc.Close()
+		if cerr != nil {
+			buildErr = fmt.Errorf("打包文件 %s 失败: %w", e.name, cerr)
+			break
+		}
+	}
+	if zerr := zw.Close(); zerr != nil && buildErr == nil {
+		buildErr = zerr
+	}
+	if buildErr != nil {
+		logger.CtxWarn(logCtx, "zip stream build failed", "code", fc.Code, "err", buildErr)
+		_ = pw.CloseWithError(buildErr)
+		return
+	}
+	_ = pw.Close()
 }
 
 // singleFileStream 单文件流（legacy 虚拟行走主表路径）
