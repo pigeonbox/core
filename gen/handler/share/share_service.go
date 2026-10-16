@@ -612,10 +612,14 @@ func s3DirectDownloadEnabled() bool {
 }
 
 // authorizeAndCharge 下载链路公共鉴权段（DownloadFile / ZipDownload 共用）：
-// 下载闸门 → 防爆破锁定 → 下载令牌校验 → 密码校验（GetFileWithUsage）→
-// 原子扣减剩余次数。失败时已写入错误响应并返回 (nil, false)；
-// 成功返回分享记录（已扣次数，调用方无须再扣）。
-func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, password, token string) (*model.FileCode, bool) {
+// 下载闸门 → 防爆破锁定 → 下载令牌校验 → 原子扣减剩余次数。
+// 失败时已写入错误响应并返回 (nil, false)；成功返回分享记录（已扣次数，调用方
+// 无须再扣）。password query 通道已移除（2026-10-16 拍板「一步到位」）：密码经
+// URL query 有浏览器历史/访问日志/Referer 泄漏面，密码保护分享一律走取件流程
+// （retrieve/getShare 以 POST body 校验密码后签发时间窗令牌）换凭证下载；
+// 令牌未启用的部署对密码保护分享同样拒绝并明示原因。破坏性变更随 2.0.0 列车
+// （pb CLI/MCP/前端均不消费该参数，已审计）。
+func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token string) (*model.FileCode, bool) {
 	// 下载闸门：download.require_login（服务端 enforce）
 	var dlUserID *uint
 	if v, ok := middleware.UserIDFromContext(ctx); ok {
@@ -640,19 +644,25 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, passwo
 
 	// 下载令牌校验（security.download_token.enabled，默认开）：
 	// 取件查询/匿名取件接口下发时间窗 HMAC 令牌，恒时比较校验。
-	// 密码通道仅对"密码保护分享"开放（2026-10-05 审计 P2 修复：此前 password
-	// 参数非空即跳过"缺令牌"拦截，无密码分享加任意 &password=x 即绕过强制
-	// 令牌，防盗链语义失效）；令牌由密码校验通过后的取件查询签发，等价已认证。
 	tokenEnabled := downloadTokenEnabled()
 	tokenValid := tokenEnabled && token != "" && security.VerifyDownloadToken(code, token)
-	if tokenEnabled && !tokenValid {
-		passwordOK := false
-		if password != "" {
-			if fc, gerr := getShareService().GetFileByCode(ctx, code); gerr == nil && fc.RequireAuth {
-				passwordOK = true
+	if !tokenValid {
+		// 密码保护分享：无有效令牌一律拒绝（令牌未启用的部署也拦下并明示，
+		// 不再提供 ?password= 旁路）
+		if fc, gerr := getShareService().GetFileByCode(ctx, code); gerr == nil && fc.RequireAuth {
+			msg := "该分享受密码保护，请通过取件页获取下载凭证"
+			if tokenEnabled && token != "" {
+				msg = "下载令牌无效或已过期，请重新获取取件信息"
+			} else if !tokenEnabled {
+				msg = "该分享受密码保护，且下载令牌未启用，无法直接下载"
 			}
+			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
+				"code":    errcode.CodeDownloadToken,
+				"message": msg,
+			})
+			return nil, false
 		}
-		if !passwordOK {
+		if tokenEnabled {
 			msg := "缺少下载令牌，请重新获取取件信息"
 			if token != "" {
 				msg = "下载令牌无效或已过期，请重新获取取件信息"
@@ -665,9 +675,10 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, passwo
 		}
 	}
 
-	// 获取分享内容并校验密码（viewer IP 由 handler 注入，可信代理解析）
+	// 获取分享内容（viewer IP 由 handler 注入，可信代理解析；tokenValid=true
+	// 时域内跳过密码校验——令牌即等价已认证）
 	viewerIP := middleware.ClientIP(c)
-	fileCode, err := getShareService().GetFileWithUsage(ctx, code, password, viewerIP, tokenValid)
+	fileCode, err := getShareService().GetFileWithUsage(ctx, code, "", viewerIP, tokenValid)
 	if err != nil {
 		var blocked *shareService.ShareBlockedError
 		if errors.As(err, &blocked) {
@@ -720,7 +731,6 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, passwo
 // @router /share/download [GET]
 func DownloadFile(ctx context.Context, c *app.RequestContext) {
 	code := c.Query("code")
-	password := c.Query("password")
 	token := c.Query("token")
 
 	if code == "" {
@@ -731,7 +741,7 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	fileCode, ok := authorizeAndCharge(ctx, c, code, password, token)
+	fileCode, ok := authorizeAndCharge(ctx, c, code, token)
 	if !ok {
 		return
 	}

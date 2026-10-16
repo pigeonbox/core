@@ -381,6 +381,12 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 		// 冲掉已配置 roots）
 		prevLocal := g.Upload.LocalImport
 		g.Upload = *sc.UploadEx
+		// 单开关收敛（2026-10-16 拍板）：require_login 与 open_upload 对匿名上传
+		// 效果完全等价（都拦匿名、都放行登录用户），双开关只会制造「UI 显示允许
+		// 访客、闸门却拦下」的矛盾态。DB 段 apply 时 require_login 恒派生自
+		// open_upload；yaml/env 直配的部署不经此处、行为不变；管理表单已不再
+		// 暴露该字段（遗留 DB 值由镜像回写自然纠正）
+		g.Upload.RequireLogin = !g.Upload.OpenUpload
 		if sc.LocalImport == nil && !sc.UploadEx.LocalImport.Enabled && len(sc.UploadEx.LocalImport.Roots) == 0 {
 			g.Upload.LocalImport = prevLocal
 		}

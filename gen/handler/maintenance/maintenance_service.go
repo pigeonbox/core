@@ -4,11 +4,13 @@ package maintenance
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/pigeonbox/contracts/errcode"
 	adminsvc "github.com/pigeonbox/core/app/admin"
+	"github.com/pigeonbox/kit/version"
 )
 
 var adminService *adminsvc.Service
@@ -79,10 +81,17 @@ func GetSystemLogs(ctx context.Context, c *app.RequestContext) {
 // GetSystemInfo 获取系统信息
 // @router /admin/maintenance/system-info [GET]
 func GetSystemInfo(ctx context.Context, c *app.RequestContext) {
+	// 运行时真实值 + kit/version 构建注入（server 镜像 ldflags 注入
+	// Version/BuildCommit/BuildTime；未注入时 Version=dev、构建字段为空，
+	// 前端按缺省显示 —）。此前为硬编码占位（go1.25/linux/amd64），与实际
+	// 进程/构建物完全脱节，排障无法对版。
 	info := map[string]interface{}{
-		"go_version": "1.25",
-		"os":         "linux",
-		"arch":       "amd64",
+		"pigeonbox_version": version.Version,
+		"go_version":        runtime.Version(),
+		"build_time":        version.BuildTime,
+		"git_commit":        version.BuildCommit,
+		"os_info":           runtime.GOOS + "/" + runtime.GOARCH,
+		"cpu_cores":         runtime.NumCPU(),
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
 		"code": 0,
