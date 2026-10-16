@@ -81,7 +81,7 @@ func (r *FileCodeRepository) GetUserSharesWithFilter(ctx context.Context, userID
 	case "active":
 		q = q.Where("(expired_at IS NULL OR expired_at > ?) AND (expired_count <> 0)", now)
 	case "expired":
-		q = q.Where("((expired_at IS NOT NULL AND expired_at <= ?) OR expired_count = 0)")
+		q = q.Where("((expired_at IS NOT NULL AND expired_at <= ?) OR expired_count = 0)", now)
 	case "text":
 		q = q.Where("(file_path IS NULL OR file_path = '') AND text IS NOT NULL AND text != ''")
 	case "file":

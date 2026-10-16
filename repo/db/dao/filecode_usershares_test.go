@@ -106,3 +106,70 @@ func TestGetUserSharesWithFilterViewed(t *testing.T) {
 	assert.Equal(t, int64(2), allTotal)
 	assert.Len(t, allItems, 2)
 }
+
+// 守卫测试：status=expired（过期 tab）＝时间已到 或 次数耗尽，与 active 互补。
+// 此前 expired 分支 Where 带 `expired_at <= ?` 占位符却没传 now 参数，
+// GORM 构建报 missing argument with index 2，「过期」tab 从上线起恒 500
+// （2026-10-16 用户报告；legacy 单体时代同款漏参，历次重构原样搬运）。
+func TestGetUserSharesWithFilterExpired(t *testing.T) {
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
+	ctx := context.Background()
+
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(24 * time.Hour)
+	expiredByTime := &model.FileCode{
+		Code:         "TIMEOUT1",
+		Text:         "时间已过的文本分享",
+		UserID:       uintPtr(1),
+		ExpiredAt:    &past,
+		ExpiredCount: -1,
+	}
+	exhaustedByCount := &model.FileCode{
+		Code:         "USEDUP01",
+		Text:         "次数耗尽的文本分享",
+		UserID:       uintPtr(1),
+		ExpiredCount: 0,
+	}
+	active := &model.FileCode{
+		Code:         "ACTIV001",
+		Text:         "仍在有效期的文本分享",
+		UserID:       uintPtr(1),
+		ExpiredAt:    &future,
+		ExpiredCount: 5,
+	}
+	neverExpires := &model.FileCode{
+		Code:         "NEVERSE1",
+		Text:         "永不过期的文本分享",
+		UserID:       uintPtr(1),
+		ExpiredCount: -1,
+	}
+	other := &model.FileCode{
+		Code:         "OTHEREX1",
+		Text:         "别人的过期分享不串列",
+		UserID:       uintPtr(2),
+		ExpiredAt:    &past,
+		ExpiredCount: -1,
+	}
+	require.NoError(t, repo.Create(ctx, expiredByTime))
+	require.NoError(t, repo.Create(ctx, exhaustedByCount))
+	require.NoError(t, repo.Create(ctx, active))
+	require.NoError(t, repo.Create(ctx, neverExpires))
+	require.NoError(t, repo.Create(ctx, other))
+
+	items, total, err := repo.GetUserSharesWithFilter(ctx, 1, UserShareFilter{Status: "expired", Page: 1, PageSize: 20})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), total, "expired 只计本用户时间已过/次数耗尽的分享")
+	require.Len(t, items, 2)
+	got := map[string]bool{items[0].Code: true, items[1].Code: true}
+	assert.True(t, got["TIMEOUT1"], "时间已过的分享应在 expired 列表")
+	assert.True(t, got["USEDUP01"], "次数耗尽的分享应在 expired 列表")
+
+	// 与 active 互补：active 恰好是其余两条本用户分享
+	activeItems, activeTotal, err := repo.GetUserSharesWithFilter(ctx, 1, UserShareFilter{Status: "active", Page: 1, PageSize: 20})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), activeTotal)
+	gotActive := map[string]bool{activeItems[0].Code: true, activeItems[1].Code: true}
+	assert.True(t, gotActive["ACTIV001"])
+	assert.True(t, gotActive["NEVERSE1"])
+}
