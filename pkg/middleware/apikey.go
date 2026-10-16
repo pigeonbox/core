@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
-	"github.com/oekit/concurrency/async"
 	"golang.org/x/time/rate"
 )
 
@@ -81,12 +81,50 @@ const touchInterval = time.Minute
 
 var touchThrottle sync.Map // keyID(uint) → last touch time.Time
 
+var authRegistriesGCOnce sync.Once
+
 func shouldTouchLastUsed(keyID uint, now time.Time) bool {
+	authRegistriesGCOnce.Do(startAuthRegistriesGC)
 	if v, ok := touchThrottle.Load(keyID); ok && now.Sub(v.(time.Time)) < touchInterval {
 		return false
 	}
 	touchThrottle.Store(keyID, now)
 	return true
+}
+
+// startAuthRegistriesGC 常驻清扫协程，touchThrottle 与 perKeyLimiters 共用一个
+// janitor。随首个 Touch 请求惰性启动——此前入口挂在 allowPerKey 且 qps>0 才
+// 可达，per-key 限流关闭时 touchThrottle 无任何清理路径（已吊销 Key 条目永存）。
+// 条目清理均行为中性：throttle 条目超 touchInterval 后本就放行重写，
+// limiter 条目 1h 未触达即无存活流量。
+func startAuthRegistriesGC() {
+	// 常驻 GC 无监督者：Range 断言带 ok 检查（条目类型演进错位时跳过而非
+	// panic，不依赖兜底），GoSafe 兜底其余未预期 panic 防带崩认证路径所在进程。
+	async.GoSafe(func() {
+		for range time.Tick(10 * time.Minute) {
+			sweepAuthRegistries(time.Now())
+		}
+	})
+}
+
+// sweepAuthRegistries 单轮清扫（独立成函数供测试注入时钟，不等真实 10 分钟）。
+func sweepAuthRegistries(now time.Time) {
+	touchThrottle.Range(func(k, v any) bool {
+		if t, ok := v.(time.Time); ok && now.Sub(t) >= touchInterval {
+			touchThrottle.Delete(k)
+		}
+		return true
+	})
+	perKeyLimiters.Range(func(k, v any) bool {
+		e, ok := v.(*keyLimiterEntry)
+		if !ok {
+			return true // continue：类型不符跳过，只误伤清理时效不误伤认证
+		}
+		if now.Sub(e.lastAccess) > time.Hour {
+			perKeyLimiters.Delete(k)
+		}
+		return true
+	})
 }
 
 // ===== Per-Key 独立限流（波次3：防单把 Key 被盗后高速滥用）=====
@@ -97,7 +135,6 @@ type keyLimiterEntry struct {
 }
 
 var perKeyLimiters sync.Map // keyID(uint) → *keyLimiterEntry
-var perKeyGCOnce sync.Once
 
 // perKeyQPS 读取单 Key 限流参数；无全局配置（单测）返回 0=不限。
 func perKeyQPS() (int, int) {
@@ -116,25 +153,7 @@ func allowPerKey(keyID uint, qps, burst int) bool {
 	if burst <= 0 {
 		burst = 2 * qps
 	}
-	perKeyGCOnce.Do(func() {
-		// 常驻 GC 无监督者：Range 断言带 ok 检查（条目类型演进错位时跳过而非
-		// panic，不依赖兜底），GoSafe 兜底其余未预期 panic 防带崩认证路径所在进程。
-		async.GoSafe(func() {
-			for range time.Tick(10 * time.Minute) {
-				now := time.Now()
-				perKeyLimiters.Range(func(k, v any) bool {
-					e, ok := v.(*keyLimiterEntry)
-					if !ok {
-						return true // continue：类型不符跳过，只误伤清理时效不误伤认证
-					}
-					if now.Sub(e.lastAccess) > time.Hour {
-						perKeyLimiters.Delete(k)
-					}
-					return true
-				})
-			}
-		})
-	})
+	authRegistriesGCOnce.Do(startAuthRegistriesGC)
 	now := time.Now()
 	v, _ := perKeyLimiters.LoadOrStore(keyID, &keyLimiterEntry{
 		limiter: rate.NewLimiter(rate.Limit(qps), burst), lastAccess: now,

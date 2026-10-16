@@ -18,6 +18,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 )
 
@@ -290,6 +291,31 @@ func TestShouldTouchLastUsed_Throttle(t *testing.T) {
 	assert.False(t, shouldTouchLastUsed(1, now.Add(30*time.Second)), "60s 内不重复写")
 	assert.True(t, shouldTouchLastUsed(1, now.Add(61*time.Second)), "超 60s 再写")
 	assert.True(t, shouldTouchLastUsed(2, now), "不同 Key 互不影响")
+}
+
+// 守卫测试：认证注册表清扫。touchThrottle 此前无任何清理路径（每把 Key 一条
+// 永存，含已吊销 Key）；现与 perKeyLimiters 共用 janitor，超龄条目清理行为中性
+// ——throttle 条目超 touchInterval 本就放行重写，limiter 条目 1h 未触达即无流量。
+func TestSweepAuthRegistries(t *testing.T) {
+	now := time.Now()
+	touchThrottle.Store(9001, now.Add(-2*time.Minute))
+	touchThrottle.Store(9002, now.Add(-30*time.Second))
+	perKeyLimiters.Store(9003, &keyLimiterEntry{limiter: rate.NewLimiter(1, 1), lastAccess: now.Add(-2 * time.Hour)})
+	perKeyLimiters.Store(9004, &keyLimiterEntry{limiter: rate.NewLimiter(1, 1), lastAccess: now})
+
+	sweepAuthRegistries(now)
+
+	_, staleTouch := touchThrottle.Load(9001)
+	_, freshTouch := touchThrottle.Load(9002)
+	assert.False(t, staleTouch, "超 touchInterval 的 throttle 条目应被清")
+	assert.True(t, freshTouch, "新鲜 throttle 条目保留")
+	_, staleLimiter := perKeyLimiters.Load(9003)
+	_, freshLimiter := perKeyLimiters.Load(9004)
+	assert.False(t, staleLimiter, "1h 未触达的 limiter 条目应被清")
+	assert.True(t, freshLimiter, "新鲜 limiter 条目保留")
+
+	touchThrottle.Delete(9002)
+	perKeyLimiters.Delete(9004)
 }
 
 func TestOptionalAPIKey_TouchLastUsedThrottled(t *testing.T) {
