@@ -422,7 +422,8 @@ func (s *Service) CreateForUserSimple(ctx context.Context, userID uint, title, c
 		s.dispatchWebhook(ctx, userID, title, content, notifyType, level)
 		// 邮件补发（fire-and-forget；未配置 SMTP/用户无邮箱时内部短路）
 		if s.mailer != nil && s.mailer.Enabled() {
-			go s.mailer.SendToUser(userID, title, content)
+			// GoSafe:SMTP 客户端 panic 不打死进程，只记日志（邮件可下次补发）
+			async.GoSafe(func() { s.mailer.SendToUser(userID, title, content) })
 		}
 	}
 	return err

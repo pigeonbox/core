@@ -254,9 +254,10 @@ func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir strin
 	t.mu.Unlock()
 
 	// stdout 行扫描：口令行（send）→ Code；首个业务行 → running；全部入环形日志
-	go s.scanLines(t, stdout, true)
-	go s.scanLines(t, stderr, false)
-	go s.waitTask(t, cmd)
+	// 任务三协程 GoSafe:panic 走全局 zap handler,不静默打死进程
+	async.GoSafe(func() { s.scanLines(t, stdout, true) })
+	async.GoSafe(func() { s.scanLines(t, stderr, false) })
+	async.GoSafe(func() { s.waitTask(t, cmd) })
 	return t, nil
 }
 
@@ -490,15 +491,19 @@ func (s *Service) monitorLoop() {
 		case <-s.monStop:
 			return
 		case <-tick.C:
-			s.checkQuotas()
-			s.checkGhostPairs()
-			s.reconcileWatcher() // 信箱 watcher 期望态对账（非 Task，独立守护）
-			s.pruneEndedTasks()  // 终态任务 >1h 自动清理（防 map 膨胀+失败常驻误吓用户）
-			if time.Since(lastSweep) >= time.Hour || s.deps.MonitorInterval < 10*time.Second && time.Since(lastSweep) >= s.deps.MonitorInterval*720 {
-				s.sweepInbox()
-				s.sweepUploads() // 浏览器直发上传孤儿目录兜底（upload.go）
-				lastSweep = time.Now()
-			}
+			// 单轮 panic 收编（RunSafe→全局 zap handler）：配额/幽灵配对/孤儿
+			// 清扫的总循环，一轮炸掉即静默停摆
+			async.RunSafe(func() {
+				s.checkQuotas()
+				s.checkGhostPairs()
+				s.reconcileWatcher() // 信箱 watcher 期望态对账（非 Task，独立守护）
+				s.pruneEndedTasks()  // 终态任务 >1h 自动清理（防 map 膨胀+失败常驻误吓用户）
+				if time.Since(lastSweep) >= time.Hour || s.deps.MonitorInterval < 10*time.Second && time.Since(lastSweep) >= s.deps.MonitorInterval*720 {
+					s.sweepInbox()
+					s.sweepUploads() // 浏览器直发上传孤儿目录兜底（upload.go）
+					lastSweep = time.Now()
+				}
+			})
 		}
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/pigeonbox/core/pkg/logger"
 	"io"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/core/conf"
 	"os/exec"
 	"syscall"
@@ -108,9 +109,10 @@ func (s *Service) spawnWatcher(cfg conf.P2PDirectConfig, bin string) error {
 	s.watch.watching = true
 	s.watchMu.Unlock()
 	logger.Info(fmt.Sprintf("[p2px] 信箱 watcher 已启动(pid=%d registry=%s)", cmd.Process.Pid, effectiveRegistry(cfg.RegistryURL)))
-	go s.scanInvites(stdout)
-	go s.passthroughWatcherStderr(stderr)
-	go s.waitWatcher(cmd)
+	// watcher 三协程 GoSafe:panic 走全局 zap handler,不静默打死进程
+	async.GoSafe(func() { s.scanInvites(stdout) })
+	async.GoSafe(func() { s.passthroughWatcherStderr(stderr) })
+	async.GoSafe(func() { s.waitWatcher(cmd) })
 	return nil
 }
 
