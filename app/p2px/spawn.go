@@ -254,10 +254,10 @@ func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir strin
 	t.mu.Unlock()
 
 	// stdout 行扫描：口令行（send）→ Code；首个业务行 → running；全部入环形日志
-	// 任务三协程 GoSafe:panic 走全局 zap handler,不静默打死进程
-	async.GoSafe(func() { s.scanLines(t, stdout, true) })
-	async.GoSafe(func() { s.scanLines(t, stderr, false) })
-	async.GoSafe(func() { s.waitTask(t, cmd) })
+	// 任务三协程 GoSafeLabeled:panic 走全局 zap handler 带任务标签,不静默打死进程
+	async.GoSafeLabeled("p2pc-scan-stdout", func() { s.scanLines(t, stdout, true) })
+	async.GoSafeLabeled("p2pc-scan-stderr", func() { s.scanLines(t, stderr, false) })
+	async.GoSafeLabeled("p2pc-task-wait", func() { s.waitTask(t, cmd) })
 	return t, nil
 }
 
@@ -491,9 +491,9 @@ func (s *Service) monitorLoop() {
 		case <-s.monStop:
 			return
 		case <-tick.C:
-			// 单轮 panic 收编（RunSafe→全局 zap handler）：配额/幽灵配对/孤儿
+			// 单轮 panic 收编（RunSafeLabeled→全局 zap handler）：配额/幽灵配对/孤儿
 			// 清扫的总循环，一轮炸掉即静默停摆
-			async.RunSafe(func() {
+			async.RunSafeLabeled("p2px-monitor", func() {
 				s.checkQuotas()
 				s.checkGhostPairs()
 				s.reconcileWatcher() // 信箱 watcher 期望态对账（非 Task，独立守护）

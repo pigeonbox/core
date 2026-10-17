@@ -109,10 +109,10 @@ func (s *Service) spawnWatcher(cfg conf.P2PDirectConfig, bin string) error {
 	s.watch.watching = true
 	s.watchMu.Unlock()
 	logger.Info(fmt.Sprintf("[p2px] 信箱 watcher 已启动(pid=%d registry=%s)", cmd.Process.Pid, effectiveRegistry(cfg.RegistryURL)))
-	// watcher 三协程 GoSafe:panic 走全局 zap handler,不静默打死进程
-	async.GoSafe(func() { s.scanInvites(stdout) })
-	async.GoSafe(func() { s.passthroughWatcherStderr(stderr) })
-	async.GoSafe(func() { s.waitWatcher(cmd) })
+	// watcher 三协程 GoSafeLabeled:panic 走全局 zap handler 带任务标签,不静默打死进程
+	async.GoSafeLabeled("p2pc-watcher-scan", func() { s.scanInvites(stdout) })
+	async.GoSafeLabeled("p2pc-watcher-stderr", func() { s.passthroughWatcherStderr(stderr) })
+	async.GoSafeLabeled("p2pc-watcher-wait", func() { s.waitWatcher(cmd) })
 	return nil
 }
 

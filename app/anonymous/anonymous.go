@@ -29,7 +29,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/oekit/concurrency/singleflight"
-	"github.com/oekit/pkg/uidgen"
+	"github.com/oekit/kitx/uidgen"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )

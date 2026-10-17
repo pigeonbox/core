@@ -17,7 +17,7 @@ import (
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/oekit/pkg/uidgen"
+	"github.com/oekit/kitx/uidgen"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )

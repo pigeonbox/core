@@ -24,7 +24,7 @@ import (
 	"github.com/pigeonbox/core/storage"
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/retry"
-	"github.com/oekit/pkg/uidgen"
+	"github.com/oekit/kitx/uidgen"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

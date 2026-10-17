@@ -135,8 +135,8 @@ func (s *Service) Start() {
 }
 
 func (s *Service) loop() {
-	// 单轮 panic 收编（RunSafe→全局 zap handler）：心跳循环炸掉=联邦注册静默掉线
-	async.RunSafe(s.tick)
+	// 单轮 panic 收编（RunSafeLabeled→全局 zap panic handler）：心跳循环炸掉=联邦注册静默掉线
+	async.RunSafeLabeled("federation-heartbeat", s.tick)
 	// 初始 timer 按首次 tick 结果:进程启动时 registry 尚不可用是常态
 	// (compose 启动顺序/registry 重部署),首启失败必须立即进入 15s 退避,
 	// 否则要干等 30m(215 部署实测踩坑)。
@@ -151,7 +151,7 @@ func (s *Service) loop() {
 		case <-s.stop:
 			return
 		case <-t.C:
-			async.RunSafe(s.tick)
+			async.RunSafeLabeled("federation-heartbeat", s.tick)
 			// 心跳失败短退避(15s)重试,成功恢复常规周期——
 			// 固定 30m tick 意味着 registry 抖动后联邦盲窗最长半小时(M4 故障演练修)
 			next = heartbeatInterval
