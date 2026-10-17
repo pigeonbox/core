@@ -22,6 +22,7 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/httpjson"
 )
 
@@ -541,7 +542,9 @@ func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, conte
 		return
 	}
 	async.GoSafe(func() {
-		if err := s.sendWebhook(ctx, "notify.created", body); err != nil {
+		// ValueOnlyFrom 剥离取消/超时：请求返回即取消请求 ctx,fire-and-forget
+		// webhook 若继承之会在请求尾后被掐断(间歇性推送失败);超时由 client 兜
+		if err := s.sendWebhook(contextx.ValueOnlyFrom(ctx), "notify.created", body); err != nil {
 			logger.CtxWarn(ctx, "webhook push failed", "url", s.webhookURL, "err", err)
 		}
 	})

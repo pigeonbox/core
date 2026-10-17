@@ -5,6 +5,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/oekit/pkg/timex"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -114,7 +115,7 @@ type EnhancedStats struct {
 // EnhancedStats 汇总富指标。单项统计失败按 0 降级（与历史 handler 行为一致）。
 func (s *Service) EnhancedStats(ctx context.Context) (*EnhancedStats, error) {
 	now := time.Now()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	todayStart := timex.BeginningOfDay(now)
 	yesterdayStart := todayStart.Add(-24 * time.Hour)
 
 	stats := &EnhancedStats{}
@@ -145,7 +146,7 @@ type TrendDay struct {
 // （表可能尚无数据/旧库未建）——降级为全 0 序列。
 func (s *Service) TrendSeries(ctx context.Context, days int) ([]TrendDay, error) {
 	now := time.Now()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	todayStart := timex.BeginningOfDay(now)
 	from := todayStart.AddDate(0, 0, -(days - 1))
 
 	upRows, err := s.fileCodeRepo.TrendByDay(ctx, from)
