@@ -28,6 +28,7 @@ import (
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
+	"github.com/oekit/concurrency/singleflight"
 	"github.com/oekit/pkg/uidgen"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -86,6 +87,10 @@ type redisKV interface {
 type Service struct {
 	rdb          redisKV
 	fileCodeRepo *dao.FileCodeRepository
+	// flights 同码并发回源合并（oekit singleflight，零值安全）：
+	// KV 双未命中到负标记落定之间是击穿窗口，枚举/重试风暴下 N 个相同码
+	// 会放大成 N 轮 DB 查询，Flight 合并为 1 轮（见 lookupShareCode）。
+	flights *singleflight.Flight[string]
 }
 
 // NewService 创建 service（repo 构造注入，去全局化终态）。
@@ -100,7 +105,7 @@ func NewService(rdb *redis.Client, gormDB *gorm.DB) *Service {
 	} else {
 		kv = newMemoryKV()
 	}
-	return &Service{rdb: kv, fileCodeRepo: fileCodeRepo}
+	return &Service{rdb: kv, fileCodeRepo: fileCodeRepo, flights: singleflight.New[string]()}
 }
 
 // CodeMeta 取件码展示信息（仅存于 Redis，真实状态查 DB）
@@ -172,12 +177,8 @@ func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time
 }
 
 // lookupShareCode 把用户输入解析为分享码：
-// 6 位输入按取件码处理（容忍小写，规范化后查映射）；
-// 映射未命中依次回源 DB——① pickup_code 列（真相源：KV 重启丢失/永久分享
-// 未写 KV 时由此解析）② code 列直查（8 位分享码/自定义口令直输）。
-// 回源路径带双向缓存：命中回填映射（短 TTL，重复查询不再打库）；
-// DB 也无此码则放负缓存标记（短 TTL，防取件码枚举穿透打库）。
-// 真实状态（过期/次数/密码）始终以 DB 为准，缓存仅加速"码→分享码"解析。
+// 6 位输入按取件码处理（容忍小写，规范化后查映射）；KV 命中即返回，
+// 未命中走 resolveShareCodeFromDB 回源（singleflight 同码合并，见上）。
 func (s *Service) lookupShareCode(ctx context.Context, code string) (string, error) {
 	trimmed := strings.TrimSpace(code)
 	if len(trimmed) == codeLength {
@@ -195,6 +196,24 @@ func (s *Service) lookupShareCode(ctx context.Context, code string) (string, err
 	if _, err := s.rdb.Get(ctx, fmt.Sprintf(keyPickupCodeNeg, trimmed)).Result(); err == nil {
 		return "", ErrCodeNotFound
 	}
+	// 同码并发回源合并：waiter 各自按自身 ctx 等待/取消（互不连坐）；
+	// DB 瞬时错误会共享给等待方，但错误路径不落任何缓存，下一请求自然重试
+	shareCode, err = s.flights.Do(ctx, "anon:lookup:"+trimmed, func(ctx context.Context) (string, error) {
+		return s.resolveShareCodeFromDB(ctx, trimmed, mappingKey)
+	})
+	if err != nil {
+		return "", err
+	}
+	return shareCode, nil
+}
+
+// resolveShareCodeFromDB KV 未命中后的 DB 回源，带双向缓存：
+// ① pickup_code 列（真相源：KV 重启丢失/永久分享未写 KV 时由此解析）
+// ② code 列直查（8 位分享码/自定义口令直输，折叠开启时 UPPER 兜底）。
+// 命中回填映射（短 TTL，重复查询不再打库）；DB 也无此码则放负缓存标记
+// （短 TTL，防取件码枚举穿透打库）。
+// 真实状态（过期/次数/密码）始终以 DB 为准，缓存仅加速"码→分享码"解析。
+func (s *Service) resolveShareCodeFromDB(ctx context.Context, trimmed, mappingKey string) (string, error) {
 	// DB 回退 ①：6 位输入查 pickup_code 列（真相源；命中回填映射缓存）
 	if len(trimmed) == codeLength {
 		fc, dbErr := s.fileCodeRepo.GetByPickupCode(ctx, trimmed)

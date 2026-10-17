@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/concurrency/retry"
+
 	adminApp "github.com/pigeonbox/core/app/admin"
 	configApp "github.com/pigeonbox/core/app/config"
 	federationApp "github.com/pigeonbox/core/app/federation"
@@ -260,17 +262,14 @@ func (a mcpP2pAdapter) P2pSend(ctx context.Context, paths []string, inviteTo, in
 	if err != nil {
 		return mcpApp.P2pTaskInfo{}, err
 	}
-	for i := 0; i < 5; i++ {
-		snap := task.Snapshot()
-		if snap.Code != "" {
-			return mcpApp.P2pTaskInfo{
-				ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
-				CreatedAt: snap.CreatedAt.Format(time.RFC3339),
-			}, nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	snap := task.Snapshot()
+	// 等配对出码再回显：Poll 每 100ms 探一次快照，500ms 超时降级返回当前态
+	//（同旧 5×100ms 循环；换 retry.Poll 收益=等待期尊重 ctx 取消，旧 sleep 硬等）。
+	// Poll 错误（超时/取消）均不透传：任务本身异步继续，回显当前快照更有用。
+	var snap p2pxApp.TaskSnapshot
+	_ = retry.Poll(ctx, 100*time.Millisecond, 500*time.Millisecond, func() (bool, error) {
+		snap = task.Snapshot()
+		return snap.Code != "", nil
+	})
 	return mcpApp.P2pTaskInfo{
 		ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
 		CreatedAt: snap.CreatedAt.Format(time.RFC3339),
