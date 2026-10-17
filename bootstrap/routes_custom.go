@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 
 	"github.com/pigeonbox/contracts/errcode"
@@ -248,12 +249,12 @@ func customizedRegister(r *server.Hertz) {
 		}
 		metricsServer := server.New(server.WithHostPorts(metricsAddr))
 		metricsServer.GET(metricsPath, metricsHandler)
-		go func() {
+		async.GoSafe(func() {
 			logger.Info("metrics server listening", zap.String("addr", metricsAddr))
 			if err := metricsServer.Run(); err != nil {
 				logger.Error("metrics server failed", zap.Error(err))
 			}
-		}()
+		})
 	}
 
 	// ===== 深度就绪检查 =====

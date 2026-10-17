@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/oekit/concurrency/async"
+
 	"github.com/pigeonbox/core/conf"
 )
 
@@ -472,7 +474,7 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 // t.mu 或已确认 dir 终态；重试路径不得调用——续传还要用源文件）。
 func removeUploadDirAsync(dir string) {
 	if dir != "" {
-		go func() { _ = os.RemoveAll(dir) }()
+		async.GoSafe(func() { _ = os.RemoveAll(dir) })
 	}
 }
 

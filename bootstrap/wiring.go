@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -329,11 +330,12 @@ func initThriftIDLServices(database *gorm.DB) {
 	//    否则 N 副本重复清理/对账）。
 	adminSvc.SetStorage(bootstrapStorage)
 	if config.ServesAdminPlane() {
-		go startExpiredFileCleanup(adminSvc)
+		// 后台常驻协程统一 GoSafe 起跑（panic 走全局 zap handler，不静默打死）
+		async.GoSafe(func() { startExpiredFileCleanup(adminSvc) })
 		// API Key 临期站内通知（波次3）：6h 周期，提前 7 天提醒属主
-		go startAPIKeyExpiryNotify()
+		async.GoSafe(startAPIKeyExpiryNotify)
 		// 存储对账 + 日志保留（治理 2026-10-03）：24h 周期，启动 10 分钟后首跑
-		go startMaintenanceJanitor()
+		async.GoSafe(startMaintenanceJanitor)
 	}
 
 	// 8. 多副本：admin 实例持久化配置后发布变更广播（public 副本订阅热应用）

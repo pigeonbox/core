@@ -248,9 +248,10 @@ func TestRateLimiter_GC_NoError(t *testing.T) {
 	// 加几个 IP
 	rl.allow(t.Context(), scopeGlobal, "ip-1")
 	rl.allow(t.Context(), scopeGlobal, "ip-2")
-	require.Equal(t, 2, len(rl.clients[scopeGlobal]))
+	require.Equal(t, 2, rl.limiters[scopeGlobal].Len())
 
-	// 手动调用 gc：新鲜 entry 不会被清理（lastAccess 刚刚）
+	// 手动调用 gc：只清封禁表，桶托管不过手——新鲜桶不会被淘汰
+	// （KeyedLimiter 按 lastSeen TTL 自管，淘汰线见 limiterIdleTTL）
 	rl.gc()
-	assert.Equal(t, 2, len(rl.clients[scopeGlobal]), "新加的 entry 不会被清理")
+	assert.Equal(t, 2, rl.limiters[scopeGlobal].Len(), "新加的 entry 不会被清理")
 }

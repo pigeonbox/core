@@ -1,10 +1,11 @@
 // Package middleware 提供 Hertz 中间件：
 //   - RateLimit: IP 维度 + 接口维度双层限流
 //
-// 实现：默认进程内 token bucket（x/time/rate）；配置 rate_limit.use_redis=true
-// 且 Redis 可用时切换为 Redis 固定窗口计数（多实例共享）。
-// 命中限流后按 block_seconds 封禁该 IP+维度（封禁同样 Redis/内存双写）。
-// 配置可经 /admin/ratelimit/config 运行时热更。
+// 实现：默认进程内 token bucket——per-IP 桶由 oekit/concurrency/ratelimit 的
+// KeyedLimiter 托管（工厂造桶 + lastSeen TTL 自动清死桶，底层 x/time/rate）；
+// 配置 rate_limit.use_redis=true 且 Redis 可用时切换为 Redis 固定窗口计数
+// （多实例共享）。命中限流后按 block_seconds 封禁该 IP+维度（封禁同样
+// Redis/内存双写）。配置可经 /admin/ratelimit/config 运行时热更。
 package middleware
 
 import (
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/oekit/concurrency/ratelimit"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
@@ -105,20 +107,20 @@ func (s scope) qpsOf(cfg RateLimitConfig) int {
 	}
 }
 
-// clientLimiter 单 IP 在某 scope 下的 limiter
-type clientLimiter struct {
-	limiter    *rate.Limiter
-	lastAccess time.Time
-}
+// limiterIdleTTL 单 IP 桶空闲淘汰线（KeyedLimiter 内部每 ttl/2 清扫一轮）。
+// 沿用旧手搓 GC 的 10min 淘汰语义。
+const limiterIdleTTL = 10 * time.Minute
 
 // RateLimiter 限流管理器
 type RateLimiter struct {
-	mu      sync.Mutex
-	clients map[scope]map[string]*clientLimiter
-	blocked map[string]time.Time // "scope|ip" → 封禁截止
-	cfg     RateLimitConfig
-	rdb     *redis.Client
-	stopCh  chan struct{}
+	mu sync.Mutex
+	// limiters 各 scope 的 per-IP 桶托管（oekit KeyedLimiter：TTL 自动清死桶，
+	// 替代旧手搓双层 map + lastAccess 追踪 + GC 协程）
+	limiters map[scope]*ratelimit.KeyedLimiter
+	blocked  map[string]time.Time // "scope|ip" → 封禁截止
+	cfg      RateLimitConfig
+	rdb      *redis.Client
+	stopCh   chan struct{}
 
 	blockedTotal int64 // 累计封禁次数（观测用）
 }
@@ -126,19 +128,38 @@ type RateLimiter struct {
 // NewRateLimiter 创建限流管理器
 func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 	rl := &RateLimiter{
-		clients: map[scope]map[string]*clientLimiter{
-			scopeGlobal:   {},
-			scopeUpload:   {},
-			scopeDownload: {},
-			scopeLogin:    {},
-		},
-		blocked: map[string]time.Time{},
-		cfg:     cfg,
-		stopCh:  make(chan struct{}),
+		limiters: map[scope]*ratelimit.KeyedLimiter{},
+		blocked:  map[string]time.Time{},
+		cfg:      cfg,
+		stopCh:   make(chan struct{}),
 	}
-	// 后台定期清理过期 limiter（防止 map 无限增长）
+	rl.rebuildLimiters(cfg)
+	// 后台定期清理封禁表（client 桶的空闲清理由 KeyedLimiter 自管，见 gc）
 	go rl.gcLoop()
 	return rl
+}
+
+// rebuildLimiters 按 cfg 建 4 个 scope 的 per-IP 桶托管（重建前 Close 旧实例，
+// 停其自管清理协程）。工厂闭包捕获造桶当时的 qps/burst、不回头读 rl.cfg：
+// 热更走整体重建（UpdateConfig），与旧实现「清空现有 limiter 让新配置生效」
+// 同语义；且工厂锁自由，避免 KeyedLimiter 内部锁与 rl.mu 反序嵌套死锁。
+func (rl *RateLimiter) rebuildLimiters(cfg RateLimitConfig) {
+	for _, s := range []scope{scopeGlobal, scopeUpload, scopeDownload, scopeLogin} {
+		qps := s.qpsOf(cfg)
+		if qps <= 0 {
+			qps = 1
+		}
+		burst := cfg.Burst
+		if burst <= 0 {
+			burst = qps
+		}
+		if old := rl.limiters[s]; old != nil {
+			old.Close()
+		}
+		rl.limiters[s] = ratelimit.NewKeyedLimiter(func() ratelimit.Limiter {
+			return ratelimit.NewTokenBucket(rate.Limit(qps), burst)
+		}, limiterIdleTTL)
+	}
 }
 
 // SetRedis 注入 Redis（use_redis=true 时启用分布式固定窗口）
@@ -153,15 +174,18 @@ func (rl *RateLimiter) UpdateConfig(cfg RateLimitConfig) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	rl.cfg = cfg
-	// 清空所有现有 limiter，让新配置生效
-	for s := range rl.clients {
-		rl.clients[s] = map[string]*clientLimiter{}
-	}
+	// 整体重建，让新配置即刻生效（同旧实现的清空语义）
+	rl.rebuildLimiters(cfg)
 }
 
-// Stop 停止后台 goroutine
+// Stop 停止后台 goroutine 与各 scope 桶托管的自管清理
 func (rl *RateLimiter) Stop() {
 	close(rl.stopCh)
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	for _, kl := range rl.limiters {
+		kl.Close()
+	}
 }
 
 func (rl *RateLimiter) gcLoop() {
@@ -177,17 +201,11 @@ func (rl *RateLimiter) gcLoop() {
 	}
 }
 
+// gc 清理封禁表过期条目。per-IP 桶的空闲淘汰已由 KeyedLimiter 自管
+// （limiterIdleTTL，内部每 ttl/2 清扫一轮），此处不再过手。
 func (rl *RateLimiter) gc() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	cutoff := time.Now().Add(-10 * time.Minute)
-	for s := range rl.clients {
-		for ip, cl := range rl.clients[s] {
-			if cl.lastAccess.Before(cutoff) {
-				delete(rl.clients[s], ip)
-			}
-		}
-	}
 	for k, until := range rl.blocked {
 		if until.Before(time.Now()) {
 			delete(rl.blocked, k)
@@ -195,31 +213,15 @@ func (rl *RateLimiter) gc() {
 	}
 }
 
-// getLimiter 获取或创建某 IP 在某 scope 下的 limiter
-func (rl *RateLimiter) getLimiter(s scope, ip string) *rate.Limiter {
+// getLimiter 获取（或由 KeyedLimiter 惰性创建）某 IP 在某 scope 下的桶
+func (rl *RateLimiter) getLimiter(s scope, ip string) ratelimit.Limiter {
 	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	m, ok := rl.clients[s]
-	if !ok {
+	kl := rl.limiters[s]
+	rl.mu.Unlock()
+	if kl == nil {
 		return nil
 	}
-	cl, ok := m[ip]
-	if !ok {
-		qps := s.qpsOf(rl.cfg)
-		if qps <= 0 {
-			qps = 1
-		}
-		burst := rl.cfg.Burst
-		if burst <= 0 {
-			burst = qps
-		}
-		cl = &clientLimiter{
-			limiter: rate.NewLimiter(rate.Limit(qps), burst),
-		}
-		m[ip] = cl
-	}
-	cl.lastAccess = time.Now()
-	return cl.limiter
+	return kl.Get(ip)
 }
 
 // blockKey 封禁/Redis 计数的组合键
@@ -331,8 +333,8 @@ func (rl *RateLimiter) Stats() map[string]interface{} {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	active := map[string]int{}
-	for s, m := range rl.clients {
-		active[string(s)] = len(m)
+	for s, kl := range rl.limiters {
+		active[string(s)] = kl.Len()
 	}
 	blockedActive := 0
 	now := time.Now()
