@@ -23,6 +23,9 @@ const (
 )
 
 func startAPIKeyExpiryNotify() {
+	root := backgroundContext()
+	bgWg.Add(1)
+	defer bgWg.Done()
 	repo := dao.NewUserAPIKeyRepository(db.GetDB()) // 装配层显式句柄（dao 去全局化后合法消费点）
 	notifySvc := notifyApp.NewService(db.GetDB())   // 装配层显式句柄
 
@@ -59,7 +62,12 @@ func startAPIKeyExpiryNotify() {
 
 	run() // 启动即扫一轮
 	t := time.NewTicker(apiKeyExpiryScanInterval)
-	for range t.C {
-		run()
+	for {
+		select {
+		case <-root.Done():
+			return
+		case <-t.C:
+			run()
+		}
 	}
 }

@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/oekit/logx/shutdown"
 	"github.com/pigeonbox/contracts/openapi"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
@@ -364,22 +366,35 @@ func publicBaseMiddleware() app.HandlerFunc {
 	}
 }
 
-// Cleanup 清理资源
+// Cleanup 清理资源（优雅停机编排，oekit logx/shutdown）：
+// teardown 先取消后台任务根 ctx（拦下一轮），随后各资源按注册序、各自独立
+// 超时预算排水——panic 隔离，单个资源卡死不拖垮整体停机；在飞轮次由
+// bg-tasks 预算内等其跑完（默认 15s 总取消传播仅作信号，不挤占各任务预算）。
 func Cleanup() {
 	logger.Info("Cleaning up resources...")
 
+	mgr := shutdown.New(15 * time.Second)
+	mgr.AddTeardown(stopBackgroundTasks)
+	mgr.Add("bg-tasks", drainBackgroundTasks, 10*time.Second)
 	// 联邦服务先于数据库停：注销节点（best-effort），停心跳循环（P1 走运行时单点）
-	fedRT.stop()
+	mgr.Add("federation", func(context.Context) error {
+		fedRT.stop()
+		return nil
+	}, 5*time.Second)
 	// 直传子进程先于数据库停：杀在途 p2pc 进程组 + 停配额监控（P2a）
-	if p2pxSvcInstance != nil {
-		_ = p2pxSvcInstance.Stop()
-	}
-
-	if database != nil {
-		if err := db.Close(); err != nil {
-			logger.Error("Failed to close database", zap.Error(err))
+	mgr.Add("p2px", func(context.Context) error {
+		if p2pxSvcInstance != nil {
+			return p2pxSvcInstance.Stop()
 		}
-	}
+		return nil
+	}, 5*time.Second)
+	mgr.Add("database", func(context.Context) error {
+		if database != nil {
+			return db.Close()
+		}
+		return nil
+	}, 5*time.Second)
+	mgr.Shutdown(context.Background())
 
 	logger.Sync()
 }
