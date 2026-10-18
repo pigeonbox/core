@@ -93,12 +93,12 @@ github.com/minio/minio-go/v7 v7.3.0 h1:HM4pFCSQq/TK+j0/zmorSh5ddh81iDgRgU0BG0Vz/
 github.com/minio/minio-go/v7 v7.3.0/go.mod h1:KUPWdecEO1LWyUz+sTGXAuf2jZHrPh5fCsRH86QbPfk=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/oekit/concurrency v0.12.0 h1:ZvFxS9IzX47uF9fIYd7Io0Ufh+QFcHUIEp1ghs7MgZo=
-github.com/oekit/concurrency v0.12.0/go.mod h1:K5wV2UwkfvYUQFOawBCmaE29AGhWTGs3hsKu2vvKw4Y=
+github.com/oekit/concurrency v0.14.0 h1:KKPwrxVUoKcAK9EnfSa72hdahXRO4eFx+METSN3zUpU=
+github.com/oekit/concurrency v0.14.0/go.mod h1:K5wV2UwkfvYUQFOawBCmaE29AGhWTGs3hsKu2vvKw4Y=
 github.com/oekit/core v0.8.0 h1:2m87mEZpUlkatXzhSDXXCqFKTOltzKiTn+ZHWfU4IbI=
 github.com/oekit/core v0.8.0/go.mod h1:HhBTwYHU5MUp9tfNvHjfZv6P4yglQmn4jKmz98dUIsM=
-github.com/oekit/kitx v0.1.1 h1:oc1S5MEr185TEhuKWtDS+tyPlcQLnOSLq2auuujezPM=
-github.com/oekit/kitx v0.1.1/go.mod h1:IxI6X217Uhjx2jXBKAmpOs2gstw8Od3ql6Jcv9Lqxi0=
+github.com/oekit/kitx v0.2.0 h1:uwGPy1ihUE8n6d6M92tUuNgSCHeiEEnE4af9R4cyzBQ=
+github.com/oekit/kitx v0.2.0/go.mod h1:IxI6X217Uhjx2jXBKAmpOs2gstw8Od3ql6Jcv9Lqxi0=
 github.com/oekit/pkg v0.13.0 h1:8liA4F0n3VXTJXSF6ahH/4U7alw57rWEKSyB/Le462k=
 github.com/oekit/pkg v0.13.0/go.mod h1:sVeOtmG1sLY2aSnzFIbUAF2Qoh7G8R5vnWtWmLCv8NM=
 github.com/pelletier/go-toml/v2 v2.3.1 h1:MYEvvGnQjeNkRF1qUuGolNtNExTDwct51yp7olPtrEc=

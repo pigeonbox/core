@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/ratelimit"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -120,7 +121,7 @@ type RateLimiter struct {
 	blocked  map[string]time.Time // "scope|ip" → 封禁截止
 	cfg      RateLimitConfig
 	rdb      *redis.Client
-	stopCh   chan struct{}
+	gcCancel context.CancelFunc // 停封禁表清扫循环（loop.Run 的 ctx 生命周期）
 
 	blockedTotal int64 // 累计封禁次数（观测用）
 }
@@ -131,11 +132,14 @@ func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 		limiters: map[scope]*ratelimit.KeyedLimiter{},
 		blocked:  map[string]time.Time{},
 		cfg:      cfg,
-		stopCh:   make(chan struct{}),
 	}
 	rl.rebuildLimiters(cfg)
-	// 后台定期清理封禁表（client 桶的空闲清理由 KeyedLimiter 自管，见 gc）
-	go rl.gcLoop()
+	// 后台定期清理封禁表（client 桶的空闲清理由 KeyedLimiter 自管，见 gc）；
+	// loop.Run 托管生命周期（ctx 取消可打断+RunSafeLabeled panic 归因+Wait 排水）
+	gcCtx, cancel := context.WithCancel(context.Background())
+	rl.gcCancel = cancel
+	loop.Run(gcCtx, loop.Config{Interval: 5 * time.Minute, FirstDelay: 5 * time.Minute, Name: "ratelimit.gc"},
+		func(ctx context.Context) { rl.gc() })
 	return rl
 }
 
@@ -178,26 +182,13 @@ func (rl *RateLimiter) UpdateConfig(cfg RateLimitConfig) {
 	rl.rebuildLimiters(cfg)
 }
 
-// Stop 停止后台 goroutine 与各 scope 桶托管的自管清理
+// Stop 停止封禁表清扫循环与各 scope 桶托管的自管清理
 func (rl *RateLimiter) Stop() {
-	close(rl.stopCh)
+	rl.gcCancel()
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	for _, kl := range rl.limiters {
 		kl.Close()
-	}
-}
-
-func (rl *RateLimiter) gcLoop() {
-	t := time.NewTicker(5 * time.Minute)
-	defer t.Stop()
-	for {
-		select {
-		case <-rl.stopCh:
-			return
-		case <-t.C:
-			rl.gc()
-		}
 	}
 }
 
