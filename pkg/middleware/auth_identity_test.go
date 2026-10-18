@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,4 +81,35 @@ func TestInvalidateIdentity_LoadingNilSafe(t *testing.T) {
 		SetIdentityLoader(nil)
 		InvalidateIdentity(424245)
 	})
+}
+
+// 守卫测试：TTL 过期边界（假时钟确定性，pkg v0.13.0 #9 LocalConfig.Now 落地后
+// 收回此前「押注上游契约套件」的断言）。契约语义：恰到期仍命中（闭区间），
+// 越过 1ns 即 miss 重源。
+func TestIdentityOf_TTLExpiry_FakeClock(t *testing.T) {
+	calls := 0
+	SetIdentityLoader(func(ctx context.Context, userID uint) (*IdentityRecord, error) {
+		calls++
+		return &IdentityRecord{Status: "active", Role: "user", Epoch: 1}, nil
+	})
+	t.Cleanup(func() { SetIdentityLoader(nil) })
+
+	cur := time.Now()
+	clock := func() time.Time { return cur }
+	orig := identityCache
+	identityCache = newIdentityCache(clock)
+	t.Cleanup(func() { identityCache = orig })
+	ctx := context.Background()
+
+	_, _ = identityOf(ctx, 424246)
+	_, _ = identityOf(ctx, 424246)
+	assert.Equal(t, 1, calls, "TTL 内命中不回源")
+
+	cur = cur.Add(identityCacheTTL)
+	_, _ = identityOf(ctx, 424246)
+	assert.Equal(t, 1, calls, "恰到期边界仍命中（闭区间契约）")
+
+	cur = cur.Add(time.Nanosecond)
+	_, _ = identityOf(ctx, 424246)
+	assert.Equal(t, 2, calls, "越过过期点即重源")
 }

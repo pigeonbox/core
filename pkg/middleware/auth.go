@@ -115,7 +115,13 @@ var (
 	// （TTL/容量驱逐/后台清扫均为其契约能力，替代手搓 map+惰性 GC 约 40 行）。
 	// NullTTL=-1 保持历史语义：查无此人/loader 未就绪不缓存（恒回源）；
 	// loader 错误不缓存（LocalCache 契约）。
-	identityCache = cache.NewLocalCache(cache.LocalConfig[IdentityRecord]{
+	identityCache = newIdentityCache(nil)
+)
+
+// newIdentityCache 构造身份缓存；now 非 nil 时注入时钟（pkg v0.13.0 #9：
+// 全部过期判定/写入时刻/清扫节奏均路由该时钟），供单测假时钟确定性驱动。
+func newIdentityCache(now func() time.Time) *cache.LocalCache[IdentityRecord] {
+	cfg := cache.LocalConfig[IdentityRecord]{
 		TTL:     identityCacheTTL,
 		MaxSize: identityCacheMaxSize,
 		NullTTL: -1,
@@ -132,8 +138,12 @@ var (
 			}
 			return fn(ctx, uint(uid))
 		},
-	})
-)
+	}
+	if now != nil {
+		cfg.Now = now
+	}
+	return cache.NewLocalCache(cfg)
+}
 
 // identityCacheKey 用户 ID → 缓存键（LocalCache 键域为 string）
 func identityCacheKey(userID uint) string {
