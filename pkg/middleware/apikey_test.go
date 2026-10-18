@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/ut"
 	"github.com/glebarez/sqlite"
+	"github.com/oekit/concurrency/ratelimit"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -60,8 +60,8 @@ func newAPIKeyTestEnv(t *testing.T) *gorm.DB {
 	// 重置全局锁定器为纯内存实例 + 清空触碰节流/单Key限流表，测试间隔离（同包直取）
 	InitDefaultLockout(nil)
 	t.Cleanup(func() { InitDefaultLockout(nil) })
-	touchThrottle = sync.Map{}
-	perKeyLimiters = sync.Map{}
+	touchLimiters = newTouchLimiters()
+	perKeyLimiters = newPerKeyLimiters()
 	return g
 }
 
@@ -237,11 +237,23 @@ func TestOptionalAPIKey_DisabledSwitch_401(t *testing.T) {
 // --- per-Key 独立限流 ---
 
 func TestAllowPerKey_TokenBucket(t *testing.T) {
-	assert.True(t, allowPerKey(1, 0, 0), "qps=0 视为不限")
-	assert.True(t, allowPerKey(2, 1, 1), "首次消耗桶内令牌")
-	assert.False(t, allowPerKey(2, 1, 1), "桶空即拒")
+	// KeyedLimiterOf 工厂读取全局配置，测试经 conf.SetGlobalConfig 驱动
+	conf.SetGlobalConfig(&conf.AppConfiguration{Security: conf.SecurityConfig{
+		APIToken: conf.APITokenConfig{Enabled: true, PerKeyQPS: 1, PerKeyBurst: 1},
+	}})
+	t.Cleanup(func() { conf.SetGlobalConfig(nil) })
+	perKeyLimiters = newPerKeyLimiters()
+	t.Cleanup(func() { perKeyLimiters = newPerKeyLimiters() })
+
+	assert.True(t, allowPerKey(400001), "首次消耗桶内令牌")
+	assert.False(t, allowPerKey(400001), "桶空即拒")
 	time.Sleep(1100 * time.Millisecond)
-	assert.True(t, allowPerKey(2, 1, 1), "1s 后补充令牌")
+	assert.True(t, allowPerKey(400001), "1s 后补充令牌")
+
+	conf.SetGlobalConfig(&conf.AppConfiguration{Security: conf.SecurityConfig{
+		APIToken: conf.APITokenConfig{Enabled: true},
+	}})
+	assert.True(t, allowPerKey(400002), "qps=0 视为不限")
 }
 
 func TestOptionalAPIKey_PerKeyRateLimit_429(t *testing.T) {
@@ -286,36 +298,19 @@ func TestOptionalAPIKey_LockoutAfterMaxFailures(t *testing.T) {
 // --- TouchLastUsed 节流 ---
 
 func TestShouldTouchLastUsed_Throttle(t *testing.T) {
-	now := time.Now()
-	assert.True(t, shouldTouchLastUsed(1, now), "首次必须写")
-	assert.False(t, shouldTouchLastUsed(1, now.Add(30*time.Second)), "60s 内不重复写")
-	assert.True(t, shouldTouchLastUsed(1, now.Add(61*time.Second)), "超 60s 再写")
-	assert.True(t, shouldTouchLastUsed(2, now), "不同 Key 互不影响")
-}
+	// 换 50ms 短间隔实例驱动真实时钟（KeyedLimiterOf 不支持注入时钟）
+	orig := touchLimiters
+	touchLimiters = ratelimit.NewKeyedLimiterOf[uint](
+		func() ratelimit.Limiter { return ratelimit.NewTokenBucket(rate.Every(50*time.Millisecond), 1) },
+		ratelimit.WithIdleTTL[uint](time.Minute),
+	)
+	t.Cleanup(func() { touchLimiters = orig })
 
-// 守卫测试：认证注册表清扫。touchThrottle 此前无任何清理路径（每把 Key 一条
-// 永存，含已吊销 Key）；现与 perKeyLimiters 共用 janitor，超龄条目清理行为中性
-// ——throttle 条目超 touchInterval 本就放行重写，limiter 条目 1h 未触达即无流量。
-func TestSweepAuthRegistries(t *testing.T) {
-	now := time.Now()
-	touchThrottle.Store(9001, now.Add(-2*time.Minute))
-	touchThrottle.Store(9002, now.Add(-30*time.Second))
-	perKeyLimiters.Store(9003, &keyLimiterEntry{limiter: rate.NewLimiter(1, 1), lastAccess: now.Add(-2 * time.Hour)})
-	perKeyLimiters.Store(9004, &keyLimiterEntry{limiter: rate.NewLimiter(1, 1), lastAccess: now})
-
-	sweepAuthRegistries(now)
-
-	_, staleTouch := touchThrottle.Load(9001)
-	_, freshTouch := touchThrottle.Load(9002)
-	assert.False(t, staleTouch, "超 touchInterval 的 throttle 条目应被清")
-	assert.True(t, freshTouch, "新鲜 throttle 条目保留")
-	_, staleLimiter := perKeyLimiters.Load(9003)
-	_, freshLimiter := perKeyLimiters.Load(9004)
-	assert.False(t, staleLimiter, "1h 未触达的 limiter 条目应被清")
-	assert.True(t, freshLimiter, "新鲜 limiter 条目保留")
-
-	touchThrottle.Delete(9002)
-	perKeyLimiters.Delete(9004)
+	assert.True(t, shouldTouchLastUsed(400003), "首次必须写")
+	assert.False(t, shouldTouchLastUsed(400003), "间隔内不重复写")
+	time.Sleep(60 * time.Millisecond)
+	assert.True(t, shouldTouchLastUsed(400003), "超间隔再写")
+	assert.True(t, shouldTouchLastUsed(400004), "不同 Key 互不影响")
 }
 
 func TestOptionalAPIKey_TouchLastUsedThrottled(t *testing.T) {

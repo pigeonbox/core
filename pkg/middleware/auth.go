@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/oekit/pkg/cache"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/pkg/auth"
 )
@@ -104,65 +106,61 @@ type IdentityRecord struct {
 }
 
 var (
-	identityLoader func(ctx context.Context, userID uint) (*IdentityRecord, error)
-	identityMu     sync.RWMutex
-	identityCache  = map[uint]identityCacheEntry{}
-	identityGCAt   time.Time
+	// identityLoader 守卫锁：loader 只在 bootstrap/测试注入，与 GetOrLoad 的
+	// Source 读取保持 race-clean（identityCache 本身的并发由 LocalCache 托管）
+	identityLoaderMu sync.RWMutex
+	identityLoader   func(ctx context.Context, userID uint) (*IdentityRecord, error)
+
+	// identityCache 身份回查缓存。2026-10-18 起托管给 oekit/pkg/cache LocalCache
+	// （TTL/容量驱逐/后台清扫均为其契约能力，替代手搓 map+惰性 GC 约 40 行）。
+	// NullTTL=-1 保持历史语义：查无此人/loader 未就绪不缓存（恒回源）；
+	// loader 错误不缓存（LocalCache 契约）。
+	identityCache = cache.NewLocalCache(cache.LocalConfig[IdentityRecord]{
+		TTL:     identityCacheTTL,
+		MaxSize: identityCacheMaxSize,
+		NullTTL: -1,
+		Source: func(ctx context.Context, key string) (*IdentityRecord, error) {
+			identityLoaderMu.RLock()
+			fn := identityLoader
+			identityLoaderMu.RUnlock()
+			if fn == nil {
+				return nil, nil
+			}
+			uid, err := strconv.ParseUint(key, 10, 64)
+			if err != nil {
+				return nil, nil
+			}
+			return fn(ctx, uint(uid))
+		},
+	})
 )
 
-type identityCacheEntry struct {
-	rec *IdentityRecord
-	at  time.Time
+// identityCacheKey 用户 ID → 缓存键（LocalCache 键域为 string）
+func identityCacheKey(userID uint) string {
+	return strconv.FormatUint(uint64(userID), 10)
 }
 
 // SetIdentityLoader 注入身份加载器（bootstrap 调用一次；nil = 关闭回查，
 // 退化为纯 JWT 语义——单测/轻量环境）。
 func SetIdentityLoader(fn func(ctx context.Context, userID uint) (*IdentityRecord, error)) {
-	identityMu.Lock()
-	defer identityMu.Unlock()
+	identityLoaderMu.Lock()
+	defer identityLoaderMu.Unlock()
 	identityLoader = fn
 }
 
 // InvalidateIdentity 清除某用户的回查缓存（改密/封禁/降权落库后调用，
 // 使本次变更绕过 TTL 立即生效）。
 func InvalidateIdentity(userID uint) {
-	identityMu.Lock()
-	delete(identityCache, userID)
-	identityMu.Unlock()
+	_ = identityCache.Del(context.Background(), identityCacheKey(userID))
 }
 
 // identityOf 带缓存的回查。loader 未注入返回 (nil, nil)，调用方跳过复核。
 func identityOf(ctx context.Context, userID uint) (*IdentityRecord, error) {
-	identityMu.RLock()
-	loader := identityLoader
-	if loader != nil {
-		if e, ok := identityCache[userID]; ok && time.Since(e.at) < identityCacheTTL {
-			identityMu.RUnlock()
-			return e.rec, nil
-		}
+	rec, err := identityCache.GetOrLoad(ctx, identityCacheKey(userID))
+	if err != nil || rec == nil {
+		return nil, err
 	}
-	identityMu.RUnlock()
-	if loader == nil {
-		return nil, nil
-	}
-
-	rec, err := loader(ctx, userID)
-	identityMu.Lock()
-	// 惰性 GC：容量触顶或距上次清扫超过一个 TTL 量级时清理过期项
-	now := time.Now()
-	if len(identityCache) >= identityCacheMaxSize || now.Sub(identityGCAt) > identityCacheTTL {
-		for k, e := range identityCache {
-			if now.Sub(e.at) >= identityCacheTTL {
-				delete(identityCache, k)
-			}
-		}
-		identityGCAt = now
-	}
-	if err == nil && rec != nil {
-		identityCache[userID] = identityCacheEntry{rec: rec, at: now}
-	}
-	identityMu.Unlock()
-	return rec, err
+	return rec, nil
 }
 
 // identityFresh 认证附加复核：用户 active + 会话纪元与 claim 一致。

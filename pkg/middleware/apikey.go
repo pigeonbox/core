@@ -8,11 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/oekit/concurrency/async"
+	"github.com/oekit/concurrency/ratelimit"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
 	"golang.org/x/time/rate"
@@ -79,62 +78,42 @@ func sha256Hex(s string) string {
 // 多实例各自节流即可（目的仅是降写放大，非精确统计）。
 const touchInterval = time.Minute
 
-var touchThrottle sync.Map // keyID(uint) → last touch time.Time
-
-var authRegistriesGCOnce sync.Once
-
-func shouldTouchLastUsed(keyID uint, now time.Time) bool {
-	authRegistriesGCOnce.Do(startAuthRegistriesGC)
-	if v, ok := touchThrottle.Load(keyID); ok && now.Sub(v.(time.Time)) < touchInterval {
-		return false
-	}
-	touchThrottle.Store(keyID, now)
-	return true
+// touchLimiters 每把 Key 一个 1次/touchInterval 令牌桶（burst=1）：首请求放行
+// 落库，间隔内节流——语义与历史 sync.Map+时间戳实现逐位一致；空闲回收由
+// KeyedLimiterOf 托管（WithIdleTTL），不再自写 GC 协程（2026-10-18 起 oekit
+// concurrency v0.9.0 KeyedLimiterOf 具备 WithIdleTTL/WithMaxEntries）。
+func newTouchLimiters() *ratelimit.KeyedLimiterOf[uint] {
+	return ratelimit.NewKeyedLimiterOf[uint](
+		func() ratelimit.Limiter { return ratelimit.NewTokenBucket(rate.Every(touchInterval), 1) },
+		ratelimit.WithIdleTTL[uint](touchInterval),
+	)
 }
 
-// startAuthRegistriesGC 常驻清扫协程，touchThrottle 与 perKeyLimiters 共用一个
-// janitor。随首个 Touch 请求惰性启动——此前入口挂在 allowPerKey 且 qps>0 才
-// 可达，per-key 限流关闭时 touchThrottle 无任何清理路径（已吊销 Key 条目永存）。
-// 条目清理均行为中性：throttle 条目超 touchInterval 后本就放行重写，
-// limiter 条目 1h 未触达即无存活流量。
-func startAuthRegistriesGC() {
-	// 常驻 GC 无监督者：Range 断言带 ok 检查（条目类型演进错位时跳过而非
-	// panic，不依赖兜底），GoSafe 兜底其余未预期 panic 防带崩认证路径所在进程。
-	async.GoSafe(func() {
-		for range time.Tick(10 * time.Minute) {
-			sweepAuthRegistries(time.Now())
-		}
-	})
-}
+var touchLimiters = newTouchLimiters()
 
-// sweepAuthRegistries 单轮清扫（独立成函数供测试注入时钟，不等真实 10 分钟）。
-func sweepAuthRegistries(now time.Time) {
-	touchThrottle.Range(func(k, v any) bool {
-		if t, ok := v.(time.Time); ok && now.Sub(t) >= touchInterval {
-			touchThrottle.Delete(k)
-		}
-		return true
-	})
-	perKeyLimiters.Range(func(k, v any) bool {
-		e, ok := v.(*keyLimiterEntry)
-		if !ok {
-			return true // continue：类型不符跳过，只误伤清理时效不误伤认证
-		}
-		if now.Sub(e.lastAccess) > time.Hour {
-			perKeyLimiters.Delete(k)
-		}
-		return true
-	})
+func shouldTouchLastUsed(keyID uint) bool {
+	return touchLimiters.Allow(keyID)
 }
 
 // ===== Per-Key 独立限流（波次3：防单把 Key 被盗后高速滥用）=====
 
-type keyLimiterEntry struct {
-	limiter    *rate.Limiter
-	lastAccess time.Time
+// perKeyLimiters 每 Key 独立令牌桶，qps/burst 取工厂时刻的全局配置（与历史
+// LoadOrStore 时机一致：既有条目不随配置热更，新条目取当前值）。进程内计数
+// （多实例各自限）；空闲 1h 回收（吊销 Key 不再产生访问后条目自动消亡）。
+func newPerKeyLimiters() *ratelimit.KeyedLimiterOf[uint] {
+	return ratelimit.NewKeyedLimiterOf[uint](
+		func() ratelimit.Limiter {
+			qps, burst := perKeyQPS()
+			if burst <= 0 {
+				burst = 2 * qps
+			}
+			return ratelimit.NewTokenBucket(rate.Limit(qps), burst)
+		},
+		ratelimit.WithIdleTTL[uint](time.Hour),
+	)
 }
 
-var perKeyLimiters sync.Map // keyID(uint) → *keyLimiterEntry
+var perKeyLimiters = newPerKeyLimiters()
 
 // perKeyQPS 读取单 Key 限流参数；无全局配置（单测）返回 0=不限。
 func perKeyQPS() (int, int) {
@@ -145,22 +124,12 @@ func perKeyQPS() (int, int) {
 }
 
 // allowPerKey 单 Key 令牌桶。进程内计数（与 Touch 节流同语义，多实例各自限），
-// 吊销 Key 不再产生访问，后台协程周期清理 1h 未触达的条目。
-func allowPerKey(keyID uint, qps, burst int) bool {
-	if qps <= 0 {
+// qps<=0 视为不限（与历史签名语义一致，配置读取收口在 perKeyQPS）。
+func allowPerKey(keyID uint) bool {
+	if qps, _ := perKeyQPS(); qps <= 0 {
 		return true
 	}
-	if burst <= 0 {
-		burst = 2 * qps
-	}
-	authRegistriesGCOnce.Do(startAuthRegistriesGC)
-	now := time.Now()
-	v, _ := perKeyLimiters.LoadOrStore(keyID, &keyLimiterEntry{
-		limiter: rate.NewLimiter(rate.Limit(qps), burst), lastAccess: now,
-	})
-	e := v.(*keyLimiterEntry)
-	e.lastAccess = now
-	return e.limiter.Allow()
+	return perKeyLimiters.Allow(keyID)
 }
 
 // ===== 持久化能力（注入式：pkg 不依赖 repo/db/dao，composition root 装配）=====
@@ -221,11 +190,11 @@ func validateAPIKey(ctx context.Context, c *app.RequestContext, plainKey string)
 	lock.Reset(ctx, lockKey)
 
 	// 单 Key 独立限流（先于 Touch：被限流的请求不计入使用统计）
-	if qps, burst := perKeyQPS(); !allowPerKey(principal.KeyID, qps, burst) {
+	if !allowPerKey(principal.KeyID) {
 		return ctx, errPerKeyRateLimited
 	}
 
-	if shouldTouchLastUsed(principal.KeyID, time.Now()) {
+	if shouldTouchLastUsed(principal.KeyID) {
 		_ = apiKeyStore.TouchLastUsed(ctx, principal.KeyID, ClientIP(c))
 	}
 
