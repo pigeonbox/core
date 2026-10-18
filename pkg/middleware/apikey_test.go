@@ -242,12 +242,19 @@ func TestAllowPerKey_TokenBucket(t *testing.T) {
 		APIToken: conf.APITokenConfig{Enabled: true, PerKeyQPS: 1, PerKeyBurst: 1},
 	}})
 	t.Cleanup(func() { conf.SetGlobalConfig(nil) })
-	perKeyLimiters = newPerKeyLimiters()
-	t.Cleanup(func() { perKeyLimiters = newPerKeyLimiters() })
+	// 假时钟确定性驱动（concurrency v0.12.0 TokenBucket WithTokenClock）
+	cur := time.Now()
+	clock := func() time.Time { return cur }
+	orig := perKeyLimiters
+	perKeyLimiters = ratelimit.NewKeyedLimiterOf[uint](
+		func() ratelimit.Limiter { return ratelimit.NewTokenBucket(1, 1, ratelimit.WithTokenClock(clock)) },
+		ratelimit.WithIdleTTL[uint](time.Hour),
+	)
+	t.Cleanup(func() { perKeyLimiters = orig })
 
 	assert.True(t, allowPerKey(400001), "首次消耗桶内令牌")
 	assert.False(t, allowPerKey(400001), "桶空即拒")
-	time.Sleep(1100 * time.Millisecond)
+	cur = cur.Add(1100 * time.Millisecond)
 	assert.True(t, allowPerKey(400001), "1s 后补充令牌")
 
 	conf.SetGlobalConfig(&conf.AppConfiguration{Security: conf.SecurityConfig{
@@ -298,17 +305,22 @@ func TestOptionalAPIKey_LockoutAfterMaxFailures(t *testing.T) {
 // --- TouchLastUsed 节流 ---
 
 func TestShouldTouchLastUsed_Throttle(t *testing.T) {
-	// 换 50ms 短间隔实例驱动真实时钟（KeyedLimiterOf 不支持注入时钟）
+	// 假时钟确定性驱动（concurrency v0.12.0 TokenBucket WithTokenClock），
+	// KeyedLimiterOf 自身无时钟注入，经工厂注入 TokenBucket 时钟等效达成
+	cur := time.Now()
+	clock := func() time.Time { return cur }
 	orig := touchLimiters
 	touchLimiters = ratelimit.NewKeyedLimiterOf[uint](
-		func() ratelimit.Limiter { return ratelimit.NewTokenBucket(rate.Every(50*time.Millisecond), 1) },
+		func() ratelimit.Limiter {
+			return ratelimit.NewTokenBucket(rate.Every(touchInterval), 1, ratelimit.WithTokenClock(clock))
+		},
 		ratelimit.WithIdleTTL[uint](time.Minute),
 	)
 	t.Cleanup(func() { touchLimiters = orig })
 
 	assert.True(t, shouldTouchLastUsed(400003), "首次必须写")
 	assert.False(t, shouldTouchLastUsed(400003), "间隔内不重复写")
-	time.Sleep(60 * time.Millisecond)
+	cur = cur.Add(touchInterval + time.Second)
 	assert.True(t, shouldTouchLastUsed(400003), "超间隔再写")
 	assert.True(t, shouldTouchLastUsed(400004), "不同 Key 互不影响")
 }

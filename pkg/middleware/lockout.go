@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/oekit/concurrency/ratelimit"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
-	"github.com/oekit/concurrency/async"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,33 +23,38 @@ type redisLockCmds interface {
 	Del(ctx context.Context, keys ...string) *redis.IntCmd
 }
 
-// 内存兜底表的容量上限与 GC 周期（2026-10-05 审计 P2：此前 memFail/memHit
-// 只在同 key 重访时惰性清理，攻击者用海量唯一键（用户名/取件码）打失败计数
-// 可让两表无界增长——内存型 DoS。现周期清扫 + 满载淘汰）。
-const (
-	memLockoutMax      = 65536
-	memLockoutGCPeriod = 10 * time.Minute
-)
+// memLockoutMax 内存兜底表容量护栏（2026-10-05 审计 P2 引入；现由
+// LockoutOf.MaxEntries 托管——表满 fail-open 丢弃失败样本 + OverCapHits
+// 观测，不再"整表清空保命"）。
+const memLockoutMax = 65536
 
 // Lockout 登录/取件失败计数锁定（防爆破，非 QPS 语义）。
 //
 // 维度由调用方决定（建议 "ip"、"user:xxx"、"code:xxx" 组合键）：
 //   - 窗口内失败次数达到 MaxAttempts → 锁定 LockSeconds
 //   - Redis 可用时计数/锁定共享（多实例生效）；否则进程内存兜底
+//     （2026-10-18 起兜底托管给 oekit concurrency v0.12.0 ratelimit.Lockout
+//     ——concurrency#21 落地物；滑动窗口/锁定条目免空闲回收/容量 fail-open
+//     均为其契约能力，替代手搓 memHit/memFail+周期 GC 约 80 行）
 type Lockout struct {
 	rdb redisLockCmds
 	cfg conf.LockoutConfig
 
-	mu      sync.Mutex
-	memHit  map[string]time.Time // key → 锁定截止时间
-	memFail map[string]*failWindow
-
-	gcOnce sync.Once
+	mem *ratelimit.Lockout // 内存兜底（Redis 模式下仅故障降级路径触达）
 }
 
-type failWindow struct {
-	count     int
-	windowEnd time.Time
+// newMemLockout 内存兜底实例。IdleTTL 取 window+lock：覆盖"失败窗→锁定"完整
+// 生命周期（锁定中条目上游免回收；未锁定条目超窗+锁长后无存活语义可回收）。
+func newMemLockout(cfg conf.LockoutConfig) *ratelimit.Lockout {
+	window := time.Duration(cfg.WindowSeconds) * time.Second
+	lock := time.Duration(cfg.LockSeconds) * time.Second
+	return ratelimit.NewLockout(ratelimit.LockoutConfig{
+		Window:       window,
+		Threshold:    cfg.MaxAttempts,
+		LockDuration: lock,
+		MaxEntries:   memLockoutMax,
+		IdleTTL:      window + lock,
+	})
 }
 
 const (
@@ -77,52 +81,7 @@ func NewLockout(rdb *redis.Client) *Lockout {
 			cfg = c.Security.Lockout
 		}
 	}
-	l := &Lockout{
-		rdb:     cmds,
-		cfg:     cfg,
-		memHit:  map[string]time.Time{},
-		memFail: map[string]*failWindow{},
-	}
-	return l.withGC()
-}
-
-// withGC 启动内存表周期清扫（Redis 模式下表恒空，空转开销可忽略）。
-// 常驻协程无监督者，GoSafe 兜底防 gcSweep 未来演进引入 panic 带崩进程。
-func (l *Lockout) withGC() *Lockout {
-	l.gcOnce.Do(func() {
-		async.GoSafe(func() {
-			ticker := time.NewTicker(memLockoutGCPeriod)
-			defer ticker.Stop()
-			for range ticker.C {
-				l.gcSweep()
-			}
-		})
-	})
-	return l
-}
-
-// gcSweep 清扫过期条目；满载仍超限时整表清空（保命优先于保留计数，
-// 满载 64K 意味着已被海量唯一键刷过，重置不放大爆破面——限流层仍在）。
-func (l *Lockout) gcSweep() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	for k, until := range l.memHit {
-		if now.After(until) {
-			delete(l.memHit, k)
-		}
-	}
-	for k, w := range l.memFail {
-		if now.After(w.windowEnd) {
-			delete(l.memFail, k)
-		}
-	}
-	if len(l.memFail) >= memLockoutMax {
-		l.memFail = map[string]*failWindow{}
-	}
-	if len(l.memHit) >= memLockoutMax {
-		l.memHit = map[string]time.Time{}
-	}
+	return &Lockout{rdb: cmds, cfg: cfg, mem: newMemLockout(cfg)}
 }
 
 // Enabled 是否启用
@@ -140,13 +99,8 @@ func (l *Lockout) CheckLocked(ctx context.Context, key string) (int, bool) {
 		}
 		return 0, false
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if until, ok := l.memHit[key]; ok {
-		if remain := time.Until(until); remain > 0 {
-			return int(remain.Seconds()) + 1, true
-		}
-		delete(l.memHit, key)
+	if locked, remain := l.mem.CheckLocked(key); locked {
+		return int(remain.Seconds()) + 1, true
 	}
 	return 0, false
 }
@@ -175,30 +129,8 @@ func (l *Lockout) RecordFailure(ctx context.Context, key string) (bool, int) {
 		// Redis 故障 → 内存兜底
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	// 满载守卫：新键进入前先扫过期，仍满则整表重置（防海量唯一键撑表，
-	// 限流层仍在线，此处只兜内存）
-	if _, exists := l.memFail[key]; !exists && len(l.memFail) >= memLockoutMax {
-		for k, w := range l.memFail {
-			if now.After(w.windowEnd) {
-				delete(l.memFail, k)
-			}
-		}
-		if len(l.memFail) >= memLockoutMax {
-			l.memFail = map[string]*failWindow{}
-		}
-	}
-	w, ok := l.memFail[key]
-	if !ok || now.After(w.windowEnd) {
-		w = &failWindow{count: 0, windowEnd: now.Add(window)}
-		l.memFail[key] = w
-	}
-	w.count++
-	if w.count >= l.cfg.MaxAttempts {
-		l.memHit[key] = now.Add(lock)
-		delete(l.memFail, key)
+	locked, _ := l.mem.RecordFailure(key)
+	if locked {
 		return true, l.cfg.LockSeconds
 	}
 	return false, 0
@@ -209,9 +141,7 @@ func (l *Lockout) Reset(ctx context.Context, key string) {
 	if l.rdb != nil {
 		l.rdb.Del(ctx, failKeyPrefix+key)
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.memFail, key)
+	l.mem.Reset(key)
 }
 
 // defaultLockout 全局单例（bootstrap 注入 Redis 后创建）
