@@ -4,6 +4,7 @@ package p2px
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,11 +26,19 @@ type sendOpts struct {
 	inviteTo   string
 	inviteNote string
 	uploadDir  string // 浏览器直发的上传会话目录（SendUploaded 专用；终态清理用）
+	pairing    bool   // 配对码模式（2026-10-18：--pair --json --pair-stdin，见 WithPairing）
 }
 
 // WithUploadDir 标记本任务源文件来自上传会话目录（终态自动清理）。
 func WithUploadDir(dir string) SendOption {
 	return func(o *sendOpts) { o.uploadDir = dir }
+}
+
+// WithPairing 配对码模式（2026-10-18）：亮 4 位定时码替代 12 位口令转抄。
+// p2pc 铸码经 --json NDJSON 回传（pair_code/pair_request 等事件由 scanLines
+// 解析进任务快照），敲门裁决经 stdin 单行协议由 Approve 转发。
+func WithPairing() SendOption {
+	return func(o *sendOpts) { o.pairing = true }
 }
 
 // WithInvite 发送后向名录对端投递密封邀请(2026-10-14 在线名录:
@@ -116,6 +125,11 @@ func (s *Service) sendWithAuth(ctx context.Context, paths []string, opts []SendO
 	t := s.newTask("send", "", paths)
 	t.BytesTotal = totalSourceSize(paths)
 	t.uploadDir = o.uploadDir
+	if o.pairing {
+		// 配对码模式:--json 让 pair_* 事件以 NDJSON 回传(scanLines 解析),
+		// --pair-stdin 让接受门走 stdin 单行协议(Approve 转发网页裁决)。
+		args = append(args, "--pair", "--json", "--pair-stdin")
+	}
 	return s.spawnPrepared(t, bin, args, "")
 }
 
@@ -232,6 +246,14 @@ func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir strin
 		s.dropTask(t.ID)
 		return nil, err
 	}
+	// stdin:配对任务的接受门裁决通道(--pair-stdin 单行 y/n);非配对任务
+	// 子进程不读 stdin,管道闲置无害。Wait 后由 waitTask 收尾关闭。
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		s.dropTask(t.ID)
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		cancel()
 		s.dropTask(t.ID)
@@ -241,6 +263,7 @@ func (s *Service) spawnPrepared(t *Task, bin string, args []string, outDir strin
 	t.cancel = cancel
 	t.pid = cmd.Process.Pid
 	t.waitingSince = time.Now()
+	t.cmdStdin = stdin
 	t.mu.Unlock()
 	s.writePidFile(t.ID, cmd.Process.Pid)
 
@@ -363,6 +386,33 @@ func (s *Service) scanLines(t *Task, r interface{ Read([]byte) (int, error) }, i
 			t.mu.Unlock()
 			continue // 不进日志环：1MB 一条会把 256 行环形缓冲刷成纯进度
 		}
+		// 配对码事件(--pair --json 的 NDJSON 行):pair_code 更新展示码(重铸
+		// 会换新码,非首见覆盖),pair_request 挂待裁决位(Approve 只在此位上
+		// 转发,防杂散行错位后续请求),denied/expired 清位(新码在途)。
+		if strings.HasPrefix(line, "{") && strings.Contains(line, `"event"`) {
+			if ev := parsePairEvent(line); ev.event != "" {
+				t.mu.Lock()
+				switch ev.event {
+				case "pair_code":
+					t.Code = ev.code
+				case "pair_request":
+					t.pairPending = true
+					t.pairFrom = ev.from
+					t.pairName = ev.name
+				case "pair_denied", "pair_expired":
+					t.pairPending = false
+					t.pairFrom, t.pairName = "", ""
+				}
+				t.mu.Unlock()
+			}
+			// 事件行照常入日志环(诊断可见);error 事件兼作失败因(——json 模式
+			// 错误不再有 ✗ 文本行)
+			if ev := parsePairEvent(line); ev.event == "error" && ev.msg != "" {
+				t.mu.Lock()
+				t.err = ev.msg
+				t.mu.Unlock()
+			}
+		}
 		t.mu.Lock()
 		if isStdout && t.Code == "" {
 			if i := strings.Index(line, "口令:"); i >= 0 {
@@ -385,6 +435,48 @@ func (s *Service) scanLines(t *Task, r interface{ Read([]byte) (int, error) }, i
 		}
 		t.mu.Unlock()
 	}
+}
+
+// pairEvent 配对码 NDJSON 事件（p2pc --json 单行;与 CLI 事件契约同仓演进）。
+type pairEvent struct {
+	event string
+	code  string
+	from  string
+	name  string
+	msg   string
+}
+
+// parsePairEvent 解析 p2pc --json 事件行（stdout）;非事件行返回零值。
+func parsePairEvent(line string) pairEvent {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "{") {
+		return pairEvent{}
+	}
+	var raw struct {
+		Event      string `json:"event"`
+		Code       string `json:"code"`
+		From       string `json:"from"`
+		Name       string `json:"name"`
+		Msg        string `json:"msg"`
+		TTLSeconds int64  `json:"ttl_seconds"`
+	}
+	if err := json.Unmarshal([]byte(line), &raw); err != nil || raw.Event == "" {
+		return pairEvent{}
+	}
+	return pairEvent{event: raw.Event, code: raw.Code, from: raw.From, name: raw.Name, msg: raw.Msg}
+}
+
+// isPairingCode 与 p2pc IsPairingCode 同判据:4-8 位纯数字。
+func isPairingCode(s string) bool {
+	if len(s) < 4 || len(s) > 8 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // peerContactLine 判定该行是否代表对端真实接入（发送/接收两侧的 PAKE 启动
@@ -427,6 +519,11 @@ func (s *Service) waitTask(t *Task, cmd *exec.Cmd) {
 	err := cmd.Wait()
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// stdin 收尾:配对裁决管道(幂等;进程已退出)
+	if t.cmdStdin != nil {
+		_ = t.cmdStdin.Close()
+		t.cmdStdin = nil
+	}
 	s.removePidFile(t.ID)
 	// 终态不覆写:取消/配额杀已写过 failed/canceled 及真因——进程退出码
 	// (signal: killed)只是结果,真因在先写入方(2026-10-14 矩阵测试发现
@@ -578,8 +675,12 @@ func (s *Service) checkGhostPairs() {
 	now := time.Now()
 	for _, t := range tasks {
 		t.mu.Lock()
+		// 配对码收件:等待期可能是「已 claim,等亮码方人工接受门」——人工裁决
+		// 可合法超过 90s,看门狗误杀会把等待中的人为裁决打断;配对 claim 循环
+		// 自带 TTL 到期退出(服务端码过期),自愈职责由 p2pc 侧承担,此处豁免。
 		hang := t.state == StateWaiting && t.Kind == "recv" &&
-			!t.waitingSince.IsZero() && now.Sub(t.waitingSince) > gt
+			!t.waitingSince.IsZero() && now.Sub(t.waitingSince) > gt &&
+			!isPairingCode(t.Code)
 		t.mu.Unlock()
 		if !hang {
 			continue

@@ -11,7 +11,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
-	github.com/pigeonbox/contracts v0.16.0
+	github.com/pigeonbox/contracts v0.17.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/common v0.70.1
 	github.com/redis/go-redis/v9 v9.18.0
@@ -29,10 +29,10 @@ require (
 require (
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/oekit/concurrency v0.14.0
-	github.com/oekit/core v0.8.0
+	github.com/oekit/concurrency v0.16.0
+	github.com/oekit/core v0.9.0
 	github.com/oekit/kitx v0.2.0
-	github.com/oekit/pkg v0.13.0
+	github.com/oekit/pkg v0.14.0
 	github.com/pkg/sftp v1.13.11
 	github.com/studio-b12/gowebdav v0.13.0
 	golang.org/x/net v0.60.0

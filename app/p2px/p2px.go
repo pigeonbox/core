@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +105,12 @@ type Task struct {
 	pid          int
 	outDir       string // recv 任务的落盘目录
 	cancel       context.CancelFunc
+	// 配对码（2026-10-18）：裁决管道(--pair-stdin 单行 y/n)+待裁决位
+	// （pair_request 事件置位，Approve 清位——防杂散 stdin 行错位后续请求）
+	cmdStdin    io.WriteCloser
+	pairPending bool
+	pairFrom    string
+	pairName    string
 }
 
 // TaskSnapshot 对外只读快照（handler 消费）。
@@ -119,6 +126,11 @@ type TaskSnapshot struct {
 	Attempts   int
 	CreatedAt  time.Time
 	FinishedAt time.Time
+	// 配对码扩展：PairPending=有待裁决敲门请求（PairFrom/PairName 为敲门方
+	// 身份，供接受门展示）；Code 在配对模式下是 4 位码（重铸即更新）。
+	PairPending bool
+	PairFrom    string
+	PairName    string
 }
 
 // Snapshot 并发安全快照。
@@ -130,7 +142,37 @@ func (t *Task) Snapshot() TaskSnapshot {
 		Paths: append([]string(nil), t.Paths...), BytesDone: t.BytesDone, BytesTotal: t.BytesTotal,
 		Error: t.err, Attempts: t.attempts,
 		CreatedAt: t.CreatedAt, FinishedAt: t.finishedAt,
+		PairPending: t.pairPending, PairFrom: t.pairFrom, PairName: t.pairName,
 	}
+}
+
+// Approve 配对接受门裁决转发：向配对子进程 stdin 写单行 y/n，返回裁决后的
+// 任务快照（拒绝即烧码重铸——快照带新配对码）。仅在 pair_request 待裁决位上
+// 转发（无位=无请求可裁，拒绝空转防 stdin 行错位）。
+func (s *Service) Approve(_ context.Context, taskID string, accept bool) (*TaskSnapshot, error) {
+	t, err := s.getTask(taskID)
+	if err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	if !t.pairPending || t.cmdStdin == nil {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("任务 %s 无待裁决的配对请求", taskID)
+	}
+	ans := "n\n"
+	if accept {
+		ans = "y\n"
+	}
+	if _, err := io.WriteString(t.cmdStdin, ans); err != nil {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("裁决写入失败: %w", err)
+	}
+	// 清位：一次裁决恰对一行请求；重铸后的新请求会重新置位
+	t.pairPending = false
+	t.pairFrom, t.pairName = "", ""
+	t.mu.Unlock()
+	snap := t.Snapshot()
+	return &snap, nil
 }
 
 // Status admin 状态面。

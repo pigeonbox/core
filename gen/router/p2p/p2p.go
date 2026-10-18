@@ -42,6 +42,7 @@ func Register(r *server.Hertz) {
 				_tasks := _p2p.Group("/tasks", _tasksMw()...)
 				{
 					_task_id := _tasks.Group("/:task_id", _task_idMw()...)
+					_task_id.POST("/approve", append(_adminp2ppairapproveMw(), p2p.AdminP2pPairApprove)...)
 					_task_id.GET("/log", append(_adminp2ptasklogMw(), p2p.AdminP2pTaskLog)...)
 				}
 			}

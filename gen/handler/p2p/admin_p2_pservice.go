@@ -55,16 +55,19 @@ func getShare() *shareService.Service {
 
 func taskToModel(t *p2px.TaskSnapshot) *p2p.P2pTask {
 	m := &p2p.P2pTask{
-		ID:         t.ID,
-		Kind:       t.Kind,
-		State:      t.State,
-		Code:       t.Code,
-		Paths:      t.Paths,
-		BytesDone:  t.BytesDone,
-		BytesTotal: t.BytesTotal,
-		Error:      t.Error,
-		Attempts:   int32(t.Attempts),
-		CreatedAt:  t.CreatedAt.Format(time.RFC3339),
+		ID:          t.ID,
+		Kind:        t.Kind,
+		State:       t.State,
+		Code:        t.Code,
+		Paths:       t.Paths,
+		BytesDone:   t.BytesDone,
+		BytesTotal:  t.BytesTotal,
+		Error:       t.Error,
+		Attempts:    int32(t.Attempts),
+		CreatedAt:   t.CreatedAt.Format(time.RFC3339),
+		PairPending: t.PairPending,
+		PairFrom:    t.PairFrom,
+		PairName:    t.PairName,
 	}
 	if !t.FinishedAt.IsZero() {
 		m.FinishedAt = t.FinishedAt.Format(time.RFC3339)
@@ -178,6 +181,10 @@ func AdminP2pSend(ctx context.Context, c *app.RequestContext) {
 	opts := []p2px.SendOption{}
 	if to := strings.TrimSpace(req.GetInviteTo()); to != "" {
 		opts = append(opts, p2px.WithInvite(to, req.GetInviteNote()))
+	}
+	if req.IsSetPair() && req.GetPair() {
+		// 配对码模式(2026-10-18):亮 4 位码,敲门请求经 /admin/p2p/tasks/:id/approve 裁决
+		opts = append(opts, p2px.WithPairing())
 	}
 	task, err := getP2px().Send(ctx, req.Paths, opts...)
 	audit(ctx, "p2p.send", strings.Join(req.Paths, ","), err)
@@ -339,6 +346,25 @@ func AdminP2pCancel(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	okData(c, map[string]any{"task_id": req.TaskID})
+}
+
+// AdminP2pPairApprove 配对接受门裁决（2026-10-18）：亮码任务的待裁决敲门
+// 请求（task.pair_pending）接受/拒绝。拒绝即烧码并自动重铸新配对码——返回
+// 快照带新码，前端刷新展示。无待裁决请求 400（防杂散 stdin 行错位后续请求）。
+// @router /admin/p2p/tasks/:task_id/approve [POST]
+func AdminP2pPairApprove(ctx context.Context, c *app.RequestContext) {
+	var req p2p.AdminP2pPairApproveReq
+	if err := c.BindAndValidate(&req); err != nil {
+		badReq(c, "请求体无效（需 accept 布尔）")
+		return
+	}
+	snap, err := getP2px().Approve(ctx, req.GetTaskID(), req.GetAccept())
+	audit(ctx, "p2p.pair_approve", req.GetTaskID()+" accept="+fmt.Sprint(req.GetAccept()), err)
+	if err != nil {
+		badReq(c, err.Error())
+		return
+	}
+	okData(c, map[string]any{"task": taskToModel(snap)})
 }
 
 // AdminP2pPublish 收件发布为分享（每文件一个分享；复用本地导入铸链）。

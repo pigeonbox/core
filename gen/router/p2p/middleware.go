@@ -125,3 +125,8 @@ func _adminp2ptasklogMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _adminp2ppairapproveMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

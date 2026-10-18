@@ -79,6 +79,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /admin/p2p/tasks/:task_id/log",
 		"POST /admin/p2p/send", "POST /admin/p2p/recv",
 		"POST /admin/p2p/cancel", "POST /admin/p2p/publish",
+		// 配对码接受门裁决（2026-10-18）
+		"POST /admin/p2p/tasks/:task_id/approve",
 		// ===== p2p 浏览器文件直发（2026-10-15:p2pcweb 体验融入管理台）=====
 		"POST /admin/p2p/send/upload",
 		// ===== p2p 推送邀请（P3，2026-10-14）=====
