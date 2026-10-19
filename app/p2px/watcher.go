@@ -15,6 +15,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+
 	"github.com/pigeonbox/core/pkg/logger"
 	"io"
 
@@ -110,9 +112,18 @@ func (s *Service) spawnWatcher(cfg conf.P2PDirectConfig, bin string) error {
 	s.watchMu.Unlock()
 	logger.Info(fmt.Sprintf("[p2px] 信箱 watcher 已启动(pid=%d registry=%s)", cmd.Process.Pid, effectiveRegistry(cfg.RegistryURL)))
 	// watcher 三协程 GoSafeLabeled:panic 走全局 zap handler 带任务标签,不静默打死进程
-	async.GoSafeLabeled("p2pc-watcher-scan", func() { s.scanInvites(stdout) })
-	async.GoSafeLabeled("p2pc-watcher-stderr", func() { s.passthroughWatcherStderr(stderr) })
-	async.GoSafeLabeled("p2pc-watcher-wait", func() { s.waitWatcher(cmd) })
+	// 管道读端必须先于 cmd.Wait() 耗尽：Wait 按约定会关闭 StdoutPipe/StderrPipe
+	// 读端，进程快速退出而扫描协程尚未读走管道缓冲时事件静默丢失——
+	// TestWatcherRestartsAfterDeath CI flaky（连续两轮邀请无日志丢失）即此根因，
+	// 长驻进程高频重启场景同样会丢邀请事件（2026-10-19 破案）。
+	var pipeWg sync.WaitGroup
+	pipeWg.Add(2)
+	async.GoSafeLabeled("p2pc-watcher-scan", func() { defer pipeWg.Done(); s.scanInvites(stdout) })
+	async.GoSafeLabeled("p2pc-watcher-stderr", func() { defer pipeWg.Done(); s.passthroughWatcherStderr(stderr) })
+	async.GoSafeLabeled("p2pc-watcher-wait", func() {
+		pipeWg.Wait() // 进程退出→管道 EOF→读端自然耗尽后再 reap
+		s.waitWatcher(cmd)
+	})
 	return nil
 }
 
