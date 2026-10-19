@@ -52,6 +52,11 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		"name":        name,
 		"description": description,
 		"uploadSize":  config.Upload.UploadSize,
+		// 站点级单文件上限（upload.max_file_size，字节，0=不限）：前端上传提示
+		// 动态化数据源——2026-10-19 事故中提示硬编码「5GB」与真实生效限制脱节。
+		// 登录用户的用户级上限随鉴权而定，不上公共端点，超限时由服务端
+		// typed error 文案给出准确值（CodeTooLarge→413）。
+		"maxFileSize": config.Upload.MaxFileSize,
 		"enableChunk": config.Upload.EnableChunk,
 		"openUpload":  config.Upload.OpenUpload,
 		// 注册开关走生效值：管理后台"用户配置"持久化段优先，
