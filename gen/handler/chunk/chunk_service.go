@@ -280,6 +280,13 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 			})
 			return
 		}
+		// typed 业务错误（如单次上传大小上限 CodeTooLarge→413）按业务码透传，
+		// 不落 500/CodeInternal——2026-10-19 事故中上限拒绝被显示成「服务器内部错误」
+		var typed interface{ ErrCode() int }
+		if errors.As(err, &typed) {
+			resp.NewTypedError(c, err)
+			return
+		}
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    errcode.CodeInternal,
 			"message": "初始化上传失败: " + err.Error(),

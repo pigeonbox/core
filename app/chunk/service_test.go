@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,4 +209,54 @@ func TestOwnedByCaller_NormalPath(t *testing.T) {
 	assert.True(t, OwnedByCaller(rec, "5.6.7.8", "", &uid))                                      // 同用户
 	assert.False(t, OwnedByCaller(rec, "5.6.7.8", "", nil))                                      // 陌生者
 	assert.True(t, OwnedByCaller(rec, "5.6.7.8", "tok", nil) == VerifySessionToken("u1", "tok")) // 令牌通道随密钥配置而定
+}
+
+// ---- 登录用户单次上传大小上限预检（2026-10-19 事故：init fail-fast，
+// 此前 450MB 分片全部传完在 multi-bind 才被隐藏上限拒绝）----
+
+type fakeUploadCap int64
+
+func (f fakeUploadCap) GetUploadSizeCap(_ context.Context, _ uint) int64 { return int64(f) }
+
+func TestInitiateUpload_UploadSizeCap(t *testing.T) {
+	uid := uint(7)
+	t.Run("超上限在 init 即拒绝（CodeTooLarge）", func(t *testing.T) {
+		svc := newTestService(t)
+		svc.SetUploadSizeCap(fakeUploadCap(100))
+		_, err := svc.InitiateUpload(context.Background(), &InitiateUploadReq{
+			UploadID: "cap-001", FileName: "big.zip", TotalChunks: 3,
+			FileSize: 200, ChunkSize: 10, UserID: &uid,
+		})
+		require.Error(t, err)
+		var coder interface{ ErrCode() int }
+		require.ErrorAs(t, err, &coder)
+		assert.Equal(t, errcode.CodeTooLarge, coder.ErrCode())
+	})
+	t.Run("未超上限正常创建会话", func(t *testing.T) {
+		svc := newTestService(t)
+		svc.SetUploadSizeCap(fakeUploadCap(100))
+		resp, err := svc.InitiateUpload(context.Background(), &InitiateUploadReq{
+			UploadID: "cap-002", FileName: "big.zip", TotalChunks: 1,
+			FileSize: 50, ChunkSize: 50, UserID: &uid,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "cap-002", resp.UploadID)
+	})
+	t.Run("匿名或未注入上限时不拦截", func(t *testing.T) {
+		// 匿名（UserID nil）：上限再小也不拦（匿名走日配额另一闸口）
+		svc := newTestService(t)
+		svc.SetUploadSizeCap(fakeUploadCap(1))
+		_, err := svc.InitiateUpload(context.Background(), &InitiateUploadReq{
+			UploadID: "cap-003", FileName: "big.zip", TotalChunks: 1,
+			FileSize: 50, ChunkSize: 50,
+		})
+		require.NoError(t, err)
+		// provider 未注入：登录用户也不拦（预检关闭的降级语义）
+		svc2 := newTestService(t)
+		_, err = svc2.InitiateUpload(context.Background(), &InitiateUploadReq{
+			UploadID: "cap-004", FileName: "big.zip", TotalChunks: 1,
+			FileSize: 50, ChunkSize: 50, UserID: &uid,
+		})
+		assert.NoError(t, err)
+	})
 }

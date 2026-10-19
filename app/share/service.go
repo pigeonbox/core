@@ -478,8 +478,10 @@ func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize i
 	}
 	if userID != nil && s.userService != nil {
 		if capSize := s.userService.GetUploadSizeCap(ctx, *userID); capSize > 0 {
-			if err := utils.CheckUploadSize(totalSize, capSize); err != nil {
-				return fmt.Errorf("上传总大小超过限制（上限 %d 字节）", capSize)
+			// typed error（CodeTooLarge→413）：此前为普通 error，NewTypedError
+			// 兜底 CodeInternal，前端显示「服务器内部错误」掩盖超限真相（2026-10-19 事故）。
+			if err := gate.CheckUploadSizeCap(userID, totalSize, capSize); err != nil {
+				return err
 			}
 		}
 	}
@@ -488,6 +490,15 @@ func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize i
 		return err
 	}
 	return nil
+}
+
+// CheckUploadSizeCap 登录用户单次上传总大小预检（多文件绑定按申报大小 fail-fast，
+// 与匿名配额预检对称，先于合并落盘；匿名用户返回 nil——其约束走匿名日配额）。
+func (s *Service) CheckUploadSizeCap(ctx context.Context, userID uint, totalSize int64) error {
+	if s.userService == nil {
+		return nil
+	}
+	return gate.CheckUploadSizeCap(&userID, totalSize, s.userService.GetUploadSizeCap(ctx, userID))
 }
 
 // GlobalQuotaExceededError 站点级存储配额超限（handler 侧按业务码透传 CodeStorageQuota）。

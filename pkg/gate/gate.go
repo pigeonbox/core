@@ -100,6 +100,25 @@ func CheckUploadLogin(userID *uint) error {
 	return nil
 }
 
+// ErrUploadSizeCap 单用户单次上传总大小超过上限（用户级 max_upload_size 优先，
+// 回退系统默认 user.user_upload_size；匿名用户不受此限，走匿名日配额）。
+// 必须携带 CodeTooLarge 业务码：2026-10-19 事故中 share 域以普通 error 返回，
+// NewTypedError 兜底 CodeInternal，前端显示「服务器内部错误」掩盖真实原因，
+// 用户在 450MB×2 整轮分片传输全部白费后才见到报错。
+func ErrUploadSizeCap(capBytes int64) error {
+	return newGateErr(errcode.CodeTooLarge, "上传总大小超过限制（上限 %d 字节）", capBytes)
+}
+
+// CheckUploadSizeCap 登录用户单次上传总大小预检（capSize<=0 = 不限；userID nil 跳过）。
+// 分片 init / 多文件绑定按申报大小提前调用，把超限拦截在传输与合并落盘之前。
+func CheckUploadSizeCap(userID *uint, totalSize, capSize int64) error {
+	if userID == nil || capSize <= 0 || totalSize <= capSize {
+		return nil
+	}
+	metrics.RecordRejected(metrics.RejectSize)
+	return ErrUploadSizeCap(capSize)
+}
+
 // CheckDownloadLogin 取件/下载登录要求（download.require_login）。
 func CheckDownloadLogin(userID *uint) error {
 	if userID == nil && downloadRequireLogin() {

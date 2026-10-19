@@ -338,6 +338,11 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 			resp.NewTypedError(c, err)
 			return
 		}
+	} else if err := shareSvc.CheckUploadSizeCap(ctx, *gateUserID, declared); err != nil {
+		// 登录用户申报大小预检（与匿名配额预检对称）：此前超限要等
+		// CreateMultiFileShare 内部才暴露，分片合并已白做（2026-10-19 事故）。
+		resp.NewTypedError(c, err)
+		return
 	}
 
 	for _, e := range body.Entries {

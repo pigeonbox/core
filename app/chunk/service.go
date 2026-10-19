@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -90,7 +91,19 @@ type Service struct {
 	storage         storage.StorageInterface
 	fallbackOnce    sync.Once
 	fallbackStorage storage.StorageInterface
+
+	// 登录用户单次上传大小上限查询（bootstrap 注入 user 域；nil = 跳过预检）
+	uploadCap UploadSizeCapProvider
 }
+
+// UploadSizeCapProvider 登录用户单次上传大小上限（字节，0 = 不限）。
+// user.Service 以同签名满足本接口，不产生 chunk→user 域依赖。
+type UploadSizeCapProvider interface {
+	GetUploadSizeCap(ctx context.Context, userID uint) int64
+}
+
+// SetUploadSizeCap 注入上限查询方（bootstrap 接线）。
+func (s *Service) SetUploadSizeCap(p UploadSizeCapProvider) { s.uploadCap = p }
 
 func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
@@ -109,6 +122,16 @@ func (s *Service) InitiateUpload(ctx context.Context, req *InitiateUploadReq) (*
 	}
 	if !utils.IsAllowedExtension(req.FileName) {
 		return nil, fmt.Errorf("该文件类型禁止上传")
+	}
+
+	// 登录用户单次上传大小上限预检（fail-fast 于分片传输之前；2026-10-19 事故：
+	// 450MB 分片全部传完在 multi-bind 才被隐藏的 50MB 上限拒绝，白费整轮传输）。
+	// 匿名用户不受此限（走匿名日配额，bind/complete 侧把关）。
+	if req.UserID != nil && s.uploadCap != nil && req.FileSize > 0 {
+		capSize := s.uploadCap.GetUploadSizeCap(ctx, *req.UserID)
+		if err := gate.CheckUploadSizeCap(req.UserID, req.FileSize, capSize); err != nil {
+			return nil, err
+		}
 	}
 
 	// 幂等语义：同 uploadID 重复 init（同哈希重传 / 断点重连）返回既有进度，

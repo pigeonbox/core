@@ -302,6 +302,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	// preview：业务流已下沉 app/preview，存储随 service 注入。
 	chunkSvc := chunkApp.NewService(database)
 	chunkSvc.SetStorage(bootstrapStorage)
+	chunkSvc.SetUploadSizeCap(userSvc) // 登录用户单次上传上限预检（chunk init fail-fast，2026-10-19 事故）
 	chunkHandler.SetChunkService(chunkSvc)
 	previewSvcInstance := previewApp.NewService(database, bootstrapStorage)
 	previewHandler.SetService(previewSvcInstance)
