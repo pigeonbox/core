@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/pkg/pathx"
+
 	"github.com/pigeonbox/core/conf"
 )
 
@@ -49,14 +51,20 @@ func resolveLocalPath(rootIdx int, relPath string) (string, error) {
 	if relPath == "" || relPath == "." {
 		return rootReal, nil
 	}
-	if filepath.IsAbs(relPath) || strings.Contains(filepath.ToSlash(relPath), "..") {
+	// 相对路径收口用 oekit/pkg/pathx 的严格档：统一把 "\" 当分隔符（Windows 风格
+	// 载荷在 Linux 上按平台解释会漏判——而 Linux 才是服务端主环境），并拒绝绝对
+	// 路径/UNC/盘符/显式 ".." 段。此前是「路径里含 '..' 就算非法」的字符串判定：
+	// 连带误杀合法名（含 ".." 的普通文件名），且对 "C:\..." 这类形态没有结论。
+	cleanRel, ok := pathx.SanitizeRelStrict(relPath)
+	if !ok {
 		return "", errors.New("非法路径")
 	}
-	abs := filepath.Join(rootReal, filepath.Clean(relPath))
+	abs := filepath.Join(rootReal, filepath.FromSlash(cleanRel))
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return "", fmt.Errorf("路径不可访问: %w", err)
 	}
+	// 符号链接解析后的真实路径仍须落在根内（pathx 只看文本，不解析符号链接）
 	if real != rootReal && !strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
 		return "", errors.New("路径越界")
 	}

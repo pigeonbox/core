@@ -54,6 +54,25 @@ func TestLocalFilesConfinement(t *testing.T) {
 	// 符号链接逃逸：link/secret.txt 落点在 root 外，必须拒绝
 	require.Error(t, svc.DeleteLocalFile(0, "link/secret.txt"))
 
+	// Windows 形态载荷：pathx 严格档统一按分隔符判定（"\"" 亦为分隔符），
+	// 且拒绝盘符/UNC 绝对形态——这些在 Linux 上按平台解释会漏判
+	for _, bad := range []string{
+		`..\..\etc\passwd`,     // 反斜杠形态的 ..
+		`sub\..\..\x`,          // 反斜杠形态的越界
+		`C:\Windows\win.ini`,   // 盘符绝对路径
+		`\\host\share\secret`,  // UNC
+		`sub/../b.txt`,         // 显式 ".." 段（严格档直接拒，不做抵消推断）
+	} {
+		_, err = svc.ListLocalFiles(0, bad)
+		require.Error(t, err, "应拒绝: %s", bad)
+	}
+
+	// 合法文件名里含 ".." 不再被误杀（此前是「含 '..' 即非法」的字符串判定）
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a..b.txt"), []byte("ok"), 0o644))
+	entries, err = svc.ListLocalFiles(0, "")
+	require.NoError(t, err)
+	require.Len(t, entries, 4) // a.txt + a..b.txt + sub/ + link/
+
 	// 正常删除：仅普通文件
 	require.NoError(t, svc.DeleteLocalFile(0, "a.txt"))
 	_, err = os.Stat(filepath.Join(root, "a.txt"))

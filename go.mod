@@ -29,10 +29,10 @@ require (
 require (
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/oekit/concurrency v0.16.0
-	github.com/oekit/core v0.9.0
-	github.com/oekit/kitx v0.2.0
-	github.com/oekit/pkg v0.14.0
+	github.com/oekit/concurrency v0.19.0
+	github.com/oekit/core v0.11.0
+	github.com/oekit/kitx v0.3.0
+	github.com/oekit/pkg v0.20.0
 	github.com/pkg/sftp v1.13.11
 	github.com/studio-b12/gowebdav v0.13.0
 	golang.org/x/net v0.60.0

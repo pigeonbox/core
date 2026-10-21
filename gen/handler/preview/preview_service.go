@@ -53,7 +53,9 @@ func GetPreview(ctx context.Context, c *app.RequestContext) {
 		Code:     code,
 		UserID:   userID,
 		ClientIP: middleware.ClientIP(c),
-		Password: c.Query("password"),
+		// 取件密码经请求头取（同批随 core v0.24.0 收敛，与 /share/select 同口径）：
+		// query 形态有访问日志/浏览器历史/Referer 泄漏面。
+		Password: string(c.GetHeader("X-Share-Password")),
 	})
 	if err != nil {
 		var locked *previewapp.LockedError
