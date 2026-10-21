@@ -35,8 +35,8 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/pkg/middleware"
 	"go.uber.org/zap"
 )
 

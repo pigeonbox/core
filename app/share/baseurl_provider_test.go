@@ -20,10 +20,10 @@ func TestResolveBaseURL(t *testing.T) {
 	ctx := context.Background()
 
 	cases := []struct {
-		name         string
-		baseURL      string
-		provider     func(context.Context) string
-		want         string
+		name     string
+		baseURL  string
+		provider func(context.Context) string
+		want     string
 	}{
 		{
 			name:    "无 provider 时用构造期值",

@@ -69,10 +69,15 @@ type Entry struct {
 
 // Record 异步记录一次传输（GoSafe 兜底 panic，不影响主流程）。
 func Record(e Entry) {
+	// sink **同步捕获**：不在 goroutine 里读全局。
+	// 读全局的后果：goroutine 真正执行时全局可能已被换掉（配置热重建换 sink，
+	// 或测试里另一个用例换了 sink）→ 这条日志会被写进**别的** sink/库，
+	// 表现为 "no such table: xxx" 与 TempDir 清理竞争（2026-07-22 实测）。
+	// 语义上也更对：这条记录属于「记录发生的那一刻」的 sink。
+	s := sink
 	inFlight.Add(1)
 	async.GoSafe(func() {
 		defer inFlight.Done()
-		s := sink
 		if s == nil {
 			return
 		}

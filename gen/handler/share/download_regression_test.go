@@ -50,16 +50,37 @@ func newDownloadTestEnv(t *testing.T) *gorm.DB {
 
 	g, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "test.db")), &gorm.Config{})
 	require.NoError(t, err)
+	// 关连接必须**先于** TempDir 被 RemoveAll 执行 —— t.Cleanup 是 LIFO：
+	// t.TempDir() 的清理最先注册（故最后执行），这里后注册的清理先跑。
+	// sqlite 的 -wal/-shm 副文件在连接未关时仍存在（或被重新写回），
+	// 直接删目录会报 "directory not empty" —— 实测约 1/12 偶发（2026-07-22）。
+	// 假红比没有这条断言更坏（团队会开始绕它），故必须收口。
+	if sqlDB, dbErr := g.DB(); dbErr == nil {
+		t.Cleanup(func() { _ = sqlDB.Close() })
+	}
 	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.TransferLog{}))
 	transfer.SetSink(daoTransferLogSink{gormDB: g})
-	// 先排水再撤 sink/删 TempDir：Record 异步落盘持有 DB 句柄，直删目录会竞争
-	// （历史摇摆：readonly database / TempDir RemoveAll directory not empty）
-	t.Cleanup(func() { transfer.Flush(3 * time.Second); transfer.SetSink(nil) })
 
 	dataPath := t.TempDir()
 	fullPath := filepath.Join(dataPath, regRelPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0o755))
 	require.NoError(t, os.WriteFile(fullPath, []byte(regBody), 0o644))
+
+	// 先排水再撤 sink/删 TempDir：Record 异步落盘持有 DB 句柄，直删目录会竞争
+	// （历史摇摆：readonly database / TempDir RemoveAll directory not empty）。
+	//
+	// ⚠️ 注册顺序决定执行顺序（t.Cleanup 是 LIFO：先注册的最后跑）：
+	// 这条「排水」清理**必须注册在两个 t.TempDir() 之后**，否则它会晚于
+	// TempDir 的 RemoveAll 执行 —— 异步写入还在跑就把目录删了，于是
+	// "directory not empty"（实测约 1/12 偶发，2026-07-22）。
+	// 期望的执行序：排水 → 删数据目录 → 关 DB 连接 → 删 DB 目录。
+	//
+	// 已知残余（2026-07-22 复核）：高并发下（-count≥40）仍有约 1/40 的
+	// 偶发，残留报 "no such table: file_code_files" —— 来自 **admin 域的
+	// 后台 janitor**（app/admin/janitor.go，其 CleanupStaleUploads 会动
+	// 存储目录），其生命周期未与本测试绑定。CI 跑 -count=1，命中概率极低；
+	// 要彻底收口需给 janitor 补可停止的 ctx 并在本包用例里停掉它。
+	t.Cleanup(func() { transfer.Flush(3 * time.Second); transfer.SetSink(nil) })
 
 	// 同包直接注入 handler 懒加载单例；关闭下载令牌（conf 零值 Enabled=false）
 	conf.SetGlobalConfig(&conf.AppConfiguration{})
