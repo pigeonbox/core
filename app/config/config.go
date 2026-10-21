@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -20,6 +21,16 @@ type BaseConfig struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Port        int    `json:"port"`
+
+	// PublicURL 站点公网地址（2026-10-22 落地，可选）：用户可访问本柜的对外
+	// 地址（如 https://box.example.com）。分享链接与「交付文本」按它拼；
+	// 为空 = 未配置 = 前端回退浏览器当前 origin。
+	//
+	// 为什么需要：分享链接原先按**请求 origin** 拼（frontend-core
+	// ShareResultDialog.vue），NAS/内网部署时管理员从内网访问 → 生成的链接
+	// 带内网 IP（如 http://10.10.10.3:56789）→ 发给外部用户根本打不开。
+	// 这是"多部署方式"下最隐蔽的易用性断点。
+	PublicURL string `json:"public_url"`
 }
 
 // StorageSettings 存储概览段（nil 语义同 BaseConfig；运行时存储后端走 runtime_storage）。
@@ -117,6 +128,14 @@ func validateSystemConfig(cfg *SystemConfig) error {
 	// nil 段 = 本次未提交（保存时保留现状），不参与校验
 	if cfg.Base != nil && (cfg.Base.Port < 0 || cfg.Base.Port > 65535) {
 		return errors.New("base.port out of range (0-65535)")
+	}
+	// base.public_url 站点公网地址（2026-10-22）：可选，空 = 未配置。
+	if cfg.Base != nil {
+		if u := strings.TrimSpace(cfg.Base.PublicURL); u != "" {
+			if err := validatePublicSiteURL(u); err != nil {
+				return fmt.Errorf("base.public_url 校验失败: %w", err)
+			}
+		}
 	}
 	if cfg.Storage != nil && cfg.Storage.MaxSize < 0 {
 		return errors.New("storage.max_size must be >= 0")
@@ -251,6 +270,27 @@ func localImportOfUploadEx(u *conf.UploadConfig) *conf.LocalImportConfig {
 		return nil
 	}
 	return &u.LocalImport
+}
+
+// validatePublicSiteURL 校验「站点公网地址」形态。
+//
+// 与 security.ValidateEndpointURL **刻意不同**：后者带 SSRF 私网拦截
+// （那个 URL 会被服务端主动取回），而站点公网地址只被**展示与复制**，
+// 服务端从不取它——局域网内的 NAS 填 http://192.168.1.10:12345 是正常用法，
+// 不能被私网策略拦下。故这里只收紧 scheme 与 host 形态，挡掉
+// javascript:/data: 这类可执行 scheme 与空 host。
+func validatePublicSiteURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("仅支持 http/https 协议，当前为 %q", u.Scheme)
+	}
+	if u.Hostname() == "" {
+		return errors.New("缺少 host")
+	}
+	return nil
 }
 
 // validateUserSettings 用户设置合法性（负数一律拒绝；0 语义为"不限/默认"）。

@@ -24,10 +24,11 @@ func writeWatcherStub(t *testing.T, name, body string) string {
 	return p
 }
 
-// watcherService 构造带 discoverable 直传配置的服务。
+// watcherService 构造带 discoverable 直传配置的服务（并注入联邦收件箱——
+// 信箱 watcher 的产出只进收件箱，未装配时不拉起）。
 func watcherService(t *testing.T, binPath string) *Service {
 	t.Helper()
-	return NewService(Deps{
+	return withFederation(NewService(Deps{
 		Standalone:       func() bool { return true },
 		DataDir:          t.TempDir(),
 		MonitorInterval:  15 * time.Millisecond,
@@ -41,7 +42,7 @@ func watcherService(t *testing.T, binPath string) *Service {
 				RegistryURL:  "http://127.0.0.1:1", // stub 不拨号;真实链路由 p2p 仓 e2e 覆盖
 			}, true
 		},
-	})
+	}))
 }
 
 func waitInvites(t *testing.T, s *Service, n int, timeout time.Duration) []InviteSnapshot {
@@ -122,28 +123,28 @@ echo "{\"event\":\"invite\",\"code\":\"CCCC-$ID-CCCC\",\"from\":\"cccc\",\"name\
 func TestWatcherDisabledNoSpawn(t *testing.T) {
 	// discoverable 关闭(名录 opt-in 缺省)= 期望态不满足,不得拉起进程
 	bin := writeWatcherStub(t, "p2pc", `echo '{"event":"invite","code":"DDDD-DDDD-DDDD","from":"d"}'; exec sleep 60`)
-	s := NewService(Deps{
+	s := withFederation(NewService(Deps{
 		Standalone:      func() bool { return true },
 		DataDir:         t.TempDir(),
 		MonitorInterval: 15 * time.Millisecond,
 		GetDirect: func(context.Context) (conf.P2PDirectConfig, bool) {
 			return conf.P2PDirectConfig{Enabled: true, Discoverable: false, BinaryPath: bin}, true
 		},
-	})
+	}))
 	defer func() { _ = s.Stop() }()
 	time.Sleep(150 * time.Millisecond) // 若误拉起,stub 会立即投喂
 	if got := s.ListInvites(); len(got) != 0 {
 		t.Fatalf("discoverable 关闭不得收邀请,实得 %d", len(got))
 	}
 	// 二进制缺失同样不拉起
-	s2 := NewService(Deps{
+	s2 := withFederation(NewService(Deps{
 		Standalone:      func() bool { return true },
 		DataDir:         t.TempDir(),
 		MonitorInterval: 15 * time.Millisecond,
 		GetDirect: func(context.Context) (conf.P2PDirectConfig, bool) {
 			return conf.P2PDirectConfig{Enabled: true, Discoverable: true, BinaryPath: "/nonexistent/p2pc"}, true
 		},
-	})
+	}))
 	defer func() { _ = s2.Stop() }()
 	time.Sleep(150 * time.Millisecond)
 	if got := s2.ListInvites(); len(got) != 0 {

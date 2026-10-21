@@ -30,15 +30,15 @@ func ValidShareStatus(s string) bool {
 // FileCode 文件代码模型
 type FileCode struct {
 	gorm.Model
-	Code         string     `gorm:"uniqueIndex;size:255" json:"code"`
-	Prefix       string     `gorm:"size:255" json:"prefix"`
-	Suffix       string     `gorm:"size:255" json:"suffix"`
-	UUIDFileName string     `gorm:"size:255" json:"uuid_file_name"`
-	FilePath     string     `gorm:"size:255" json:"file_path"`
-	Size         int64      `gorm:"default:0" json:"size"`
-	Text         string     `gorm:"type:text" json:"text"`
+	Code         string `gorm:"uniqueIndex;size:255" json:"code"`
+	Prefix       string `gorm:"size:255" json:"prefix"`
+	Suffix       string `gorm:"size:255" json:"suffix"`
+	UUIDFileName string `gorm:"size:255" json:"uuid_file_name"`
+	FilePath     string `gorm:"size:255" json:"file_path"`
+	Size         int64  `gorm:"default:0" json:"size"`
+	Text         string `gorm:"type:text" json:"text"`
 	// Note 文件备注（可空）：随分享展示给取件人（2026-10-12，文件+文本一并投递）
-	Note string `gorm:"type:text" json:"note"`
+	Note         string     `gorm:"type:text" json:"note"`
 	ExpiredAt    *time.Time `gorm:"index:idx_file_codes_status_expired,priority:2" json:"expired_at"`
 	ExpiredCount int        `gorm:"default:0" json:"expired_count"` // 剩余可取次数：-1=无限, 0=已耗尽, >0=剩余
 	UsedCount    int        `gorm:"default:0" json:"used_count"`

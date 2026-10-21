@@ -12,6 +12,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/oekit/concurrency/async"
 	"github.com/oekit/core/lifecycle"
 	"github.com/pigeonbox/contracts/openapi"
 	"github.com/pigeonbox/core/conf"
@@ -26,7 +27,6 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/redis"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
-	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -266,6 +266,11 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 		h.Use(gate)
 	}
 
+	// 首启门禁（2026-10-22）：建号端点 /setup 的可选令牌 + 按 IP 失败锁定。
+	// 默认不要求令牌（保持「打开浏览器走完首启」的零摩擦体验）；设
+	// PB_SETUP_TOKEN 后才强制校验。详见 bootstrap/setup_gate.go 的问题陈述。
+	h.Use(setupGate())
+
 	// 限流：路径感知，按接口类型选择限流维度（登录/上传/下载）。
 	// 防止暴力破解登录、取件码枚举、上传下载 DoS。
 	// 路径 → 桶的映射抽为 rateLimitBucket 纯函数（有守卫测试对真实路由表
@@ -343,6 +348,10 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 	if config.IsPublicReplica() {
 		startConfigPropagationSubscriber()
 	}
+
+	// 首启暴露面告警（2026-10-22）：未初始化且未设令牌时响亮提示——此刻
+	// 任何能访问到本实例的人都可以抢先建号。详见 bootstrap/setup_gate.go。
+	warnSetupExposure(context.Background())
 
 	logger.Info("Application bootstrap completed successfully")
 	return h, nil

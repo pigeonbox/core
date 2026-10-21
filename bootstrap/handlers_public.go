@@ -37,6 +37,12 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 	// 无记录回退 yaml app 段（修复首页展示 yaml 旧品牌名的分裂）
 	name, description := config.App.Name, config.App.Description
 	effectiveDownload := config.Download
+	// 站点公网地址（2026-10-22）：管理后台 base.public_url 优先，缺省回退
+	// env/yaml 的 server.base_url；都没有 = 未配置（前端回退浏览器当前 origin）。
+	// 与 share/presign 域的 baseURL provider 同源（bootstrap/wiring.go 的
+	// publicBaseURL）——前端拿到的地址与服务端拼链接用的地址必须是同一个，
+	// 否则用户看到的链接与自己发的链接对不上。
+	publicURL := strings.TrimSpace(config.Server.BaseURL)
 	if cfg, err := configApp.Default().GetConfig(ctx); err == nil && cfg != nil {
 		if cfg.Base.Name != "" {
 			name = cfg.Base.Name
@@ -47,11 +53,21 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		if cfg.Download != nil {
 			effectiveDownload = *cfg.Download
 		}
+		if u := strings.TrimSpace(cfg.Base.PublicURL); u != "" {
+			publicURL = u
+		}
 	}
 	resp.Success(c, map[string]interface{}{
 		"name":        name,
 		"description": description,
-		"uploadSize":  config.Upload.UploadSize,
+		// 站点公网地址（2026-10-22）：供前端拼分享链接与交付文本。
+		// 空串 = 未配置 → 前端回退 location.origin。
+		"publicUrl": publicURL,
+		// 联邦是否启用（2026-10-22）：前端据此决定取件台要不要显式给出
+		// 「跨站取件」提示。生效值 = overlay 后的全局 conf（多副本模式下
+		// 联邦被强制降级关闭，见 bootstrap/deployment.go 的降级分支）。
+		"federationEnabled": config.Federation.Enabled,
+		"uploadSize":        config.Upload.UploadSize,
 		// 站点级单文件上限（upload.max_file_size，字节，0=不限）：前端上传提示
 		// 动态化数据源——2026-10-19 事故中提示硬编码「5GB」与真实生效限制脱节。
 		// 登录用户的用户级上限随鉴权而定，不上公共端点，超限时由服务端

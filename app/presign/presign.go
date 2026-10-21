@@ -60,6 +60,10 @@ type Service struct {
 	defaultExpire time.Duration
 	signingKey    []byte
 	baseURL       string
+	// baseURLProvider 对外 base 地址的动态来源（2026-10-22 站点公网地址）。
+	// 直传的 upload-direct 回跳地址也走它——与管理后台填的公网地址同源，
+	// 否则直传链接会带内网地址，外部浏览器打不开。
+	baseURLProvider func(context.Context) string
 	// shareService 注入的 share service（Complete 时调用写分享表）
 	shareService ShareServiceInterface
 	// pickupBinder 匿名取件码占位绑定（bootstrap 注入 anonymous service；nil = 绑定通道不可用）
@@ -174,6 +178,22 @@ func NewService(gormDB *gorm.DB, rdb *redis.Client, baseURL string, signingKey s
 }
 
 // SetShareService 注入 share service（用于 Complete 时写分享表）
+// SetBaseURLProvider 注入对外 base 地址的动态来源（2026-10-22 站点公网地址）。
+// 与 share 域同源：管理后台「站点公网地址」一处改，链接与直传回跳地址同时生效。
+func (s *Service) SetBaseURLProvider(fn func(context.Context) string) {
+	s.baseURLProvider = fn
+}
+
+// resolveBaseURL 取本次请求该用的对外 base（provider 优先，其次构造期值）。
+func (s *Service) resolveBaseURL(ctx context.Context) string {
+	if s.baseURLProvider != nil {
+		if v := strings.TrimSpace(s.baseURLProvider(ctx)); v != "" {
+			return v
+		}
+	}
+	return s.baseURL
+}
+
 func (s *Service) SetShareService(svc ShareServiceInterface) {
 	s.shareService = svc
 }
@@ -276,7 +296,7 @@ func (s *Service) Init(ctx context.Context, meta InitMeta) (*InitResult, error) 
 	//    - 否则回退自家中转 URL（X-Upload-Token）
 	//    模式由服务端判定并无条件覆写（客户端传入的 scheme 不可信）
 	token := s.signToken(uploadID, meta.ObjectKey, meta.ExpireAt)
-	uploadURL := fmt.Sprintf("%s/api/v1/presign/upload-direct/%s", baseurl.Resolve(ctx, s.baseURL), uploadID)
+	uploadURL := fmt.Sprintf("%s/api/v1/presign/upload-direct/%s", baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), uploadID)
 	headers := map[string]string{"X-Upload-Token": token}
 	meta.Scheme = SchemeSelf
 	if s.objects != nil {
@@ -460,7 +480,7 @@ func (s *Service) createShareRecord(ctx context.Context, meta *InitMeta, ownerIP
 	}
 	if s.shareService == nil {
 		// share service 未注入：返回 mock 数据（用于单测 / 未配置场景）
-		return "mock_" + meta.UploadID, "/share/mock", baseurl.Resolve(ctx, s.baseURL) + "/share/mock", "", nil
+		return "mock_" + meta.UploadID, "/share/mock", baseurl.Resolve(ctx, s.resolveBaseURL(ctx)) + "/share/mock", "", nil
 	}
 
 	// 计算过期时间（与 share.ShareTextWithAuth 行为一致）

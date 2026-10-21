@@ -2,15 +2,25 @@ package p2px
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pigeonbox/core/app/federation"
 	"github.com/pigeonbox/core/conf"
 )
+
+// withFederation 注入联邦信封实例（联邦域实例由装配层构造后注入；直传包不
+// 构造——见 SetInviteMailbox/SetPeerDirectory）。测试显式注入以覆盖真实装配形态。
+func withFederation(s *Service) *Service {
+	s.SetInviteMailbox(federation.NewInviteMailbox(nil))
+	s.SetPeerDirectory(federation.NewPeerDirectory(func(context.Context) (string, bool) {
+		return "", false
+	}))
+	return s
+}
 
 // stub p2pc:send 打口令行后阻塞;recv 把 hello 落到 --out 目录后退出。
 // quota-stub: recv 写一个超限文件。
@@ -264,15 +274,18 @@ func TestInboxTTLSweep(t *testing.T) {
 	}
 }
 
-// ---- P3 邀请收发件箱 ----
+// ---- P3 邀请收发件箱（联邦信封管理；2026-10-22 实现搬至 app/federation）----
 
-// TestInviteInbox 收件箱:格式校验/去重/满箱/过期/认领出箱。
-func TestInviteInbox(t *testing.T) {
+// TestInviteDelegation 联邦信封委托面:增/列/取三步落到联邦收件箱。
+//
+// 实现搬走后本包只做委托（生成物与端点行为不变）；收件箱的完整语义断言
+// （去重/满箱/过期）随实现一并迁至 app/federation 的 TestMailboxInbox。
+func TestInviteDelegation(t *testing.T) {
 	bin := writeStub(t, "ok")
-	svc := NewService(testDeps(t, bin))
+	svc := withFederation(NewService(testDeps(t, bin)))
 	defer func() { _ = svc.Stop() }()
 
-	// 格式校验
+	// 格式校验（委托后仍拒）
 	if _, err := svc.AddInvite("bad-code", "a", ""); err == nil {
 		t.Fatal("坏口令应拒")
 	}
@@ -287,7 +300,10 @@ func TestInviteInbox(t *testing.T) {
 	if strings.ContainsAny(inv.Note, "\n\x01") {
 		t.Fatalf("note 未消毒: %q", inv.Note)
 	}
-	// 同码去重
+	// 委托目标即联邦收件箱
+	if got := svc.inviteMailbox().ListInvites(); len(got) != 1 || got[0].ID != inv.ID {
+		t.Fatalf("未委托到联邦收件箱: %+v", got)
+	}
 	if n := len(svc.ListInvites()); n != 1 {
 		t.Fatalf("去重失败: %d", n)
 	}
@@ -298,22 +314,6 @@ func TestInviteInbox(t *testing.T) {
 	}
 	if _, err := svc.TakeInvite(inv.ID); err == nil {
 		t.Fatal("重复认领应拒")
-	}
-	// 满箱
-	for i := 0; i < 20; i++ {
-		code := fmt.Sprintf("%04X-%04X-%04X", i, i, i)
-		if _, err := svc.AddInvite(code, "", ""); err != nil {
-			t.Fatalf("第%d 个入箱失败: %v", i, err)
-		}
-	}
-	if _, err := svc.AddInvite("FFFF-FFFF-FFFF", "", ""); err == nil {
-		t.Fatal("满箱应拒")
-	}
-	// 过期清扫(nowFn 注入拨快)
-	base := time.Now()
-	svc.nowFn = func() time.Time { return base.Add(11 * time.Minute) }
-	if n := len(svc.ListInvites()); n != 0 {
-		t.Fatalf("超 TTL 应清空: %d", n)
 	}
 }
 

@@ -6,9 +6,9 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/oekit/core/version"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/storage"
-	"github.com/oekit/core/version"
 )
 
 // SystemInfo 系统信息

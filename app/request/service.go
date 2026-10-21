@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
-	"github.com/oekit/kitx/uidgen"
 	"gorm.io/gorm"
 )
 

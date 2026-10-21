@@ -17,6 +17,8 @@ import (
 	"github.com/oekit/concurrency/async"
 
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/paircode"
+	"github.com/pigeonbox/core/pkg/registry"
 )
 
 // SendOption 发送任务可选参数。
@@ -151,7 +153,7 @@ func (s *Service) Recv(ctx context.Context, code string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	code = normalizeCode(code)
+	code = paircode.Normalize(code)
 	if code == "" {
 		return nil, fmt.Errorf("口令不能为空")
 	}
@@ -170,23 +172,9 @@ func (s *Service) Recv(ctx context.Context, code string) (*Task, error) {
 	return s.spawnPrepared(t, bin, args, outDir, "PB_P2P_CODE="+code)
 }
 
-// normalizeCode 口令归一：去空格/连字符、大写（与 p2pc 接受形态对齐后重新分组）。
-func normalizeCode(code string) string {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	code = strings.ReplaceAll(code, "-", "")
-	if code == "" {
-		return ""
-	}
-	// 4-4-4 分组回连字符（p2pc 接受裸串，规整后展示/日志一致）
-	if len(code) == 12 {
-		return code[:4] + "-" + code[4:8] + "-" + code[8:]
-	}
-	return code
-}
-
 // registryArgs registry/relay/node-key 参数拼装。
 func (s *Service) registryArgs(cfg conf.P2PDirectConfig) []string {
-	args := []string{"--registry", effectiveRegistry(cfg.RegistryURL)}
+	args := []string{"--registry", registry.Effective(cfg.RegistryURL)}
 	if strings.TrimSpace(cfg.RelayAddr) != "" {
 		args = append(args, "--relay", strings.TrimSpace(cfg.RelayAddr))
 	}

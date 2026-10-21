@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/oekit/concurrency/async"
@@ -17,7 +18,7 @@ import (
 	anonymousApp "github.com/pigeonbox/core/app/anonymous"
 	chunkApp "github.com/pigeonbox/core/app/chunk"
 	configApp "github.com/pigeonbox/core/app/config"
-	federationApp "github.com/pigeonbox/core/app/federation"
+	"github.com/pigeonbox/core/app/federation"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
 	moderationApp "github.com/pigeonbox/core/app/moderation"
 	notifyAppService "github.com/pigeonbox/core/app/notify"
@@ -84,14 +85,33 @@ func initThriftIDLServices(database *gorm.DB) {
 	// 禁止回退到 host:port 拼接——server.host 是监听地址（0.0.0.0），
 	// 拼进分享链接对外不可达（2026-10-07 真机事故：分享成功弹窗 0.0.0.0 链接）。
 	baseURL := config.Server.BaseURL
+	// 站点公网地址（2026-10-22）——对外 base 的**动态**来源。
+	// 优先级：管理后台 SystemConfig.base.public_url（UI 可改，改完立即生效）
+	//         > env/yaml 的 server.base_url（PB_SERVER_BASE_URL）
+	//         > 空（baseurl.Resolve 按请求来源推断：Host + X-Forwarded-Proto）。
+	// 为什么要有 provider 而不是构造期传死值：server.base_url 只能在 yaml/env
+	// 里改，而 NAS/容器打包面的用户不碰 .env —— 分享链接因管理员从内网访问
+	// 而带内网 IP（http://10.10.10.3:56789），发给外部用户根本打不开。
+	// 接线给 share（分享链接）与 presign（直传回跳地址）两处，同源。
+	publicBaseURL := func(ctx context.Context) string {
+		if cfg, err := configApp.Default().GetConfig(ctx); err == nil && cfg != nil && cfg.Base != nil {
+			if u := strings.TrimSpace(cfg.Base.PublicURL); u != "" {
+				return u
+			}
+		}
+		return config.Server.BaseURL
+	}
 	// presign 签名密钥：conf.PresignSigningKey 单源（PB_PRESIGN_SIGNING_KEY
 	// 优先，缺省回退 jwt_secret；chunk 会话令牌同键，取用语义收口一处）
 	signingKey := conf.PresignSigningKey()
-	presignHandler.SetService(presignApp.NewService(database, redis.GetClient(),
+	presignSvc := presignApp.NewService(database, redis.GetClient(),
 		baseURL,
-		signingKey))
+		signingKey)
+	presignSvc.SetBaseURLProvider(publicBaseURL)
+	presignHandler.SetService(presignSvc)
 	// 2.1 注入 share service（Complete 时写分享表）
 	shareSvc := shareService.NewService(database, baseURL, getBootstrapStorageService())
+	shareSvc.SetBaseURLProvider(publicBaseURL)
 	presignHandler.SetShareService(presignShareAdapter{shareSvc})
 	// IDL share/chunk 路由此前未注入，走懒加载裸实例（配额/审核等注入缺失），统一共用
 	shareHandler.SetShareService(shareSvc)
@@ -179,8 +199,8 @@ func initThriftIDLServices(database *gorm.DB) {
 	// RestoreAdminSettings 已 overlay DB 值）与 admin 后台热切换同一条路径。
 	// 初始化失败降级为非联邦模式；resolve 代理路由恒注册（customizedRegister），
 	// 未启用时由 handler 返回 available:false。
-	fedRT.init(config.App.Name, federationApp.NewService,
-		func(svc *federationApp.Service) {
+	fedRT.init(config.App.Name, federation.NewService,
+		func(svc *federation.Service) {
 			shareSvc.SetFederationNotifier(svc)
 			// admin 删除路径独立于 share 域，须单独挂钩（管理端删除即联邦撤销）
 			adminApp.Default().SetFederationNotifier(svc)
@@ -207,6 +227,47 @@ func initThriftIDLServices(database *gorm.DB) {
 		logger.Error("federation 启动装配失败（以非联邦模式运行）", zap.Error(err))
 	}
 
+	// 2.4.2.1 联邦信封管理实例（收件箱 + 节点名录；联邦域，2026-10-22 由直传包
+	// 构造提升到装配层）
+	//
+	// 提升原因：此前两个实例在 p2px.NewService 内部构造——删掉直传编排层时联邦
+	// 信封能力会跟着一起消失（Wave B 的坑）。现在由装配层独立持有，直传包只
+	// 消费（setter 注入，见 2.4.3）。
+	//
+	// 无条件构造：收件箱/名录与「联邦运行时是否启用」无关——收件箱是跨实例交接
+	// 的凭证与状态机（公开收件端点恒注册），名录可见性只取决于 registry 可达。
+	inviteMailbox := federation.NewInviteMailbox(nil)
+	peerDirectory := federation.NewPeerDirectory(
+		// 注册中心基址来源（2026-10-22 L4 语义纠偏）：联邦段优先——那才是
+		// 联邦注册中心（p2pd）的真相源，与 federation 运行时的注册/心跳同一
+		// 注册中心；直传段（p2p.direct.registry_url）是搬迁前的历史来源，作
+		// 存量兼容兜底（只配了直传段的存量用户不会失去名录，后续可移除）。
+		//
+		// 读 SystemConfig.p2p.federation 而非全局 conf.Federation：前者是
+		// overlay（DB 覆盖 yaml）+ env 恒覆盖之后的**生效值镜像**（与联邦
+		// 运行时所用的 config.Federation 同源），且由配置域加锁保护——
+		// 直读全局 conf 会与 overlay 的原地改写构成数据竞争。
+		federation.ChainRegistryProvider(
+			func(ctx context.Context) (string, bool) {
+				cfg, err := configApp.Default().GetConfig(ctx)
+				if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Federation == nil {
+					return "", false
+				}
+				u := strings.TrimSpace(cfg.P2P.Federation.RegistryURL)
+				if u == "" {
+					return "", false // 联邦段无值 → 顺延到直传段（存量兼容）
+				}
+				return u, true
+			},
+			func(ctx context.Context) (string, bool) {
+				cfg, err := configApp.Default().GetConfig(ctx)
+				if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Direct == nil {
+					return "", false
+				}
+				return cfg.P2P.Direct.RegistryURL, true
+			},
+		))
+
 	// 2.4.3 设备直传 supervisor（P2a，spec 2026-10-14 §7）：数据面=spawn p2pc
 	// 子进程（控制面/数据面分离原则），standalone 专属；配置读 SystemConfig
 	// p2p.direct（DB 热生效）。构造注入 standalone 判定（棘轮规则 8）。
@@ -226,7 +287,14 @@ func initThriftIDLServices(database *gorm.DB) {
 			return *cfg.P2P.Direct, true
 		},
 	})
+	// 联邦信封管理实例注入直传包（联邦域构造、直传包只消费）：直传编排层退场
+	// 时这两个实例仍由装配层独立持有，联邦能力不受影响。
+	p2pxSvcInstance.SetInviteMailbox(inviteMailbox)
+	p2pxSvcInstance.SetPeerDirectory(peerDirectory)
 	p2pGenHandler.SetService(p2pxSvcInstance)
+	// Wave B' 准备（2026-10-22）：纯联邦端点（invites / invite-push / directory）
+	// 直接取联邦域实例，**不再经直传包** —— 删直传包时这三个端点不受影响。
+	p2pGenHandler.SetFederationServices(inviteMailbox, peerDirectory)
 	p2pGenHandler.SetShareService(shareSvc)
 	p2pGenHandler.SetInviteNotifier(notifySvcInstance.EmitP2pInvite)
 	p2pGenHandler.SetAuditWriter(adminApp.Default().LogOperation)
@@ -318,7 +386,12 @@ func initThriftIDLServices(database *gorm.DB) {
 		mcpService.SetShareService(mcpShareAdapter{shareSvc})
 		mcpService.SetStorageService(bootstrapStorage)
 		mcpService.SetFederationService(mcpFederationAdapter{svc: fedRT.instance()})
-		mcpService.SetP2pService(mcpP2pAdapter{svc: p2pxSvcInstance})
+		// 联邦三工具走联邦域实例（与直传解耦）；p2p_accept 仍走直传（要 spawn p2pc）
+		mcpService.SetP2pService(mcpP2pAdapter{
+			svc:       p2pxSvcInstance,
+			mailbox:   inviteMailbox,
+			directory: peerDirectory,
+		})
 		mcpService.SetRequestService(mcpRequestAdapter{requestSvcInstance})
 		mcpService.SetPreviewService(mcpPreviewAdapter{previewSvcInstance})
 		mcpService.SetMaxFileSize(config.MCP.MaxFileSize)

@@ -22,6 +22,7 @@ import (
 
 	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/registry"
 	"os/exec"
 	"syscall"
 	"time"
@@ -75,6 +76,11 @@ func (s *Service) watcherDesired() (conf.P2PDirectConfig, string, bool) {
 	if !ok || !cfg.Enabled || !cfg.Discoverable {
 		return conf.P2PDirectConfig{}, "", false
 	}
+	// 信箱 watcher 的唯一产出是邀请事件 → 联邦收件箱；收件箱未装配（装配层
+	// 尚未注入）时不拉起——否则拉起一个只会丢事件的进程。注入后下一 tick 即拉起。
+	if s.inviteMailbox() == nil {
+		return conf.P2PDirectConfig{}, "", false
+	}
 	bin, err := s.locateBinary(cfg)
 	if err != nil {
 		return conf.P2PDirectConfig{}, "", false
@@ -86,7 +92,7 @@ func (s *Service) watcherDesired() (conf.P2PDirectConfig, string, bool) {
 func (s *Service) spawnWatcher(cfg conf.P2PDirectConfig, bin string) error {
 	args := []string{
 		"mailbox", "--watch", "--interval", watcherIntervalArgs, "--discoverable",
-		"--registry", effectiveRegistry(cfg.RegistryURL),
+		"--registry", registry.Effective(cfg.RegistryURL),
 		"--key", s.nodeKeyPath(),
 	}
 	if name := s.deps.NodeName; name != "" {
@@ -110,7 +116,7 @@ func (s *Service) spawnWatcher(cfg conf.P2PDirectConfig, bin string) error {
 	s.watch.pid = cmd.Process.Pid
 	s.watch.watching = true
 	s.watchMu.Unlock()
-	logger.Info(fmt.Sprintf("[p2px] 信箱 watcher 已启动(pid=%d registry=%s)", cmd.Process.Pid, effectiveRegistry(cfg.RegistryURL)))
+	logger.Info(fmt.Sprintf("[p2px] 信箱 watcher 已启动(pid=%d registry=%s)", cmd.Process.Pid, registry.Effective(cfg.RegistryURL)))
 	// watcher 三协程 GoSafeLabeled:panic 走全局 zap handler 带任务标签,不静默打死进程
 	// 管道读端必须先于 cmd.Wait() 耗尽：Wait 按约定会关闭 StdoutPipe/StderrPipe
 	// 读端，进程快速退出而扫描协程尚未读走管道缓冲时事件静默丢失——

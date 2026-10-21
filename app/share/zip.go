@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/oekit/concurrency/async"
 )
 
 // zipStreamTimeout zip 组装整体超时（异步 goroutine 内的存储读取/写管路上限）。

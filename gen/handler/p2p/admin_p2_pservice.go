@@ -18,6 +18,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
 	p2p "github.com/pigeonbox/contracts/gen/p2p"
+	federation "github.com/pigeonbox/core/app/federation"
 	"github.com/pigeonbox/core/app/p2px"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -33,6 +34,41 @@ var (
 
 // SetService 注入直传 supervisor（bootstrap/wiring 调用）。
 func SetService(s *p2px.Service) { p2pxSvc = s }
+
+// 联邦收件箱与名录实例（2026-10-22 Wave B' 准备）：**不再经直传包取**。
+//
+// 此前 invites / invite-push / directory 三个**纯联邦**端点调 getP2px()，
+// 把「联邦」的实��藏进「直传」包里 —— 于是「删直传包」会连带删掉联邦
+// （这正是两应用分拆稿 Wave B 的隐藏前提）。现在这三个端点直接取联邦域
+// 实例，删直传包时它们不受影响。
+//
+// **唯一仍留在直传侧的是 invites/accept**：它的第二步要 spawn p2pc 收件，
+// 语义上确实是直传（联邦包只出信封，不出 p2pc 运行时）。要彻底解耦需把
+// 「接受邀请」拆成「纯信封接收」与「p2pc 收件」两个动作，属 v3.0.0 主波。
+var (
+	federationMailbox   *federation.InviteMailbox
+	federationDirectory *federation.PeerDirectory
+)
+
+// SetFederationServices 注入联邦收件箱与名录（bootstrap/wiring 调用）。
+func SetFederationServices(mailbox *federation.InviteMailbox, directory *federation.PeerDirectory) {
+	federationMailbox = mailbox
+	federationDirectory = directory
+}
+
+func getFederationMailbox() *federation.InviteMailbox {
+	if federationMailbox == nil {
+		panic("federation mailbox not initialized: SetFederationServices must be called before serving")
+	}
+	return federationMailbox
+}
+
+func getFederationDirectory() *federation.PeerDirectory {
+	if federationDirectory == nil {
+		panic("federation directory not initialized: SetFederationServices must be called before serving")
+	}
+	return federationDirectory
+}
 
 // SetShareService 注入分享服务（发布为分享复用本地导入铸链）。
 func SetShareService(s *shareService.Service) { shareSvc = s }
@@ -433,7 +469,7 @@ func AdminP2pPublish(ctx context.Context, c *app.RequestContext) {
 // AdminP2pInvites 待收邀请列表（P3）。
 // @router /admin/p2p/invites [GET]
 func AdminP2pInvites(ctx context.Context, c *app.RequestContext) {
-	invites := getP2px().ListInvites()
+	invites := getFederationMailbox().ListInvites()
 	items := make([]map[string]any, 0, len(invites))
 	for _, iv := range invites {
 		items = append(items, map[string]any{
@@ -479,7 +515,7 @@ func AdminP2pInvitePush(ctx context.Context, c *app.RequestContext) {
 		badReq(c, "请求体无效（需 code 与 target_url）")
 		return
 	}
-	err := p2px.PushInvite(ctx, req.GetTargetURL(), req.GetCode(), req.GetFromName(), req.GetNote())
+	err := federation.PushInvite(ctx, req.GetTargetURL(), req.GetCode(), req.GetFromName(), req.GetNote())
 	audit(ctx, "p2p.invite.push", req.GetTargetURL(), err)
 	if err != nil {
 		badReq(c, err.Error())
@@ -492,7 +528,7 @@ func AdminP2pInvitePush(ctx context.Context, c *app.RequestContext) {
 // 消费;p2pd 名录零敏感,本层不改写）。
 // @router /admin/p2p/directory [GET]
 func AdminP2pDirectory(ctx context.Context, c *app.RequestContext) {
-	peers, err := getP2px().DirectoryPeers(ctx)
+	peers, err := getFederationDirectory().Peers(ctx)
 	if err != nil {
 		// 上游是外部依赖（注册中心）而非本服务内部故障：映射 502 并收敛文案。
 		// 此前裸 500 + err.Error 直出（可能带上游 URL/网络细节），前端又静默

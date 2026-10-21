@@ -134,10 +134,13 @@ if [ "$CHECK" = "1" ]; then
     mkdir -p "$RUN_ROOT/gen/router/$(dirname "$mf")"
     cp "gen/router/$mf" "$RUN_ROOT/gen/router/$mf"
   done
-  ROUTER_DIFF="$(diff -r "$RUN_ROOT/gen/router" gen/router)" || true
+  # --exclude=.DS_Store：macOS 本地 gen/ 下常有未跟踪的 .DS_Store（全局
+  # gitignore 忽略，CI 的 Linux 上不会生成）——目录级 diff 会把它报成差异，
+  # 让所有 macOS 贡献者看到这个校验恒红且提示无效。
+  ROUTER_DIFF="$(diff -r --exclude=.DS_Store "$RUN_ROOT/gen/router" gen/router)" || true
   # 文件清单另对账：内容 diff 对"仓内多出来的杂散文件"是盲的，清单比对才抓得住
-  LIST_DIFF="$(diff <(cd gen/handler && find . -type f | sort) \
-                    <(cd "$RUN_ROOT/gen/handler" && find . -type f | sort))" || true
+  LIST_DIFF="$(diff <(cd gen/handler && find . -type f -not -name .DS_Store | sort) \
+                    <(cd "$RUN_ROOT/gen/handler" && find . -type f -not -name .DS_Store | sort))" || true
   ROUTER_LIST_DIFF="$(diff <(cd gen/router && find . -type f | sort) \
                      <(cd "$RUN_ROOT/gen/router" && find . -type f | sort))" || true
   if [ -n "$ROUTER_DIFF" ] || [ -n "$LIST_DIFF" ] || [ -n "$ROUTER_LIST_DIFF" ]; then

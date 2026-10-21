@@ -23,7 +23,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pigeonbox/core/app/federation"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/registry"
 )
 
 // 任务状态机。
@@ -41,8 +43,6 @@ const (
 	defaultMaxTaskBytes = 50 << 30
 	// defaultInboxQuotaBytes 收件区总配额缺省 200 GiB
 	defaultInboxQuotaBytes = 200 << 30
-	// defaultPublicRegistry 官方公共注册中心（与 federation 缺省同源，spec §5）
-	defaultPublicRegistry = "http://home.enjoye.top:56788"
 	// logRingSize 任务日志环形缓冲行数
 	logRingSize = 256
 	// defaultMaxConcurrent 在途任务上限（实测评审：无闸会拖垮 NAS 磁盘；
@@ -194,8 +194,13 @@ type Service struct {
 	mu    sync.Mutex
 	tasks map[string]*Task
 
-	invMu   sync.Mutex
-	invites []Invite // P3 收件箱（内存态，TTL 10min/cap 20）
+	// 联邦信封管理（联邦域；2026-10-22 实现搬至 app/federation，本包只委托）。
+	// 依赖方向 p2px → federation：实例由装配层（bootstrap/wiring.go）构造后
+	// 经 SetInviteMailbox/SetPeerDirectory 注入——本包不再自己构造联邦实例，
+	// Wave B 删直传编排层时联邦信封能力原样留存、不跟着一起消失。
+	fedMu     sync.RWMutex
+	mailbox   *federation.InviteMailbox
+	directory *federation.PeerDirectory
 
 	// 信箱 watcher（2026-10-14 在线名录+邀请信箱；watcher.go）
 	watchMu sync.Mutex
@@ -230,6 +235,9 @@ func NewService(deps Deps) *Service {
 		tasks:   map[string]*Task{},
 		monStop: make(chan struct{}),
 	}
+	// 联邦信封管理实例不在此构造（信封/名录属联邦域）：由装配层构造后经
+	// SetInviteMailbox/SetPeerDirectory 注入（联邦关闭时收件箱仍可用——
+	// 它无条件构造，与联邦运行时无关）。
 	s.sweepOrphans()
 	s.pruneEndedTasks()
 	s.monWg.Add(1)
@@ -282,6 +290,39 @@ func (s *Service) Stop() error {
 	s.stopWatcher("server shutdown") // 信箱 watcher 随 supervisor 收口
 	s.monWg.Wait()
 	return nil
+}
+
+// SetInviteMailbox 注入联邦邀请收件箱（联邦域实例；装配层构造后注入）。
+//
+// 本包不再自行构造联邦实例：信封是跨实例交接的凭证与状态机，与直传编排层
+// 无依赖——Wave B 删掉直传编排层时，联邦收件箱仍由装配层独立持有。
+// 未注入时门面方法返回「未装配」错误（不 panic）。
+func (s *Service) SetInviteMailbox(m *federation.InviteMailbox) {
+	s.fedMu.Lock()
+	defer s.fedMu.Unlock()
+	s.mailbox = m
+}
+
+// SetPeerDirectory 注入联邦节点名录（联邦域实例；装配层构造后注入）。
+// 未注入时门面方法返回「未装配」错误（不 panic）。
+func (s *Service) SetPeerDirectory(d *federation.PeerDirectory) {
+	s.fedMu.Lock()
+	defer s.fedMu.Unlock()
+	s.directory = d
+}
+
+// inviteMailbox 取联邦收件箱（并发安全；未注入=nil）。
+func (s *Service) inviteMailbox() *federation.InviteMailbox {
+	s.fedMu.RLock()
+	defer s.fedMu.RUnlock()
+	return s.mailbox
+}
+
+// peerDirectory 取联邦名录（并发安全；未注入=nil）。
+func (s *Service) peerDirectory() *federation.PeerDirectory {
+	s.fedMu.RLock()
+	defer s.fedMu.RUnlock()
+	return s.directory
 }
 
 // List 任务列表（创建时间倒序）。
@@ -340,7 +381,7 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	st := Status{DeployAllowed: s.deps.Standalone == nil || s.deps.Standalone()}
 	if ok {
 		st.Enabled = cfg.Enabled
-		st.RegistryURL = effectiveRegistry(cfg.RegistryURL)
+		st.RegistryURL = registry.Effective(cfg.RegistryURL)
 		st.RecvDir = s.effectiveRecvDir(cfg)
 		st.InboxQuota = effectiveQuota(cfg.InboxQuotaBytes, defaultInboxQuotaBytes)
 		if st.RecvDir != "" {
@@ -405,14 +446,6 @@ func (s *Service) activeCount() int {
 		t.mu.Unlock()
 	}
 	return n
-}
-
-// effectiveRegistry 注册中心缺省回填（spec §5：留空=官方公共）。
-func effectiveRegistry(u string) string {
-	if strings.TrimSpace(u) == "" {
-		return defaultPublicRegistry
-	}
-	return strings.TrimSpace(u)
 }
 
 // effectiveRecvDir 收件区缺省回填（留空=<data>/p2p-inbox）。

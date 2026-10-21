@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/contracts/errcode"
 	usermodel "github.com/pigeonbox/contracts/gen/user"
 	"github.com/pigeonbox/core/conf"
@@ -17,7 +18,6 @@ import (
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/oekit/kitx/uidgen"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )

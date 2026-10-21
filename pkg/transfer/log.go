@@ -15,8 +15,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/oekit/concurrency/async"
+	"github.com/pigeonbox/core/pkg/logger"
 )
 
 // Sink 传输日志落盘能力（repo/db/dao 的仓储实现，bootstrap 装配注入）。

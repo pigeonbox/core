@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pigeonbox/core/conf"
 	"github.com/oekit/concurrency/singleflight"
+	"github.com/pigeonbox/core/conf"
 )
 
 // ErrEndpointURL 存储端点 URL 不合法

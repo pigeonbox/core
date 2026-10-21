@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/concurrency/singleflight"
+	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/core/conf"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
@@ -28,8 +30,6 @@ import (
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
-	"github.com/oekit/concurrency/singleflight"
-	"github.com/oekit/kitx/uidgen"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )

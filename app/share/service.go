@@ -8,6 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oekit/concurrency/async"
+	"github.com/oekit/concurrency/retry"
+	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/contracts/errcode"
 	sharemodel "github.com/pigeonbox/contracts/gen/share"
 	"github.com/pigeonbox/core/app/moderation"
@@ -22,9 +25,6 @@ import (
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
-	"github.com/oekit/concurrency/async"
-	"github.com/oekit/concurrency/retry"
-	"github.com/oekit/kitx/uidgen"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -105,12 +105,18 @@ type Service struct {
 	userService  UserServiceInterface
 	storage      storage.StorageInterface
 	baseURL      string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
-	notifySvc    NotifyServiceInterface
-	quotaChecker QuotaChecker
-	moderator    moderation.Moderator // 内容审核钩子（nil = 不审核）
-	flagEmitter  FlagEventEmitter     // share.flagged webhook（nil = 不推送）
-	federation   FederationNotifier   // P2P 联邦口令路由钩子（nil = 非联邦模式；读写走 federationMu——P1 后台热切换=运行期写）
-	federationMu sync.RWMutex
+	// baseURLProvider 对外 base 地址的**动态**来源（2026-10-22 站点公网地址）。
+	// nil = 只用构造期的 baseURL（env/yaml 的 server.base_url）。
+	// 非 nil 时每次拼链接都问它 —— 管理后台改「站点公网地址」后**立即生效**，
+	// 不必重启、也不必改 .env：多部署方式下这是关键（NAS 用户不碰 .env，
+	// 而 server.base_url 只能在 yaml/env 里改，NAS 装完根本不知道它存在）。
+	baseURLProvider func(context.Context) string
+	notifySvc       NotifyServiceInterface
+	quotaChecker    QuotaChecker
+	moderator       moderation.Moderator // 内容审核钩子（nil = 不审核）
+	flagEmitter     FlagEventEmitter     // share.flagged webhook（nil = 不推送）
+	federation      FederationNotifier   // P2P 联邦口令路由钩子（nil = 非联邦模式；读写走 federationMu——P1 后台热切换=运行期写）
+	federationMu    sync.RWMutex
 
 	// 存储兜底（storageClient 惰性本地后端，仅未注入时使用；见 files.go）
 	fallbackOnce    sync.Once
@@ -227,6 +233,24 @@ func NewService(gormDB *gorm.DB, baseURL string, storageService storage.StorageI
 		baseURL:      baseURL,
 		notifySvc:    nil,
 	}
+}
+
+// SetBaseURLProvider 注入对外 base 地址的动态来源（2026-10-22 站点公网地址）。
+// 返回空串 = 未配置 → 回退构造期的 baseURL（env/yaml 的 server.base_url），
+// 仍为空则由 baseurl.Resolve 按请求来源动态推断（publicBaseMiddleware）。
+// 线程安全：装配期注入一次，运行期只读。
+func (s *Service) SetBaseURLProvider(fn func(context.Context) string) {
+	s.baseURLProvider = fn
+}
+
+// resolveBaseURL 取本次请求该用的对外 base（provider 优先，其次构造期值）。
+func (s *Service) resolveBaseURL(ctx context.Context) string {
+	if s.baseURLProvider != nil {
+		if v := strings.TrimSpace(s.baseURLProvider(ctx)); v != "" {
+			return v
+		}
+	}
+	return s.baseURL
 }
 
 func (s *Service) SetUserService(userService UserServiceInterface) {
@@ -451,7 +475,7 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 
 	// 生成分享 URL
 	resp.ShareURL = fmt.Sprintf("/share/%s", resp.Code)
-	resp.FullShareURL = fmt.Sprintf("%s/share/%s", baseurl.Resolve(ctx, s.baseURL), resp.Code)
+	resp.FullShareURL = fmt.Sprintf("%s/share/%s", baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), resp.Code)
 
 	return resp, nil
 }
@@ -941,7 +965,7 @@ func (s *Service) modelToResp(ctx context.Context, fileCode *model.FileCode) *Sh
 		OwnerIP:      fileCode.OwnerIP,
 		// 分享链接三通道统一在此生成（文本通道尾部原有一份同值覆盖，保持无害）
 		ShareURL:     fmt.Sprintf("/share/%s", fileCode.Code),
-		FullShareURL: fmt.Sprintf("%s/share/%s", baseurl.Resolve(ctx, s.baseURL), fileCode.Code),
+		FullShareURL: fmt.Sprintf("%s/share/%s", baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), fileCode.Code),
 	}
 }
 

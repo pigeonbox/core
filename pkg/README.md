@@ -12,6 +12,8 @@ pkg/
 ├── logger/      # 日志工具封装
 ├── metrics/     # 指标
 ├── middleware/  # HTTP 中间件
+├── paircode/    # 配对口令归一（p2pc 口令；直传域 + 联邦域共用单源）
+├── registry/    # 联邦注册中心基址归一（直传域 + 联邦域共用单源）
 ├── resp/        # HTTP 响应工具
 ├── security/    # 安全设施（SSRF 校验等）
 ├── transfer/    # 传输相关
@@ -40,6 +42,11 @@ pkg/
 - HTTP 响应工具函数
 - Success/Error/Page 等标准响应
 - 错误码自动映射
+
+### paircode/ 与 registry/
+- 跨域共用事实的单源下沉（避免各域各存一份同值副本、改一处即分叉）：
+  - `paircode.Normalize`：配对口令（p2pc）归一——去空白/连字符、大写、4-4-4 分组；
+  - `registry.Effective`：联邦注册中心（p2pd）基址归一——多主备取首个、留空回填官方公共。
 
 ## 添加新工具
 

@@ -214,7 +214,16 @@ func (a mcpFederationAdapter) Resolve(code string) (*mcpApp.FederationResolve, e
 
 // mcpP2pAdapter mcp.P2pAPI 的 p2px 域适配器（P2b 薄工具，spec §9）。
 // svc 为 nil（未装配）时上报"未装配"事实而非 panic。
-type mcpP2pAdapter struct{ svc *p2pxApp.Service }
+//
+// 2026-10-22 Wave B' 准备：**联邦三个工具（p2p_peers / p2p_invites / p2p_accept）
+// 不再经直传包取实现** —— 此前它们调 svc.ListInvites/DirectoryPeers/TakeInvite，
+// 把联邦实现挂在直传服务上，删直传包就会连带删联邦工具。
+// p2p_accept 仍走 svc（它的第二步要 spawn p2pc 收件，语义上属直传）。
+type mcpP2pAdapter struct {
+	svc       *p2pxApp.Service
+	mailbox   *federationApp.InviteMailbox
+	directory *federationApp.PeerDirectory
+}
 
 func (a mcpP2pAdapter) P2pStatus(ctx context.Context) (mcpApp.P2pStatus, error) {
 	if a.svc == nil {
@@ -293,10 +302,12 @@ func (a mcpP2pAdapter) P2pRecv(ctx context.Context, code string) (mcpApp.P2pTask
 
 // P2pPeers 在线名录透传（p2px DirectoryPeers；零敏感）。
 func (a mcpP2pAdapter) P2pPeers(ctx context.Context) ([]mcpApp.P2pPeerInfo, error) {
-	if a.svc == nil {
-		return nil, errors.New("直传 supervisor 未装配")
+	// 不再判 svc==nil：本工具已与直传解耦（只看联邦名录），
+	// 直传没装配不该挡住联邦名录查询。
+	if a.directory == nil {
+		return nil, errors.New("联邦名录未装配")
 	}
-	peers, err := a.svc.DirectoryPeers(ctx)
+	peers, err := a.directory.Peers(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -312,10 +323,11 @@ func (a mcpP2pAdapter) P2pPeers(ctx context.Context) ([]mcpApp.P2pPeerInfo, erro
 
 // P2pInvites 待收邀请箱快照（P3 收件箱）。
 func (a mcpP2pAdapter) P2pInvites(ctx context.Context) ([]mcpApp.P2pInviteInfo, error) {
-	if a.svc == nil {
-		return nil, errors.New("直传 supervisor 未装配")
+	// 同 P2pPeers：与直传解耦，只看联邦收件箱。
+	if a.mailbox == nil {
+		return nil, errors.New("联邦收件箱未装配")
 	}
-	invites := a.svc.ListInvites()
+	invites := a.mailbox.ListInvites()
 	out := make([]mcpApp.P2pInviteInfo, 0, len(invites))
 	for _, it := range invites {
 		out = append(out, mcpApp.P2pInviteInfo{

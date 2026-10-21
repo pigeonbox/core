@@ -19,6 +19,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/gen/router"
 	genadmin "github.com/pigeonbox/core/gen/router/admin"
@@ -41,7 +42,6 @@ import (
 	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/redis"
 	"github.com/pigeonbox/core/storage"
-	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 
 	configApp "github.com/pigeonbox/core/app/config"

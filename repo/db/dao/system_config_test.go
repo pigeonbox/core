@@ -17,7 +17,7 @@ import (
 
 // newSystemConfigTestDB 开一个隔离的 :memory: 库并迁移 system_configs 表。
 // glebarez/sqlite 的 :memory: 每条连接是独立库，必须钉死单连接
-//（同 inject_test.go 的 newInjectTestDB 处理方式），并发事务由连接池串行化。
+// （同 inject_test.go 的 newInjectTestDB 处理方式），并发事务由连接池串行化。
 func newSystemConfigTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})

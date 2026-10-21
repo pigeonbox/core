@@ -661,21 +661,21 @@ func (s *Service) execTool(ctx context.Context, name string, args json.RawMessag
 		if err != nil {
 			return "分享不存在或已过期", true
 		}
-	expire := "永久"
-	if fc.ExpiredAt != nil {
-		expire = fc.ExpiredAt.Format("2006-01-02 15:04:05")
-	}
-	pickup := "—（未铸造）"
-	if fc.PickupCode != nil && *fc.PickupCode != "" {
-		pickup = *fc.PickupCode
-	}
-	// 文件分享的 Text 存原始文件名（非空），须用 IsTextShare 判定（Text 非空且无文件路径）
-	kind := "文件"
-	if fc.IsTextShare() {
-		kind = "文本"
-	}
-	out := fmt.Sprintf("分享信息\n分享码: %s\n取件码: %s\n类型: %s\n内容/文件名: %s\n大小: %d 字节\n剩余次数: %d（-1 不限）\n已用次数: %d\n过期时间: %s\n创建时间: %s",
-		fc.Code, pickup, kind, displayFileName(fc), fc.Size, fc.ExpiredCount, fc.UsedCount, expire, fc.CreatedAt.Format("2006-01-02 15:04:05"))
+		expire := "永久"
+		if fc.ExpiredAt != nil {
+			expire = fc.ExpiredAt.Format("2006-01-02 15:04:05")
+		}
+		pickup := "—（未铸造）"
+		if fc.PickupCode != nil && *fc.PickupCode != "" {
+			pickup = *fc.PickupCode
+		}
+		// 文件分享的 Text 存原始文件名（非空），须用 IsTextShare 判定（Text 非空且无文件路径）
+		kind := "文件"
+		if fc.IsTextShare() {
+			kind = "文本"
+		}
+		out := fmt.Sprintf("分享信息\n分享码: %s\n取件码: %s\n类型: %s\n内容/文件名: %s\n大小: %d 字节\n剩余次数: %d（-1 不限）\n已用次数: %d\n过期时间: %s\n创建时间: %s",
+			fc.Code, pickup, kind, displayFileName(fc), fc.Size, fc.ExpiredCount, fc.UsedCount, expire, fc.CreatedAt.Format("2006-01-02 15:04:05"))
 		// P0 多文件：附子文件清单（仅文件分享且存在子表行时）
 		if s.shareSvc != nil && !fc.IsTextShare() {
 			if items, lerr := s.shareSvc.ShareFiles(ctx, fc.Code); lerr == nil && len(items) > 1 {

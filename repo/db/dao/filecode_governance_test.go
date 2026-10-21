@@ -203,8 +203,8 @@ func TestFindQuickUploadSource_SkipsExpiredPicksNewestUsable(t *testing.T) {
 	expired := time.Now().Add(-24 * time.Hour)
 	fixtures := []*model.FileCode{
 		{Code: "QEXPOLD1", FilePath: "uploads/x1.bin", FileHash: "hx", Size: 7, Status: model.StatusNormal, ExpiredCount: -1, ExpiredAt: &expired, UserID: &u1}, // 时间过期
-		{Code: "QEXPOLD2", FilePath: "uploads/x2.bin", FileHash: "hx", Size: 7, Status: model.StatusNormal, ExpiredCount: 0, UserID: &u1},                      // 次数耗尽
-		{Code: "QFRESH01", FilePath: "uploads/x3.bin", FileHash: "hx", Size: 7, Status: model.StatusNormal, ExpiredCount: -1, UserID: &u1},                     // 有效
+		{Code: "QEXPOLD2", FilePath: "uploads/x2.bin", FileHash: "hx", Size: 7, Status: model.StatusNormal, ExpiredCount: 0, UserID: &u1},                       // 次数耗尽
+		{Code: "QFRESH01", FilePath: "uploads/x3.bin", FileHash: "hx", Size: 7, Status: model.StatusNormal, ExpiredCount: -1, UserID: &u1},                      // 有效
 	}
 	for _, f := range fixtures {
 		require.NoError(t, repo.Create(ctx, f))

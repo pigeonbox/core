@@ -8,6 +8,17 @@
 // 信任模型：本包只做"发现"，取件方直连源节点、源节点本地校验口令——零跨节点信任。
 // 签名负载格式与 p2p 仓 README 契约逐字节一致（见 client.go 常量注释）。
 // 依赖方向：本包不 import 生态任何兄弟模块（叶子约束，core CI dep guard）。
+//
+// 本包三类服务按**构造条件**分家（2026-10-22 L3 命名收口，读者一眼可辨）：
+//
+//	Service        联邦运行时（注册/心跳/公告/解析）——**仅联邦启用时**构造
+//	               （NewService 在 !cfg.Enabled 时报错，由装配层降级为非联邦模式）。
+//	InviteMailbox  联邦邀请收件箱——**无条件**构造：跨实例交接的凭证与状态机，
+//	               与联邦运行时无关（联邦关闭时公开收件端点仍可用）。
+//	PeerDirectory  联邦节点名录——**无条件**构造：可见性只取决于 registry 可达。
+//
+// 后两者的实例由装配层（bootstrap/wiring.go）构造，直传编排层只消费
+// （setter 注入）——删掉直传编排层时联邦能力不受影响（Wave B'）。
 package federation
 
 import (
@@ -22,9 +33,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
-	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
 )
 

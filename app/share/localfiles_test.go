@@ -57,11 +57,11 @@ func TestLocalFilesConfinement(t *testing.T) {
 	// Windows 形态载荷：pathx 严格档统一按分隔符判定（"\"" 亦为分隔符），
 	// 且拒绝盘符/UNC 绝对形态——这些在 Linux 上按平台解释会漏判
 	for _, bad := range []string{
-		`..\..\etc\passwd`,     // 反斜杠形态的 ..
-		`sub\..\..\x`,          // 反斜杠形态的越界
-		`C:\Windows\win.ini`,   // 盘符绝对路径
-		`\\host\share\secret`,  // UNC
-		`sub/../b.txt`,         // 显式 ".." 段（严格档直接拒，不做抵消推断）
+		`..\..\etc\passwd`,    // 反斜杠形态的 ..
+		`sub\..\..\x`,         // 反斜杠形态的越界
+		`C:\Windows\win.ini`,  // 盘符绝对路径
+		`\\host\share\secret`, // UNC
+		`sub/../b.txt`,        // 显式 ".." 段（严格档直接拒，不做抵消推断）
 	} {
 		_, err = svc.ListLocalFiles(0, bad)
 		require.Error(t, err, "应拒绝: %s", bad)

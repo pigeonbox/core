@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pigeonbox/core/storage/opendal"
 	"github.com/oekit/concurrency/async"
+	"github.com/pigeonbox/core/storage/opendal"
 )
 
 // chunkKey 分片对象 key（fs/远端统一 '/' 分隔；fs 侧 filepath.Join 兼容处理）
