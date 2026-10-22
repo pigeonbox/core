@@ -151,7 +151,7 @@ type shareCreatedOut struct {
 type shareTextIn struct {
 	Text        string `json:"text" jsonschema:"要分享的文本内容（上限 222KB）"`
 	ExpireValue int    `json:"expire_value,omitempty" jsonschema:"过期数值，默认 1"`
-	ExpireStyle string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year/forever，默认 day"`
+	ExpireStyle string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year/forever/count（count 按取件次数，对方最多取 N 次），默认 day"`
 	Password    string `json:"password,omitempty" jsonschema:"可选取件密码（提供即开启密码保护）"`
 	CustomCode  string `json:"custom_code,omitempty" jsonschema:"可选自定义取件码（3-32 位字母/数字/-/_，冲突报错；仅登录用户）"`
 }
@@ -186,7 +186,7 @@ type shareFileIn struct {
 	FileName     string `json:"file_name" jsonschema:"文件名（须通过扩展名白名单）"`
 	ContentBase64 string `json:"content_base64" jsonschema:"文件内容的 base64 编码"`
 	ExpireValue  int    `json:"expire_value,omitempty" jsonschema:"过期数值，默认 1"`
-	ExpireStyle  string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year/forever，默认 day"`
+	ExpireStyle  string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year/forever/count（count 按取件次数，对方最多取 N 次），默认 day"`
 	Password     string `json:"password,omitempty" jsonschema:"可选取件密码（提供即开启密码保护）"`
 	CustomCode   string `json:"custom_code,omitempty" jsonschema:"可选自定义取件码（3-32 位字母/数字/-/_，冲突报错；仅登录用户）"`
 }
@@ -233,7 +233,7 @@ type createRequestCodeIn struct {
 	MaxFiles    int    `json:"max_files,omitempty" jsonschema:"最大文件数（0 表示不限）"`
 	MaxBytes    int64  `json:"max_bytes,omitempty" jsonschema:"总大小上限字节（0 表示不限）"`
 	ExpireValue int    `json:"expire_value,omitempty" jsonschema:"过期数值，默认 7"`
-	ExpireStyle string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year，默认 day"`
+	ExpireStyle string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year/forever/count（count 按取件次数，对方最多取 N 次），默认 day"`
 }
 
 type createRequestCodeOut struct {
@@ -871,7 +871,7 @@ func normalizeExpireStyle(style string) (string, error) {
 		return "day", nil
 	}
 	if !utils.IsValidExpireStyle(style) {
-		return "", fmt.Errorf("expire_style 非法：%q（可用：minute/hour/day/week/month/year/forever）", style)
+		return "", fmt.Errorf("expire_style 非法：%q（可用：%s）", style, strings.Join(utils.AllExpireStyles(), "/"))
 	}
 	return style, nil
 }

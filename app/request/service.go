@@ -83,7 +83,7 @@ type CreateReq struct {
 	MaxFiles    int
 	MaxBytes    int64
 	ExpireValue int
-	ExpireStyle string // day/week/month/...；空 = 7 天
+	ExpireStyle string // minute/hour/day/week/month/year/forever；空 = 7 天（不支持 count：该通道按时间过期）
 }
 
 // Create 创建投递链接
@@ -102,6 +102,13 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateReq) (*mode
 	}
 	if err := utils.CheckExpireStyleAllowed(style); err != nil {
 		return nil, err
+	}
+	// 「按取件次数」在本通道**不适用**（2026-10-22 审计）：投递码的过期是
+	// 按时间算的，取件次数恒为无限（ExpiredCount=defaultRecvCount=-1）。
+	// 此前它能通过白名单校验 ⇒ 用户传 count 拿到的是「30 天 + 无限次」，
+	// 与「按次数」的期望**静默错配**。现在响亮拒绝，别让人以为限制生效了。
+	if style == "count" {
+		return nil, errors.New("投递码不支持「按取件次数」过期（该通道只支持按时间过期）")
 	}
 
 	fr := &model.FileRequest{
