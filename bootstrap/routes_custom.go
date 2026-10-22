@@ -12,6 +12,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
+	"github.com/cloudwego/hertz/pkg/common/adaptor"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/oekit/concurrency/async"
 	"go.uber.org/zap"
@@ -101,7 +102,9 @@ func customizedRegister(r *server.Hertz) {
 	r.GET("/api/v1/notifies/public", customHandler.ListPublicNotifies)
 
 	// ===== MCP server（Model Context Protocol；AI 客户端集成，上游没有的差异化能力）=====
-	// Streamable HTTP 传输：POST /api/v1/mcp（JSON-RPC 2.0）。
+	// Streamable HTTP 传输：POST /api/v1/mcp（协议层=官方 SDK
+	// github.com/modelcontextprotocol/go-sdk，最新规范 2026-07-28，握手期旧版
+	// 向下兼容）。
 	// 默认管理员 JWT 全量工具；mcp.allow_guest=true 时可选认证：游客仅
 	// share_text/share_file 快速分享（同网页匿名寄件限流/审核/白名单），登录用户
 	// += create_request_code/preview_share，管理员 = 全量。浏览器跨站一律拒绝
@@ -116,6 +119,10 @@ func customizedRegister(r *server.Hertz) {
 		if config.MCP.AllowGuest {
 			authMW = middleware.OptionalAuthMiddleware()
 		}
+		// Hertz ↔ net/http 桥接：官方 SDK 交付的是 net/http Handler
+		// （hertz pkg/common/adaptor）。调用者身份在进桥接**之前**注入 ctx，
+		// SDK 会把 http.Request 的 ctx 透传到工具 handler（作用域判定据此）。
+		mcpHandler := adaptor.HertzHandler(mcpService.Handler())
 		r.POST("/api/v1/mcp", mcpGuestGate(), authMW, func(ctx context.Context, c *app.RequestContext) {
 			uid, _ := middleware.UserIDFromContext(ctx)
 			ip := middleware.ClientIPFromContext(ctx)
@@ -127,16 +134,12 @@ func customizedRegister(r *server.Hertz) {
 				UserID: uid,
 				IP:     ip,
 			}
-			body := c.Request.Body()
-			status, respBody := mcpService.Handle(ctx, body, caller)
-			if status == 202 {
-				c.SetStatusCode(consts.StatusAccepted)
-				return
-			}
-			c.Header("Content-Type", "application/json")
-			c.SetStatusCode(status)
-			_, _ = c.Write(respBody)
+			mcpHandler(mcpApp.WithCaller(ctx, caller), c)
 		})
+		// 无会话模式不提供 SSE 流与会话终结，规范要求 GET/DELETE 回 405
+		// （由 SDK 统一应答；不挂鉴权链——405 不泄露任何业务信息）。
+		r.GET("/api/v1/mcp", mcpHandler)
+		r.DELETE("/api/v1/mcp", mcpHandler)
 	}
 
 	// ===== logout 端点（补齐基准 P1 缺口：显式注销 + token 黑名单）=====

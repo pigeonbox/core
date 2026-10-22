@@ -121,7 +121,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /api/v1/ping",
 		// ===== customizedRegister 手写 =====
 		"GET /openapi.json", "GET /api/config", "GET /robots.txt",
-		"POST /api/v1/mcp",
+		// MCP（Streamable HTTP；无会话模式：GET/DELETE 按规范回 405，由 SDK 应答）
+		"POST /api/v1/mcp", "GET /api/v1/mcp", "DELETE /api/v1/mcp",
 		"POST /api/v1/user/refresh", "POST /api/v1/user/logout", "GET /api/v1/user/check-auth",
 		"GET /readyz",
 		"GET /api/v1/user/shares", "POST /api/v1/user/shares/batch-delete",
