@@ -48,16 +48,34 @@ func (s daoTransferLogSink) Create(ctx context.Context, e transfer.Entry) error 
 func newDownloadTestEnv(t *testing.T) *gorm.DB {
 	t.Helper()
 
-	g, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "test.db")), &gorm.Config{})
+	// DB 临时目录**自管**（不用 t.TempDir()）：t.TempDir() 的清理是 RemoveAll，
+	// 而 sqlite 的 -wal/-shm 副文件在连接未关时仍可能被写回 —— RemoveAll
+	// 递归删到一半、副文件重新出现，最终 rmdir 报 "directory not empty"
+	// （实测约 1/40 偶发，2026-07-22 复核，与本仓其它改动无关）。
+	// 这里改为：关连接 → 删目录（失败重试若干次）→ 仍失败则把残留内容打进
+	// 日志，让这条用例**确定化**且失败可诊断（假红比没有这条断言更坏）。
+	dbDir, err := os.MkdirTemp("", "bq-dl-*")
 	require.NoError(t, err)
-	// 关连接必须**先于** TempDir 被 RemoveAll 执行 —— t.Cleanup 是 LIFO：
-	// t.TempDir() 的清理最先注册（故最后执行），这里后注册的清理先跑。
-	// sqlite 的 -wal/-shm 副文件在连接未关时仍存在（或被重新写回），
-	// 直接删目录会报 "directory not empty" —— 实测约 1/12 偶发（2026-07-22）。
-	// 假红比没有这条断言更坏（团队会开始绕它），故必须收口。
-	if sqlDB, dbErr := g.DB(); dbErr == nil {
-		t.Cleanup(func() { _ = sqlDB.Close() })
-	}
+	g, err := gorm.Open(sqlite.Open(filepath.Join(dbDir, "test.db")), &gorm.Config{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, dbErr := g.DB(); dbErr == nil {
+			_ = sqlDB.Close() // 关连接会 checkpoint 并清掉 -wal/-shm 副文件
+		}
+		for i := 0; i < 10; i++ {
+			if rmErr := os.RemoveAll(dbDir); rmErr == nil {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if entries, rdErr := os.ReadDir(dbDir); rdErr == nil {
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Logf("DB 临时目录删除失败，残留内容: %v", names)
+		}
+	})
 	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.TransferLog{}))
 	transfer.SetSink(daoTransferLogSink{gormDB: g})
 
