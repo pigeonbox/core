@@ -18,19 +18,19 @@ import (
 
 // federationSvc 读写走 federationMu——P1 后台热切换=运行期写，与请求路径并发。
 var (
-	federationSvc *federation.Service
+	federationSvc *federation.Node
 	federationMu  sync.RWMutex
 )
 
 // SetFederationService 注入联邦服务（bootstrap 调用；nil = 未启用）
-func SetFederationService(s *federation.Service) {
+func SetFederationService(s *federation.Node) {
 	federationMu.Lock()
 	defer federationMu.Unlock()
 	federationSvc = s
 }
 
 // currentFederationService 读当前联邦服务（并发安全快照）
-func currentFederationService() *federation.Service {
+func currentFederationService() *federation.Node {
 	federationMu.RLock()
 	defer federationMu.RUnlock()
 	return federationSvc

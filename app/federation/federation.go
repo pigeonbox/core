@@ -58,9 +58,18 @@ type entry struct {
 	confirmed bool // registry 已确认；失败则下轮心跳重推
 }
 
-// Service federation 客户端服务。实现 share.FederationNotifier 窄接口
-// （ShareCreated/ShareDeleted），由 bootstrap 注入 share service。
-type Service struct {
+// Node 本机联邦节点运行时：节点身份（ed25519）+ 注册中心心跳 + 分享公告。
+// 实现 share.FederationNotifier 窄接口（ShareCreated/ShareDeleted），
+// 由 bootstrap 注入 share service。
+//
+// 命名（2026-10-22）：原名 Service 太含糊——同包另有两个无条件构造的
+// 角色（PeerDirectory 在线名录 / InviteMailbox 邀请信箱），「哪个是
+// federation 的主体」看不出来。改 Node 后三个角色一目了然：
+//
+//	Node          本机节点运行时（**联邦启用时才构造**）
+//	PeerDirectory 在线名录（无条件构造——联邦关闭时名录仍要能读配置）
+//	InviteMailbox  邀请信箱（无条件构造——收件箱在联邦关闭时也必须可用）
+type Node struct {
 	cfg conf.FederationConfig
 	// regURLs 主备 registry 列表(逗号分隔配置): 写路径全推,读路径依次
 	regURLs []string
@@ -77,9 +86,21 @@ type Service struct {
 	tickOK atomic.Bool // 最近一次心跳结果(退避调度依据)
 }
 
-// NewService 构造并加载/生成节点身份密钥。仅在 federation.enabled 时调用；
+// Service 是 Node 的旧名（保留兼容）。
+//
+// Deprecated: 用 Node。
+type Service = Node
+
+// NewService 是 NewNode 的旧名（保留兼容）。
+//
+// Deprecated: 用 NewNode。
+func NewService(cfg conf.FederationConfig, nodeName string) (*Node, error) {
+	return NewNode(cfg, nodeName)
+}
+
+// NewNode 构造并加载/生成节点身份密钥。仅在 federation.enabled 时调用；
 // 配置不合法返回错误，由 bootstrap 降级为非联邦模式（不影响单站功能）。
-func NewService(cfg conf.FederationConfig, nodeName string) (*Service, error) {
+func NewNode(cfg conf.FederationConfig, nodeName string) (*Node, error) {
 	if !cfg.Enabled {
 		return nil, errors.New("federation 未启用")
 	}
@@ -122,7 +143,7 @@ func NewService(cfg conf.FederationConfig, nodeName string) (*Service, error) {
 	for _, b := range bases {
 		clients = append(clients, newRegistryClient(b))
 	}
-	return &Service{
+	return &Node{
 		cfg:     cfg,
 		regURLs: bases,
 		nodeID:  hex.EncodeToString(priv.Public().(ed25519.PublicKey)),
@@ -135,17 +156,17 @@ func NewService(cfg conf.FederationConfig, nodeName string) (*Service, error) {
 }
 
 // Enabled 恒 true：实例仅在启用时被构造，handler 侧以 nil 判定未启用。
-func (s *Service) Enabled() bool { return true }
+func (s *Node) Enabled() bool { return true }
 
 // NodeID 本节点联邦身份（Ed25519 公钥 hex）。
-func (s *Service) NodeID() string { return s.nodeID }
+func (s *Node) NodeID() string { return s.nodeID }
 
 // Start 启动注册/心跳循环（daemon；与 core 其他后台任务同约定，随进程退出）。
-func (s *Service) Start() {
+func (s *Node) Start() {
 	go s.loop()
 }
 
-func (s *Service) loop() {
+func (s *Node) loop() {
 	// 单轮 panic 收编（RunSafeLabeled→全局 zap panic handler）：心跳循环炸掉=联邦注册静默掉线
 	async.RunSafeLabeled("federation-heartbeat", s.tick)
 	// 初始 timer 按首次 tick 结果:进程启动时 registry 尚不可用是常态
@@ -177,7 +198,7 @@ func (s *Service) loop() {
 // tick 心跳续租 + 全量重公告。多 registry: 写路径全推（主备各自持有全量
 // 公告，任一存活即服务解析）；≥1 成功视为健康。失败不致命：短退避重试，
 // registry 条目带 TTL 自动过期，最坏情况是联邦可见性延迟一个退避周期。
-func (s *Service) tick() {
+func (s *Node) tick() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	ok := 0
@@ -196,22 +217,22 @@ func (s *Service) tick() {
 	s.announceAll(ctx)
 }
 
-func (s *Service) setLastTickOK(ok bool) { s.tickOK.Store(ok) }
+func (s *Node) setLastTickOK(ok bool) { s.tickOK.Store(ok) }
 
-func (s *Service) lastTickOK() bool { return s.tickOK.Load() }
+func (s *Node) lastTickOK() bool { return s.tickOK.Load() }
 
 // Healthy 最近一次 registry 心跳是否成功（未启动/尚未跑首个周期时为 false）。
 // 供管理面（MCP federation_status 等）展示联邦健康度。
-func (s *Service) Healthy() bool { return s.lastTickOK() }
+func (s *Node) Healthy() bool { return s.lastTickOK() }
 
 // RegistryURLs 主备 registry 基址列表（配置逗号分隔项的副本）。
-func (s *Service) RegistryURLs() []string {
+func (s *Node) RegistryURLs() []string {
 	out := make([]string, len(s.regURLs))
 	copy(out, s.regURLs)
 	return out
 }
 
-func (s *Service) announceAll(ctx context.Context) {
+func (s *Node) announceAll(ctx context.Context) {
 	now := time.Now()
 	s.mu.Lock()
 	live := make(map[string]*entry, len(s.entries))
@@ -258,7 +279,7 @@ func (s *Service) announceAll(ctx context.Context) {
 // ShareCreated share 生命周期钩子：新分享公告到联邦（异步，registry 抖动
 // 不拖慢建分享；失败由心跳循环补发）。熵门槛不过则静默跳过——短数字码
 // 不出站，防 registry 侧在线枚举（安全模型见 p2p README）。
-func (s *Service) ShareCreated(code string, expiresAt *time.Time) {
+func (s *Node) ShareCreated(code string, expiresAt *time.Time) {
 	if !announceAllowed(code, s.cfg.AnnounceMinEntropyBits) {
 		return
 	}
@@ -297,7 +318,7 @@ func (s *Service) ShareCreated(code string, expiresAt *time.Time) {
 
 // ShareDeleted share 生命周期钩子：撤销公告（best-effort，索引立即移除；
 // 撤销失败时 registry 条目按公告 TTL 自动过期）。
-func (s *Service) ShareDeleted(code string) {
+func (s *Node) ShareDeleted(code string) {
 	hash := codeHash(code)
 	s.mu.Lock()
 	delete(s.entries, hash)
@@ -328,7 +349,7 @@ type ResolveInfo struct {
 // Resolve 转查 registry（读路径依次主→备,首个命中即返回）。
 // 全部未接入返回 (nil, nil)——调用方（resolve 代理 handler）以 available:false
 // 回给前端，不区分"未启用/不存在"（降探测面）。
-func (s *Service) Resolve(code string) (*ResolveInfo, error) {
+func (s *Node) Resolve(code string) (*ResolveInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, cl := range s.clients {
@@ -344,7 +365,7 @@ func (s *Service) Resolve(code string) (*ResolveInfo, error) {
 }
 
 // Stop 停止心跳循环并注销节点（best-effort；测试与优雅停机用）。
-func (s *Service) Stop() {
+func (s *Node) Stop() {
 	s.stopped.Do(func() { close(s.stop) })
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

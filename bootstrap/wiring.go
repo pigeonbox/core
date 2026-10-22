@@ -197,8 +197,8 @@ func initThriftIDLServices(database *gorm.DB) {
 	// RestoreAdminSettings 已 overlay DB 值）与 admin 后台热切换同一条路径。
 	// 初始化失败降级为非联邦模式；resolve 代理路由恒注册（customizedRegister），
 	// 未启用时由 handler 返回 available:false。
-	fedRT.init(config.App.Name, federation.NewService,
-		func(svc *federation.Service) {
+	fedRT.init(config.App.Name, federation.NewNode,
+		func(svc *federation.Node) {
 			shareSvc.SetFederationNotifier(svc)
 			// admin 删除路径独立于 share 域，须单独挂钩（管理端删除即联邦撤销）
 			adminApp.Default().SetFederationNotifier(svc)
