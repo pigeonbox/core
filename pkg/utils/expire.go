@@ -99,12 +99,28 @@ func GetMaxSaveSecondsCap() int64 {
 	return cfg.Upload.MaxSaveSecondsCap
 }
 
+// countExpireFallback 「按取件次数」样式的时间兜底：取件次数用尽即失效，
+// 另留 30 天上限（防止没人取件的分享长期占存储、也进不了按时间清理的 janitor）。
+//
+// 2026-10-22：此前 count 样式落进 CalculateExpireTime 的 default 分支 ⇒
+// **时间上限 = 次数**（"3 次" ⇒ 3 天后过期）。次数与时长是两件事，用户在
+// 界面选的是"对方只能取 N 次"，却拿到一个等于 N 的天数上限 ⇒ 既费解又不
+// 可控（想要"5 次、两个月内有效"根本做不到）。此处改为**与次数解耦**的固定兜底。
+const countExpireFallback = 30 * 24 * time.Hour
+
 // CalculateExpireTime 计算过期时间。
 // 全局上限钳制：upload.max_save_seconds_cap > 0 且时长超过上限时钳到上限
 // （此前该配置定义了但无任何调用方，形同虚设）。
 func CalculateExpireTime(expireValue int, expireStyle string) *time.Time {
 	if expireStyle == "forever" {
 		return nil
+	}
+
+	// 「按取件次数」：过期条件是次数用尽（见 CalculateExpireCount / 扣减链路），
+	// 时间上给一个与次数无关的兜底上限。
+	if expireStyle == "count" {
+		expireTime := time.Now().Add(countExpireFallback)
+		return &expireTime
 	}
 
 	// 修复：当不传参数时，设置默认值为1天

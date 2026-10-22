@@ -57,6 +57,25 @@ func TestCalculateExpireCount(t *testing.T) {
 	assert.Equal(t, -1, CalculateExpireCount("day", 5))
 }
 
+// TestCalculateExpireTime_CountDecoupled 钉住「按取件次数」的时间兜底与次数解耦。
+//
+// 2026-10-22：count 样式此前落进 CalculateExpireTime 的 default 分支 ⇒
+// **时间上限 = 次数**（"3 次" ⇒ 3 天后过期）。用户在界面选的是「对方只能取
+// N 次」，却拿到一个等于 N 的天数上限 ⇒ 想要"5 次、两个月内有效"根本做不到。
+// 现改为固定 30 天兜底（次数用尽即失效，另留上限防长期占存储）。
+func TestCalculateExpireTime_CountDecoupled(t *testing.T) {
+	now := time.Now()
+	tp := CalculateExpireTime(3, "count")
+	assert.NotNil(t, tp)
+	diff := tp.Sub(now)
+	// 与次数无关：3 次与 99 次拿到同一个兜底
+	assert.Greater(t, diff, 29*24*time.Hour)
+	assert.Less(t, diff, 31*24*time.Hour)
+	tp2 := CalculateExpireTime(99, "count")
+	assert.NotNil(t, tp2)
+	assert.InDelta(t, tp.Unix(), tp2.Unix(), 2)
+}
+
 // TestExpireStyleSingleSource 钉住「过期样式合法集合只有一处真相源」。
 //
 // 2026-10-22 实弹：setup_service.go 与 app/mcp/tools.go 各有一份独立白名单，
