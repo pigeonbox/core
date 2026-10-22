@@ -28,7 +28,6 @@ import (
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
-	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -77,6 +76,20 @@ func publicShareURL(ctx context.Context, code string) string {
 		configured = cfg.Server.BaseURL
 	}
 	return baseurl.SharePageURL(baseurl.Resolve(ctx, configured), code)
+}
+
+// chunkSharePageURL 分片通道对外下发的分享页链接。
+//
+// 形态契约（真相源 pkg/baseurl/shareurl.go，2026-10-23 锁死）：
+//
+//	{base}/#/share/{code} —— hash 路由，且**不带任何 query**
+//
+// 为什么不能带 query：令牌拼在 '#' 之后会落进 fragment ⇒ 服务端收不到
+// （'#' 之后不在请求行里），分享页前端也不读 route.query.token ⇒ 令牌
+// 形同虚设，却让集成方以为「带令牌就能直下」。要带令牌的直链走
+// /share/select 下发的 download_url。
+func chunkSharePageURL(ctx context.Context, code string) string {
+	return publicShareURL(ctx, code)
 }
 
 // ChunkUploadInit .
@@ -236,10 +249,14 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 					resp.NewTypedError(c, serr) // 配额/审核等 typed error 按业务码透传
 					return
 				}
-				fullShareURL := publicShareURL(ctx, shareResult.Code)
-				if tk := security.GenerateDownloadToken(shareResult.Code); tk != "" {
-					fullShareURL += "?token=" + tk
-				}
+				// 分享**页面**链接（hash 路由形态）。
+				//
+				// 不挂下载令牌：令牌拼在 hash 形态 URL 之后会落进 fragment ⇒
+				// 服务端收不到（'#' 之后不在请求行里），分享页前端也不读
+				// route.query.token ⇒ 令牌形同虚设，却让集成方以为「带令牌
+				// 就能直下」（2026-10-23 跨仓审计）。要带令牌的直链走
+				// /share/select 下发的 download_url。
+				fullShareURL := chunkSharePageURL(ctx, shareResult.Code)
 				c.JSON(consts.StatusOK, &chunkmodel.ChunkUploadInitResp{
 					Code:    0,
 					Message: "文件已存在，秒传成功",
@@ -841,14 +858,16 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		fmt.Printf("更新上传状态失败: %v\n", err)
 	}
 
-	// 生成分享URL（附下载令牌，security.download_token.enabled 时必需）。
+	// 生成分享URL（hash 路由的页面链接）。
 	// 回归：此前经 PublicBaseURL 兜底静态拼 server.host:port（更早恒用
 	// localhost:12345 常量）——0.0.0.0/localhost 链接对外均不可达，现与
 	// share service 同策略（请求来源动态推断，详见 publicShareURL）。
-	fullShareURL := publicShareURL(ctx, shareResult.Code)
-	if tk := security.GenerateDownloadToken(shareResult.Code); tk != "" {
-		fullShareURL += "?token=" + tk
-	}
+	//
+	// 不再附下载令牌：令牌拼在 hash 形态 URL 之后会落进 fragment，服务端
+	// 收不到、分享页前端也不读 route.query.token ⇒ 令牌形同虚设且误导
+	// （2026-10-23 跨仓审计）。要带令牌的直链走 /share/select 下发的
+	// download_url（与 /share/file/ 等其它上传路径口径一致）。
+	fullShareURL := chunkSharePageURL(ctx, shareResult.Code)
 
 	resp := &chunkmodel.ChunkUploadCompleteResp{
 		Code:    0,

@@ -476,11 +476,27 @@ func (s *Service) createShareRecord(ctx context.Context, meta *InitMeta, ownerIP
 		if err := s.pickupBinder.BindFilePath(ctx, shareCode, meta.ObjectKey, meta.FileSize, meta.Note); err != nil {
 			return "", "", "", "", fmt.Errorf("占位分享回填失败: %w", err)
 		}
-		return shareCode, "/share/select/?code=" + meta.PickupCode, "", meta.PickupCode, nil
+		// 分享页链接必须是 **hash 路由形态**（pkg/baseurl/shareurl.go）：
+		// 此前此处把 API 路径 "/share/select/?code=XXX" 当页面链接返回，前端
+		// 拿它做兜底转换 ⇒ origin/#/share/select/?code=XXX ⇒ vue-router 把
+		// "select" 当成分享码 ⇒ 打开就是「分享不存在」；且该形态让
+		// SplitSharePageURL 剥不出 base ⇒ presign complete 的 download_url
+		// 拼成 "/share/select/?code=XXX/share/download?code=…" 垃圾串
+		// （2026-10-23 跨仓审计）。这里给真正的分享页链接（8 位分享码）。
+		base := baseurl.Resolve(ctx, s.resolveBaseURL(ctx))
+		return shareCode,
+			baseurl.SharePageURL("", shareCode),
+			baseurl.SharePageURL(base, shareCode),
+			meta.PickupCode, nil
 	}
 	if s.shareService == nil {
 		// share service 未注入：返回 mock 数据（用于单测 / 未配置场景）
-		return "mock_" + meta.UploadID, "/share/mock", baseurl.Resolve(ctx, s.resolveBaseURL(ctx)) + "/share/mock", "", nil
+		// 形态同样走 hash 路由（真相源 pkg/baseurl/shareurl.go）。
+		mockCode := "mock_" + meta.UploadID
+		return mockCode,
+			baseurl.SharePageURL("", mockCode),
+			baseurl.SharePageURL(baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), mockCode),
+			"", nil
 	}
 
 	// 计算过期时间（与 share.ShareTextWithAuth 行为一致）

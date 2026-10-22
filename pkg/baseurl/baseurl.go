@@ -5,7 +5,7 @@
 // 显式配置 > 请求来源（bootstrap 中间件注入 ctx）> 空串。
 // 禁止回退 server.host——那是监听地址（0.0.0.0），拼进分享链接对外不可达
 // （2026-10-07 iStoreOS 真机事故：分享成功弹窗给出 http://0.0.0.0:12345/#/s/x）。
-// 双缺省时退相对路径（/share/CODE），浏览器侧可由 location.origin 补全。
+// 双缺省时退相对路径（/#/share/CODE），浏览器侧可由 location.origin 补全。
 package baseurl
 
 import "context"
