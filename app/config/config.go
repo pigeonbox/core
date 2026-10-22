@@ -11,6 +11,7 @@ import (
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/security"
+	"github.com/pigeonbox/core/pkg/utils"
 )
 
 // BaseConfig 站点基础信息段。指针语义与其余段一致：nil = 本次未提交，
@@ -143,6 +144,21 @@ func validateSystemConfig(cfg *SystemConfig) error {
 	}
 	if cfg.Transfer != nil && cfg.Transfer.ExpireDefault < 0 {
 		return errors.New("transfer.expire_default must be >= 0")
+	}
+	// upload.allowed_expire_styles 校验（2026-10-22）：合法样式集合以
+	// pkg/utils.AllExpireStyles 为准（唯一真相源）。
+	//
+	// 为什么要校验：管理台此前**没有**这个字段的编辑器（后端 API 接受、界面不暴露）
+	// ⇒ 管理员改不动；更糟的是写入非法样式后，bootstrap 的
+	// effectiveExpireStyles 会把它**静默过滤掉** ⇒ 管理员看到"保存成功"但设置
+	// 没有任何效果，且无任何提示。现在保存即报错并列出合法值。
+	if cfg.UploadEx != nil {
+		for _, st := range cfg.UploadEx.AllowedExpireStyles {
+			if !utils.IsValidExpireStyle(st) {
+				return fmt.Errorf("upload.allowed_expire_styles 含非法样式 %q（合法值: %s）",
+					st, strings.Join(utils.AllExpireStyles(), "/"))
+			}
+		}
 	}
 	if err := validateUserSettings(cfg.User); cfg.User != nil && err != nil {
 		return err
