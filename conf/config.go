@@ -279,7 +279,9 @@ type UploadConfig struct {
 	BlockedExtensions []string `mapstructure:"blocked_extensions" json:"blocked_extensions"`
 	// EnableMagicCheck 是否启用魔数校验（默认 true）。
 	EnableMagicCheck bool `mapstructure:"enable_magic_check" json:"enable_magic_check"`
-	// AllowedExpireStyles 允许用户选择的过期样式（minute/hour/day/week/month/year/forever）。
+	// AllowedExpireStyles 允许用户选择的过期样式
+	// （minute/hour/day/week/month/year/forever/count —— count =「按取件次数」，
+	// 2026-10-22 补入：此前注释漏了它，合法集合以 pkg/utils.AllExpireStyles 为准）。
 	// 空 = 全部允许；管理员可裁剪（对标上游白名单裁剪能力）。
 	AllowedExpireStyles []string `mapstructure:"allowed_expire_styles" json:"allowed_expire_styles"`
 	// MaxSaveSecondsCap 全局过期时间上限（秒），0 = 不限（对标上游 max_save_seconds）。
