@@ -860,19 +860,17 @@ func expireValue(v, def int) int {
 	return def
 }
 
-// expireStyles 允许的过期样式（与 share 域 utils.CalculateExpireTime 同口径）。
-var expireStyles = map[string]bool{
-	"minute": true, "hour": true, "day": true,
-	"week": true, "month": true, "year": true, "forever": true,
-}
-
 // normalizeExpireStyle 过期样式归一 + 枚举校验（空 → def；非法值 → 明确错误，
 // 让模型能据报错自纠，而不是被静默改写成 day）。
+//
+// 合法集合直接用 pkg/utils 的单一真相源（IsValidExpireStyle）——本文件原有一份
+// 独立白名单，漏了 "count"（按取件次数过期），而 share 域的合法集合里有
+// ⇒ 同一能力在 MCP 入口被判非法、网页入口可用（2026-10-22 审计）。
 func normalizeExpireStyle(style string) (string, error) {
 	if style == "" {
 		return "day", nil
 	}
-	if !expireStyles[style] {
+	if !utils.IsValidExpireStyle(style) {
 		return "", fmt.Errorf("expire_style 非法：%q（可用：minute/hour/day/week/month/year/forever）", style)
 	}
 	return style, nil

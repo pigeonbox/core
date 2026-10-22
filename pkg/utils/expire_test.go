@@ -56,3 +56,25 @@ func TestCalculateExpireCount(t *testing.T) {
 	assert.Equal(t, 5, CalculateExpireCount("count", 5))
 	assert.Equal(t, -1, CalculateExpireCount("day", 5))
 }
+
+// TestExpireStyleSingleSource 钉住「过期样式合法集合只有一处真相源」。
+//
+// 2026-10-22 实弹：setup_service.go 与 app/mcp/tools.go 各有一份独立白名单，
+// 两份都漏了 "count"（按取件次数过期），而本文件的 allExpireStyles 有
+// ⇒ 管理员/向导提交的 count 被**静默丢弃**，MCP 入口也把 count 判非法，
+// 而网页分享能用 —— 同一能力三个入口三种行为。
+//
+// 本测试把「count 必须被所有入口接受」钉成回归：任一入口再写独立白名单
+// 而漏项，本用例即红。
+func TestExpireStyleSingleSource(t *testing.T) {
+	// 全部合法样式（含 count）
+	for _, s := range []string{"minute", "hour", "day", "week", "month", "year", "forever", "count"} {
+		assert.Truef(t, IsValidExpireStyle(s), "合法样式 %q 被判非法（白名单与 pkg/utils 漂移）", s)
+	}
+	// 明确非法的（注意：判定会 ToLower，故 "COUNT" 合法）
+	for _, s := range []string{"", "second", "days", "weekday"} {
+		assert.Falsef(t, IsValidExpireStyle(s), "非法样式 %q 竟被接受", s)
+	}
+	// count 必须能算出次数（不是仅被接受）
+	assert.Equal(t, 3, CalculateExpireCount("count", 3))
+}

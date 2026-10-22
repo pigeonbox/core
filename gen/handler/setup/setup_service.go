@@ -14,6 +14,7 @@ import (
 	adminsvc "github.com/pigeonbox/core/app/admin"
 	setupservice "github.com/pigeonbox/core/app/setup"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/utils"
 )
 
 var setupService *setupservice.Service
@@ -145,13 +146,13 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 
 	// 政策段（2026-10-12 扩容，全部可选：不传 = 保持底稿 yaml/内置默认）
 	if sc.IsSetAllowedExpireStyles() {
-		valid := map[string]bool{
-			"minute": true, "hour": true, "day": true, "week": true,
-			"month": true, "year": true, "forever": true,
-		}
+		// 合法样式集合**复用 pkg/utils 的单一真相源**（allExpireStyles）。
+		// 2026-10-22：此处原有一份独立白名单，漏了 "count"（按取件次数过期），
+		// 而 pkg/utils 的合法集合里有 ⇒ 管理员/向导提交的 count 被**静默丢弃**
+		// （配置看起来没生效，且无任何提示）。两处白名单必须同源。
 		styles := make([]string, 0, len(sc.AllowedExpireStyles))
 		for _, st := range sc.AllowedExpireStyles {
-			if valid[st] {
+			if utils.IsValidExpireStyle(st) {
 				styles = append(styles, st)
 			}
 		}
