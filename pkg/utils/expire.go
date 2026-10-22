@@ -20,6 +20,26 @@ func IsValidExpireStyle(style string) bool {
 	return allExpireStyles[strings.ToLower(style)]
 }
 
+// AllExpireStyles 返回全部合法过期样式（**有序**，便于前端渲染与对账）。
+//
+// 2026-10-22：这是「过期样式合法集合」的**唯一真相源**。此前
+// setup_service.go / app/mcp/tools.go / bootstrap/handlers_public.go
+// 各有一份独立白名单，**三份都漏了 "count"**（按取件次数过期）⇒
+// 管理员勾了会被静默丢弃、前端根本选不到、MCP 判非法——同一能力四种行为。
+// 新增/调整样式只改这一处。
+func AllExpireStyles() []string {
+	out := make([]string, 0, len(allExpireStyles))
+	for _, s := range expireStyleOrder {
+		if allExpireStyles[s] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// expireStyleOrder 全集的规定顺序（与前端向导选项顺序一致）。
+var expireStyleOrder = []string{"minute", "hour", "day", "week", "month", "year", "forever", "count"}
+
 // CheckExpireStyleAllowed 过期样式白名单校验（对标上游"管理员裁剪过期样式"）。
 // upload.allowed_expire_styles 为空 = 全部允许；否则样式必须在列表内。
 // 空样式 = 未指定（历史语义，下游 CalculateExpireTime 会默认 day），放行。

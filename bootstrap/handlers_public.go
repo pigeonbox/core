@@ -20,6 +20,7 @@ import (
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/resp"
+	"github.com/pigeonbox/core/pkg/utils"
 	previewPkg "github.com/pigeonbox/core/preview"
 )
 
@@ -128,8 +129,14 @@ func textShareMaxBytesOrDefault() int64 {
 
 // effectiveExpireStyles 前端可选过期样式：管理台 AllowedExpireStyles 裁剪优先，
 // 空（未配置）回退全量——与 utils.CheckExpireStyleAllowed 的校验口径同源。
+//
+// 2026-10-22：此处的「全量」原是硬编码的 7 个（minute..forever），**漏了
+// "count"（按取件次数过期）** ⇒ 即便管理员在首启向导/管理台勾选了 count，
+// /api/config 下发给前端的可选项里也没有它 ⇒ **用户在界面上根本选不到**
+// 「对方只能取 N 次」这道护栏（而 share 域的 utils 一直认 count）。
+// 改为复用 pkg/utils 的合法集合（唯一真相源），三处白名单不再各写一份。
 func effectiveExpireStyles() []string {
-	all := []string{"minute", "hour", "day", "week", "month", "year", "forever"}
+	all := utils.AllExpireStyles()
 	allowed := config.Upload.AllowedExpireStyles
 	if len(allowed) == 0 {
 		return all

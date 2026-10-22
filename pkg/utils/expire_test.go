@@ -78,3 +78,21 @@ func TestExpireStyleSingleSource(t *testing.T) {
 	// count 必须能算出次数（不是仅被接受）
 	assert.Equal(t, 3, CalculateExpireCount("count", 3))
 }
+
+// TestAllExpireStylesIncludesCount 钉住「下发给前端的可选项集合含 count」。
+//
+// 2026-10-22 实弹：/api/config 的 expireStyle 来自
+// bootstrap.effectiveExpireStyles，那里的「全量」是硬编码的 7 个（不含 count）
+// ⇒ 即便管理员在首启向导/管理台勾了 count，前端也拿不到该选项
+// ⇒ 「对方只能取 N 次」这道护栏在界面上根本选不到（而 share 域一直认 count）。
+// 本用例锁住「下发给前端的全集必须含 count」。
+func TestAllExpireStylesIncludesCount(t *testing.T) {
+	all := AllExpireStyles()
+	assert.Contains(t, all, "count", "下发给前端的过期样式全集必须含 count（按取件次数过期）")
+	// 顺序稳定（前端按此渲染）
+	assert.Equal(t, []string{"minute", "hour", "day", "week", "month", "year", "forever", "count"}, all)
+	// 与校验口径一致：全集里的每个都必须通过 IsValidExpireStyle
+	for _, s := range all {
+		assert.Truef(t, IsValidExpireStyle(s), "全集里的 %q 竟未通过合法性校验", s)
+	}
+}
