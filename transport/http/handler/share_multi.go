@@ -21,6 +21,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/app/chunk"
 	shareService "github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
@@ -254,7 +255,7 @@ func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 		"data": map[string]interface{}{
 			"code":        shareResult.Code,
 			"url":         shareResult.FullShareURL,
-			"share_url":   fmt.Sprintf("/share/%s", shareResult.Code),
+			"share_url":   baseurl.SharePageURL("", shareResult.Code),
 			"file_count":  len(stored),
 			"pickup_code": shareResult.PickupCode,
 		},
@@ -442,7 +443,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 		"data": map[string]interface{}{
 			"code":        shareResult.Code,
 			"url":         shareResult.FullShareURL,
-			"share_url":   fmt.Sprintf("/share/%s", shareResult.Code),
+			"share_url":   baseurl.SharePageURL("", shareResult.Code),
 			"file_count":  len(bound),
 			"pickup_code": shareResult.PickupCode,
 		},

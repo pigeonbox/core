@@ -17,6 +17,7 @@ import (
 	presignmodel "github.com/pigeonbox/contracts/gen/presign"
 	presignapp "github.com/pigeonbox/core/app/presign"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -272,15 +273,22 @@ func Complete(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	meta := result.InitMeta
-	downloadURL := result.FullShareURL
-	if downloadURL == "" {
-		downloadURL = result.ShareURL
-	}
-	// 下载令牌：让上传者拿到带令牌的取件链接（security.download_token.enabled 时必需）
+	// 下载令牌要由**服务端**校验 ⇒ 直链必须是 query 形态（令牌落在 '#' 之后
+	// 服务端收不到）。页面链接是 hash 路由形态 {base}/#/share/{code}
+	//（pkg/baseurl/shareurl.go），不能当下载地址用——此前把令牌拼在页面链接上，
+	// 产出的既不是直链也不是能打开的页面（2026-10-22 定位）。
+	downloadToken := ""
 	if result.ShareCode != "" {
-		if tk := security.GenerateDownloadToken(result.ShareCode); tk != "" {
-			downloadURL = appendQueryParam(downloadURL, "token", tk)
-		}
+		downloadToken = security.GenerateDownloadToken(result.ShareCode)
+	}
+	pageURL := result.FullShareURL
+	if pageURL == "" {
+		pageURL = result.ShareURL
+	}
+	base := baseurl.SplitSharePageURL(pageURL, result.ShareCode)
+	downloadURL := ""
+	if result.ShareCode != "" {
+		downloadURL = baseurl.ShareDownloadURL(base, result.ShareCode, downloadToken)
 	}
 	resp.Success(c, &presignmodel.CompleteData{
 		Code:        result.ShareCode,
@@ -294,15 +302,6 @@ func Complete(ctx context.Context, c *app.RequestContext) {
 
 // clientIP 已迁移到 pkg/middleware.ClientIP（可信代理解析，防伪造 XFF 绕过限流）
 func clientIP(c *app.RequestContext) string { return middleware.ClientIP(c) }
-
-// appendQueryParam 向 URL 追加查询参数（处理既有 ? 与 &，容错相对路径）
-func appendQueryParam(rawURL, key, val string) string {
-	sep := "?"
-	if strings.Contains(rawURL, "?") {
-		sep = "&"
-	}
-	return rawURL + sep + key + "=" + val
-}
 
 // Abort .
 // @router /api/v1/presign/abort [POST]

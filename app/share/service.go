@@ -473,9 +473,10 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 		resp.Status = status // resp 是写库前快照，回填给调用方
 	}
 
-	// 生成分享 URL
-	resp.ShareURL = fmt.Sprintf("/share/%s", resp.Code)
-	resp.FullShareURL = fmt.Sprintf("%s/share/%s", baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), resp.Code)
+	// 生成分享 URL（页面链接 = hash 路由形态 {base}/#/share/{code}，
+	// 路径形态是死链——见 pkg/baseurl/shareurl.go 的形态约定）
+	resp.ShareURL = baseurl.SharePageURL("", resp.Code)
+	resp.FullShareURL = baseurl.SharePageURL(baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), resp.Code)
 
 	return resp, nil
 }
@@ -963,9 +964,10 @@ func (s *Service) modelToResp(ctx context.Context, fileCode *model.FileCode) *Sh
 		RequireAuth:  fileCode.RequireAuth,
 		Encrypted:    fileCode.Encrypted,
 		OwnerIP:      fileCode.OwnerIP,
-		// 分享链接三通道统一在此生成（文本通道尾部原有一份同值覆盖，保持无害）
-		ShareURL:     fmt.Sprintf("/share/%s", fileCode.Code),
-		FullShareURL: fmt.Sprintf("%s/share/%s", baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), fileCode.Code),
+		// 分享链接三通道统一在此生成（页面链接 = hash 路由形态，见 pkg/baseurl/shareurl.go；
+		// 文本通道尾部原有一份同值覆盖，保持无害）
+		ShareURL:     baseurl.SharePageURL("", fileCode.Code),
+		FullShareURL: baseurl.SharePageURL(baseurl.Resolve(ctx, s.resolveBaseURL(ctx)), fileCode.Code),
 	}
 }
 

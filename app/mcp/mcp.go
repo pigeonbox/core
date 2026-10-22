@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
@@ -422,10 +423,13 @@ func escapeMD(s string) string {
 	return strings.ReplaceAll(s, "]", "\\]")
 }
 
-// anonymousDownloadURL 由分享链接派生直链下载地址（fullURL 恒为 {base}/share/{code}
-// 构型，见 app/share；baseurl 空时 fullURL 为相对路径，TrimSuffix 依旧成立）。
+// anonymousDownloadURL 由分享页面链接派生匿名直链下载地址。
+//
+// 页面链接形态 = {base}/#/share/{code}（hash 路由，见 pkg/baseurl/shareurl.go）；
+// 兼容旧形态 {base}/share/{code}（存量链接/历史数据）。baseurl 为空时页面链接
+// 退相对形态，派生出的直链同样是相对路径（调用方按 origin 补全）。
 func anonymousDownloadURL(fullURL, code string) string {
-	base := strings.TrimSuffix(fullURL, "/share/"+code)
+	base := baseurl.SplitSharePageURL(fullURL, code)
 	return base + "/anonymous/download/" + code
 }
 

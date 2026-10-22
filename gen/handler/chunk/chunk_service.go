@@ -68,12 +68,15 @@ func getShareService() *shareService.Service {
 // publicShareURL 公开分享链接：显式 base_url > 请求来源动态推断（bootstrap
 // 中间件注入 ctx）> 相对路径。禁止 PublicBaseURL 的 server.host:port 兜底
 // ——监听地址(0.0.0.0)对外不可达（2026-10-07 fnOS 真机事故）。
+//
+// 形态 = hash 路由 {base}/#/share/{code}（前端是 createWebHashHistory，
+// 路径形态是死链——见 pkg/baseurl/shareurl.go）。
 func publicShareURL(ctx context.Context, code string) string {
 	var configured string
 	if cfg := conf.GetGlobalConfig(); cfg != nil {
 		configured = cfg.Server.BaseURL
 	}
-	return fmt.Sprintf("%s/share/%s", baseurl.Resolve(ctx, configured), code)
+	return baseurl.SharePageURL(baseurl.Resolve(ctx, configured), code)
 }
 
 // ChunkUploadInit .

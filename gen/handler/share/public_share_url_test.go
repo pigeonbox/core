@@ -4,6 +4,11 @@
 // PublicBaseURL 兜底静态拼 server.host:port——监听地址 0.0.0.0 对外不可达，
 // 分享成功弹窗给出 http://0.0.0.0:12345/... 链接。守卫：链接构造必须与
 // share service 同策略（显式 base_url > 请求来源 > 相对路径），绝不出现 0.0.0.0。
+//
+// 形态守卫（2026-10-22）：链接必须是 hash 路由 {base}/#/share/{code}——前端是
+// createWebHashHistory，路径形态 {base}/share/{code} 在浏览器里打不开
+// （docker 端 nginx 反代后端→后端无此路由→404；原生端 SPA 回退的相对资源
+// 路径解析错→白屏）。见 pkg/baseurl/shareurl.go。
 package share
 
 import (
@@ -21,15 +26,15 @@ func TestPublicShareURL(t *testing.T) {
 
 	// 1. base_url 显式配置最优先（ctx 无请求来源）
 	conf.SetGlobalConfig(&conf.AppConfiguration{Server: conf.ServerConfig{BaseURL: "https://s.example.com"}})
-	assert.Equal(t, "https://s.example.com/share/AbCdEfGh", publicShareURL(context.Background(), "AbCdEfGh"))
+	assert.Equal(t, "https://s.example.com/#/share/AbCdEfGh", publicShareURL(context.Background(), "AbCdEfGh"))
 
 	// 2. base_url 未配置时取请求来源（bootstrap 中间件写入 ctx）
 	conf.SetGlobalConfig(&conf.AppConfiguration{})
 	ctx := context.WithValue(context.Background(), baseurl.PublicBaseCtxKey, "http://10.10.30.253:12345") //nolint:staticcheck // SA1029:hertz RequestContext.Value 只解析 string 键
-	assert.Equal(t, "http://10.10.30.253:12345/share/AbCdEfGh", publicShareURL(ctx, "AbCdEfGh"))
+	assert.Equal(t, "http://10.10.30.253:12345/#/share/AbCdEfGh", publicShareURL(ctx, "AbCdEfGh"))
 
 	// 3. 双缺省退相对路径（前端可由 location.origin 补全）
-	assert.Equal(t, "/share/AbCdEfGh", publicShareURL(context.Background(), "AbCdEfGh"))
+	assert.Equal(t, "/#/share/AbCdEfGh", publicShareURL(context.Background(), "AbCdEfGh"))
 
 	// 4. 任何路径都不得出现监听地址 0.0.0.0
 	conf.SetGlobalConfig(&conf.AppConfiguration{Server: conf.ServerConfig{Host: "0.0.0.0", Port: 12345}})
