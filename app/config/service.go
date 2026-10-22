@@ -178,6 +178,15 @@ func (s *Service) loadPersistedConfig(ctx context.Context) (*SystemConfig, error
 			zap.String("data", rec.Data), zap.Error(err))
 		return nil, err
 	}
+	// 陈旧键提示（2026-10-22 Wave B'）：p2p.direct 段已随直传编排层退役，
+	// json 解码会静默忽略它 —— 只配了 p2p.direct.registry_url 的存量用户会
+	// 静默失去在线名录。故在读取持久化原文时检出并响亮提示（含具体键名与
+	// 改法），不静默吞掉。
+	if stale, ok := detectStaleP2PDirect(rec.Data); ok {
+		logger.Warn("检测到陈旧配置 p2p.direct.*，已忽略；请把 registry_url 改配到 p2p.federation.registry_url",
+			zap.Strings("stale_keys", stale.qualifiedKeys()),
+			zap.String("stale_registry_url", stale.RegistryURL))
+	}
 	// 历史记录没有 user 段：unmarshal 后是 nil/零值，回退 yaml，
 	// 否则升级后会意外把注册当成"关闭"（2026-10-03 假开关接线时补）
 	if cfg.User == nil {
@@ -298,15 +307,12 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 		newConfig.APIToken = s.config.APIToken
 	}
 	// P2P 段同规则（2026-10-14 对称节点 P1：局部保存不冲掉联邦配置）。
-	// 子段 nil 保留下沉一层（联邦/直传同挂 p2p 下，互不冲——P2a 起）。
+	// 子段 nil 保留下沉一层（Wave B' 后 p2p 下只剩联邦子段）。
 	if newConfig.P2P == nil && s.config != nil {
 		newConfig.P2P = s.config.P2P
 	} else if newConfig.P2P != nil && s.config != nil && s.config.P2P != nil {
 		if newConfig.P2P.Federation == nil {
 			newConfig.P2P.Federation = s.config.P2P.Federation
-		}
-		if newConfig.P2P.Direct == nil {
-			newConfig.P2P.Direct = s.config.P2P.Direct
 		}
 	}
 	s.configMu.RUnlock()

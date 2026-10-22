@@ -5,10 +5,8 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/pigeonbox/core/conf"
@@ -213,55 +211,18 @@ func validateSystemConfig(cfg *SystemConfig) error {
 			return errors.New("p2p.federation.announce_min_entropy_bits out of range (0-256)")
 		}
 	}
-	// p2p.direct 子段校验（P2a）：roots 绝对路径+禁 "/"（与 local_import 同策略）
-	if cfg.P2P != nil && cfg.P2P.Direct != nil {
-		d := cfg.P2P.Direct
-		for _, root := range d.SendRoots {
-			root = strings.TrimSpace(root)
-			if root == "" {
-				continue
-			}
-			if !filepath.IsAbs(root) {
-				return fmt.Errorf("p2p.direct.send_roots 需为绝对路径: %s", root)
-			}
-			if filepath.Clean(root) == "/" {
-				return errors.New("p2p.direct.send_roots 禁止配置根目录 /")
-			}
-		}
-		if d.RecvDir != "" && !filepath.IsAbs(d.RecvDir) {
-			return fmt.Errorf("p2p.direct.recv_dir 需为绝对路径: %s", d.RecvDir)
-		}
-		if d.MaxTaskBytes < 0 || d.InboxQuotaBytes < 0 {
-			return errors.New("p2p.direct 配额参数必须 >= 0")
-		}
-		if u := strings.TrimSpace(d.RegistryURL); u != "" {
-			if err := security.ValidateEndpointURL(u); err != nil {
-				return fmt.Errorf("p2p.direct.registry_url 校验失败: %w", err)
-			}
-		}
-		// relay_addr = host:port（p2pc --relay 形态）；形态校验防误填 URL 导致拨号失败
-		// （SplitHostPort 对 "http://evil.com/" 能拆出非空 port，必须再断言端口数字）
-		if r := strings.TrimSpace(d.RelayAddr); r != "" {
-			host, port, err := net.SplitHostPort(r)
-			if err != nil || host == "" || port == "" {
-				return fmt.Errorf("p2p.direct.relay_addr 需为 host:port 形态: %s", r)
-			}
-			pn, perr := strconv.Atoi(port)
-			if perr != nil || pn < 1 || pn > 65535 {
-				return fmt.Errorf("p2p.direct.relay_addr 端口需为 1-65535 数字: %s", r)
-			}
-		}
-	}
 	return nil
 }
 
 // P2PSection P2P 能力配置段（spec 2026-10-14 §5）。
+//
+// 2026-10-22 Wave B'：直传段（direct）随 Box 侧直传编排层整体退役 —— 本段
+// 只剩联邦段。存量 DB 里若仍有 p2p.direct.*（尤其 registry_url），该段被
+// **忽略**并在启动日志响亮提示（见 stale.go）；注册中心请改配
+// p2p.federation.registry_url。
 type P2PSection struct {
 	// Federation 联邦控制面（overlay → conf.Federation；nil = 保留现状）
 	Federation *conf.FederationConfig `json:"federation,omitempty"`
-	// Direct 设备直传数据面（p2pc；nil = 保留现状；P2a 落地；类型归 conf 层——
-	// p2px 域消费须遵守跨域依赖白名单，不入 app 域）
-	Direct *conf.P2PDirectConfig `json:"direct,omitempty"`
 }
 
 // localImportOfUploadEx UploadEx 段内嵌的 local_import（同一配置两种提交形状）

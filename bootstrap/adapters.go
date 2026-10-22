@@ -7,16 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
-
-	"github.com/oekit/concurrency/retry"
 
 	adminApp "github.com/pigeonbox/core/app/admin"
 	configApp "github.com/pigeonbox/core/app/config"
 	federationApp "github.com/pigeonbox/core/app/federation"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
-	p2pxApp "github.com/pigeonbox/core/app/p2px"
 	presignApp "github.com/pigeonbox/core/app/presign"
 	previewApp "github.com/pigeonbox/core/app/preview"
 	requestApp "github.com/pigeonbox/core/app/request"
@@ -212,98 +208,19 @@ func (a mcpFederationAdapter) Resolve(code string) (*mcpApp.FederationResolve, e
 	}, nil
 }
 
-// mcpP2pAdapter mcp.P2pAPI 的 p2px 域适配器（P2b 薄工具，spec §9）。
-// svc 为 nil（未装配）时上报"未装配"事实而非 panic。
+// mcpP2pAdapter mcp.P2pAPI 的联邦域适配器（Wave B' 后只剩联邦三工具：
+// 在线名录 / 待收邀请 / 认领信封）。
 //
-// 2026-10-22 Wave B' 准备：**联邦三个工具（p2p_peers / p2p_invites / p2p_accept）
-// 不再经直传包取实现** —— 此前它们调 svc.ListInvites/DirectoryPeers/TakeInvite，
-// 把联邦实现挂在直传服务上，删直传包就会连带删联邦工具。
-// p2p_accept 仍走 svc（它的第二步要 spawn p2pc 收件，语义上属直传）。
+// 2026-10-22 Wave B'：直传四工具（status/tasks/send/recv）随 Box 侧直传
+// 编排层整体退役；p2p_accept 退化为**纯信封**（出箱 + 返回信封），与 HTTP
+// 面 invites/accept 同语义 —— 不再 spawn p2pc。
 type mcpP2pAdapter struct {
-	svc       *p2pxApp.Service
 	mailbox   *federationApp.InviteMailbox
 	directory *federationApp.PeerDirectory
 }
 
-func (a mcpP2pAdapter) P2pStatus(ctx context.Context) (mcpApp.P2pStatus, error) {
-	if a.svc == nil {
-		return mcpApp.P2pStatus{}, errors.New("直传 supervisor 未装配")
-	}
-	st, err := a.svc.Status(ctx)
-	if err != nil {
-		return mcpApp.P2pStatus{}, err
-	}
-	return mcpApp.P2pStatus{
-		Available: st.Available, Enabled: st.Enabled, DeployAllowed: st.DeployAllowed,
-		BinaryPath: st.BinaryPath, RegistryURL: st.RegistryURL, RecvDir: st.RecvDir,
-		InboxUsed: st.InboxUsed, InboxQuota: st.InboxQuota,
-	}, nil
-}
-
-func (a mcpP2pAdapter) P2pTasks(ctx context.Context) ([]mcpApp.P2pTaskInfo, error) {
-	if a.svc == nil {
-		return nil, errors.New("直传 supervisor 未装配")
-	}
-	tasks := a.svc.List(ctx)
-	out := make([]mcpApp.P2pTaskInfo, 0, len(tasks))
-	for _, t := range tasks {
-		out = append(out, mcpApp.P2pTaskInfo{
-			ID: t.ID, Kind: t.Kind, State: t.State, Code: t.Code,
-			BytesDone: t.BytesDone, Error: t.Error,
-			CreatedAt:  t.CreatedAt.Format(time.RFC3339),
-			FinishedAt: finishedTimeStr(t.FinishedAt),
-		})
-	}
-	return out, nil
-}
-
-// P2pSend 发起发送（口令由 p2pc stdout 异步解析——有界短轮询等口令，
-// 典型毫秒级；超时则返回空码，MCP 侧提示走 p2p_tasks）。
-func (a mcpP2pAdapter) P2pSend(ctx context.Context, paths []string, inviteTo, inviteNote string) (mcpApp.P2pTaskInfo, error) {
-	if a.svc == nil {
-		return mcpApp.P2pTaskInfo{}, errors.New("直传 supervisor 未装配")
-	}
-	opts := []p2pxApp.SendOption{}
-	if strings.TrimSpace(inviteTo) != "" {
-		opts = append(opts, p2pxApp.WithInvite(inviteTo, inviteNote))
-	}
-	task, err := a.svc.Send(ctx, paths, opts...)
-	if err != nil {
-		return mcpApp.P2pTaskInfo{}, err
-	}
-	// 等配对出码再回显：Poll 每 100ms 探一次快照，500ms 超时降级返回当前态
-	//（同旧 5×100ms 循环；换 retry.Poll 收益=等待期尊重 ctx 取消，旧 sleep 硬等）。
-	// Poll 错误（超时/取消）均不透传：任务本身异步继续，回显当前快照更有用。
-	var snap p2pxApp.TaskSnapshot
-	_ = retry.Poll(ctx, 100*time.Millisecond, 500*time.Millisecond, func() (bool, error) {
-		snap = task.Snapshot()
-		return snap.Code != "", nil
-	})
-	return mcpApp.P2pTaskInfo{
-		ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
-		CreatedAt: snap.CreatedAt.Format(time.RFC3339),
-	}, nil
-}
-
-func (a mcpP2pAdapter) P2pRecv(ctx context.Context, code string) (mcpApp.P2pTaskInfo, error) {
-	if a.svc == nil {
-		return mcpApp.P2pTaskInfo{}, errors.New("直传 supervisor 未装配")
-	}
-	task, err := a.svc.Recv(ctx, code)
-	if err != nil {
-		return mcpApp.P2pTaskInfo{}, err
-	}
-	snap := task.Snapshot()
-	return mcpApp.P2pTaskInfo{
-		ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
-		CreatedAt: snap.CreatedAt.Format(time.RFC3339),
-	}, nil
-}
-
-// P2pPeers 在线名录透传（p2px DirectoryPeers；零敏感）。
+// P2pPeers 在线名录透传（联邦节点名录；零敏感）。
 func (a mcpP2pAdapter) P2pPeers(ctx context.Context) ([]mcpApp.P2pPeerInfo, error) {
-	// 不再判 svc==nil：本工具已与直传解耦（只看联邦名录），
-	// 直传没装配不该挡住联邦名录查询。
 	if a.directory == nil {
 		return nil, errors.New("联邦名录未装配")
 	}
@@ -321,9 +238,8 @@ func (a mcpP2pAdapter) P2pPeers(ctx context.Context) ([]mcpApp.P2pPeerInfo, erro
 	return out, nil
 }
 
-// P2pInvites 待收邀请箱快照（P3 收件箱）。
+// P2pInvites 待收邀请箱快照（联邦收件箱）。
 func (a mcpP2pAdapter) P2pInvites(ctx context.Context) ([]mcpApp.P2pInviteInfo, error) {
-	// 同 P2pPeers：与直传解耦，只看联邦收件箱。
 	if a.mailbox == nil {
 		return nil, errors.New("联邦收件箱未装配")
 	}
@@ -338,36 +254,22 @@ func (a mcpP2pAdapter) P2pInvites(ctx context.Context) ([]mcpApp.P2pInviteInfo, 
 	return out, nil
 }
 
-// P2pAccept 认领邀请并立即发起接收（与 Web 待收面板 accept 同链路）。
-func (a mcpP2pAdapter) P2pAccept(ctx context.Context, inviteID string) (mcpApp.P2pTaskInfo, error) {
-	if a.svc == nil {
-		return mcpApp.P2pTaskInfo{}, errors.New("直传 supervisor 未装配")
+// P2pAccept 认领邀请（纯信封：出箱 + 返回信封；与 HTTP 面 invites/accept 同语义）。
+//
+// 失败即出箱失败——不发起任何直传运行时，故无需回箱（回箱是 p2pc 收件失败
+// 时的补偿动作，Wave B' 后已无直传收件步骤）。
+func (a mcpP2pAdapter) P2pAccept(ctx context.Context, inviteID string) (mcpApp.P2pInviteInfo, error) {
+	if a.mailbox == nil {
+		return mcpApp.P2pInviteInfo{}, errors.New("联邦收件箱未装配")
 	}
-	inv, err := a.svc.TakeInvite(inviteID)
+	inv, err := a.mailbox.TakeInvite(inviteID)
 	if err != nil {
-		return mcpApp.P2pTaskInfo{}, err
+		return mcpApp.P2pInviteInfo{}, err
 	}
-	task, err := a.svc.Recv(ctx, inv.Code)
-	if err != nil {
-		// 认领已出箱但接收发起失败:邀请回箱(重试不丢码)
-		if _, re := a.svc.AddInvite(inv.Code, inv.FromName, inv.Note); re != nil {
-			return mcpApp.P2pTaskInfo{}, fmt.Errorf("接收发起失败且邀请回箱失败(%v): %w", re, err)
-		}
-		return mcpApp.P2pTaskInfo{}, err
-	}
-	snap := task.Snapshot()
-	return mcpApp.P2pTaskInfo{
-		ID: snap.ID, Kind: snap.Kind, State: snap.State, Code: snap.Code,
-		CreatedAt: snap.CreatedAt.Format(time.RFC3339),
+	return mcpApp.P2pInviteInfo{
+		ID: inv.ID, Code: inv.Code, FromName: inv.FromName,
+		Note: inv.Note, ExpiresIn: a.mailbox.ExpiresIn(inv),
 	}, nil
-}
-
-// finishedTimeStr 终态时间字符串（零值 → 空串）。
-func finishedTimeStr(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return t.Format(time.RFC3339)
 }
 
 // requestShareGateway request.ShareGateway 的 share 域适配器（访客投递 → 归属分享）。

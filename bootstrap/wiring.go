@@ -6,7 +6,6 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -23,7 +22,6 @@ import (
 	moderationApp "github.com/pigeonbox/core/app/moderation"
 	notifyAppService "github.com/pigeonbox/core/app/notify"
 	oidcApp "github.com/pigeonbox/core/app/oidc"
-	p2pxApp "github.com/pigeonbox/core/app/p2px"
 	presignApp "github.com/pigeonbox/core/app/presign"
 	previewApp "github.com/pigeonbox/core/app/preview"
 	requestApp "github.com/pigeonbox/core/app/request"
@@ -231,71 +229,41 @@ func initThriftIDLServices(database *gorm.DB) {
 	// 构造提升到装配层）
 	//
 	// 提升原因：此前两个实例在 p2px.NewService 内部构造——删掉直传编排层时联邦
-	// 信封能力会跟着一起消失（Wave B 的坑）。现在由装配层独立持有，直传包只
-	// 消费（setter 注入，见 2.4.3）。
+	// 信封能力会跟着一起消失（Wave B 的坑）。现在由装配层独立持有；Wave B'
+	// 直传编排层整体退役后，这两个实例是联邦面的**唯一**持有者。
 	//
 	// 无条件构造：收件箱/名录与「联邦运行时是否启用」无关——收件箱是跨实例交接
 	// 的凭证与状态机（公开收件端点恒注册），名录可见性只取决于 registry 可达。
 	inviteMailbox := federation.NewInviteMailbox(nil)
 	peerDirectory := federation.NewPeerDirectory(
-		// 注册中心基址来源（2026-10-22 L4 语义纠偏）：联邦段优先——那才是
-		// 联邦注册中心（p2pd）的真相源，与 federation 运行时的注册/心跳同一
-		// 注册中心；直传段（p2p.direct.registry_url）是搬迁前的历史来源，作
-		// 存量兼容兜底（只配了直传段的存量用户不会失去名录，后续可移除）。
+		// 注册中心基址来源（2026-10-22 L4 语义纠偏 + Wave B' 收口）：联邦段
+		// 是联邦注册中心（p2pd）的**唯一**真相源，与联邦运行时的注册/心跳同一
+		// 注册中心。
+		//
+		// 直传段（p2p.direct.registry_url）是搬迁前的历史来源，Wave B' 起该段
+		// 已整体退役（存量值被忽略并有启动提示）——故不再作兜底。
 		//
 		// 读 SystemConfig.p2p.federation 而非全局 conf.Federation：前者是
 		// overlay（DB 覆盖 yaml）+ env 恒覆盖之后的**生效值镜像**（与联邦
 		// 运行时所用的 config.Federation 同源），且由配置域加锁保护——
 		// 直读全局 conf 会与 overlay 的原地改写构成数据竞争。
-		federation.ChainRegistryProvider(
-			func(ctx context.Context) (string, bool) {
-				cfg, err := configApp.Default().GetConfig(ctx)
-				if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Federation == nil {
-					return "", false
-				}
-				u := strings.TrimSpace(cfg.P2P.Federation.RegistryURL)
-				if u == "" {
-					return "", false // 联邦段无值 → 顺延到直传段（存量兼容）
-				}
-				return u, true
-			},
-			func(ctx context.Context) (string, bool) {
-				cfg, err := configApp.Default().GetConfig(ctx)
-				if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Direct == nil {
-					return "", false
-				}
-				return cfg.P2P.Direct.RegistryURL, true
-			},
-		))
-
-	// 2.4.3 设备直传 supervisor（P2a，spec 2026-10-14 §7）：数据面=spawn p2pc
-	// 子进程（控制面/数据面分离原则），standalone 专属；配置读 SystemConfig
-	// p2p.direct（DB 热生效）。构造注入 standalone 判定（棘轮规则 8）。
-	dataDir := filepath.Dir(config.Database.DBName)
-	if dataDir == "" || dataDir == "." {
-		dataDir = "data"
-	}
-	p2pxSvcInstance = p2pxApp.NewService(p2pxApp.Deps{
-		Standalone: func() bool { return config.IsStandalone() },
-		DataDir:    dataDir,
-		NodeName:   config.App.Name, // 名录显示名（信箱 watcher --name；与 federation 同源）
-		GetDirect: func(ctx context.Context) (conf.P2PDirectConfig, bool) {
+		func(ctx context.Context) (string, bool) {
 			cfg, err := configApp.Default().GetConfig(ctx)
-			if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Direct == nil {
-				return conf.P2PDirectConfig{}, false
+			if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Federation == nil {
+				return "", false
 			}
-			return *cfg.P2P.Direct, true
-		},
-	})
-	// 联邦信封管理实例注入直传包（联邦域构造、直传包只消费）：直传编排层退场
-	// 时这两个实例仍由装配层独立持有，联邦能力不受影响。
-	p2pxSvcInstance.SetInviteMailbox(inviteMailbox)
-	p2pxSvcInstance.SetPeerDirectory(peerDirectory)
-	p2pGenHandler.SetService(p2pxSvcInstance)
-	// Wave B' 准备（2026-10-22）：纯联邦端点（invites / invite-push / directory）
-	// 直接取联邦域实例，**不再经直传包** —— 删直传包时这三个端点不受影响。
+			u := strings.TrimSpace(cfg.P2P.Federation.RegistryURL)
+			if u == "" {
+				return "", false
+			}
+			return u, true
+		})
+
+	// 2.4.3 Wave B'（2026-10-22）：纯联邦端点（invites / invites/accept /
+	// invite-push / directory）直接取联邦域实例，**不再经直传包** —— 删直传包
+	// 时联邦不受影响。设备直传 supervisor 本身已整体退役（Box 侧不再编排直传，
+	// 直传由独立应用 PigeonBeam 承担）。
 	p2pGenHandler.SetFederationServices(inviteMailbox, peerDirectory)
-	p2pGenHandler.SetShareService(shareSvc)
 	p2pGenHandler.SetInviteNotifier(notifySvcInstance.EmitP2pInvite)
 	p2pGenHandler.SetAuditWriter(adminApp.Default().LogOperation)
 
@@ -386,9 +354,9 @@ func initThriftIDLServices(database *gorm.DB) {
 		mcpService.SetShareService(mcpShareAdapter{shareSvc})
 		mcpService.SetStorageService(bootstrapStorage)
 		mcpService.SetFederationService(mcpFederationAdapter{svc: fedRT.instance()})
-		// 联邦三工具走联邦域实例（与直传解耦）；p2p_accept 仍走直传（要 spawn p2pc）
+		// 联邦三工具走联邦域实例（在线名录/待收邀请/认领信封）；直传工具已随
+		// Wave B' 整体退役（Box 侧不再编排直传）。
 		mcpService.SetP2pService(mcpP2pAdapter{
-			svc:       p2pxSvcInstance,
 			mailbox:   inviteMailbox,
 			directory: peerDirectory,
 		})
@@ -426,9 +394,6 @@ var notifySvcInstance *notifyAppService.Service
 
 // requestSvcInstance 寄件码服务实例（initThriftIDLServices 装配）
 var requestSvcInstance *requestApp.Service
-
-// p2pxSvcInstance 设备直传 supervisor 实例（P2a；Cleanup 停机收口）
-var p2pxSvcInstance *p2pxApp.Service
 
 // bootstrapBaseURL 对外基础地址（server.base_url 优先，否则 host:port）
 func bootstrapBaseURL() string {

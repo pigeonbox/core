@@ -136,8 +136,7 @@ func TestUpdateConfigP2PFederationHookError(t *testing.T) {
 }
 
 // TestUpdateConfigP2PSubsectionPreserve {"p2p":{}}（federation 子段 nil）不得冲掉
-// 联邦配置——P2 直传段将来同挂 p2p 下，子段互冲是定时炸弹（同顶层指针段语义
-// 下沉一层）。
+// 联邦配置——子段互冲是定时炸弹（同顶层指针段语义下沉一层）。
 func TestUpdateConfigP2PSubsectionPreserve(t *testing.T) {
 	svc := newTestConfigService(t)
 	ctx := context.Background()
@@ -155,66 +154,37 @@ func TestUpdateConfigP2PSubsectionPreserve(t *testing.T) {
 	require.Equal(t, "http://p2p:12346", got.P2P.Federation.RegistryURL)
 }
 
-// TestUpdateConfigP2PDirectSubsection p2p.direct 子段：保存直传参数不冲掉
-// federation（子段 nil 保留）；校验拒绝坏值（相对路径/根目录/负配额）。
-func TestUpdateConfigP2PDirectSubsection(t *testing.T) {
-	svc := newTestConfigService(t)
-	ctx := context.Background()
-	withGlobalConf(t)
+// TestDetectStaleP2PDirect 陈旧 p2p.direct 段检出（Wave B' 迁移语义）：
+// 段存在即检出并带出具体键名与 registry_url 值；无 direct 段 = 未检出。
+//
+// 为什么要检出：direct 段已从 SystemConfig 删除，json 解码**静默忽略**未知键
+// —— 只配了 p2p.direct.registry_url 的存量用户会静默失去在线名录（注册中心
+// 真相源只剩 p2p.federation.registry_url）。
+func TestDetectStaleP2PDirect(t *testing.T) {
+	// 1) 无 direct 段 → 不检出
+	_, ok := detectStaleP2PDirect(`{"p2p":{"federation":{"enabled":true}}}`)
+	require.False(t, ok, "无 p2p.direct 段不应检出")
 
-	// 先存联邦
-	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Federation: &conf.FederationConfig{Enabled: true, RegistryURL: "http://p2p:12346"}},
-	}))
-	// 再存直传（不带 federation）→ 联邦保留
-	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{Enabled: true, SendRoots: []string{"/data/in"}, RecvDir: "/data/inbox"}},
-	}))
-	got, err := svc.GetConfig(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, got.P2P.Federation)
-	require.True(t, got.P2P.Federation.Enabled, "直传保存不得冲掉 federation 子段")
-	require.NotNil(t, got.P2P.Direct)
-	require.True(t, got.P2P.Direct.Enabled)
-	require.Equal(t, []string{"/data/in"}, got.P2P.Direct.SendRoots)
+	// 2) 无 p2p 段 → 不检出
+	_, ok = detectStaleP2PDirect(`{"base":{"name":"x"}}`)
+	require.False(t, ok, "无 p2p 段不应检出")
 
-	// 反向：存联邦不冲直传
-	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Federation: &conf.FederationConfig{Enabled: false}},
-	}))
-	got, err = svc.GetConfig(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, got.P2P.Direct)
-	require.True(t, got.P2P.Direct.Enabled, "联邦保存不得冲掉 direct 子段")
+	// 3) direct 段存在（尤其 registry_url 非空）→ 检出，键名与值齐
+	stale, ok := detectStaleP2PDirect(
+		`{"p2p":{"direct":{"enabled":true,"registry_url":"http://p2p:56788","send_roots":["/data"]}}}`)
+	require.True(t, ok, "存量 direct 段必须被检出")
+	require.Equal(t, "http://p2p:56788", stale.RegistryURL)
+	require.Equal(t, []string{"enabled", "registry_url", "send_roots"}, stale.Keys)
+	require.Equal(t,
+		[]string{"p2p.direct.enabled", "p2p.direct.registry_url", "p2p.direct.send_roots"},
+		stale.qualifiedKeys())
 
-	// 校验：send_roots 必须绝对路径且禁 "/"
-	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{SendRoots: []string{"relative/path"}}},
-	}))
-	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{SendRoots: []string{"/"}}},
-	}))
-	// 校验：配额非负
-	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{MaxTaskBytes: -1}},
-	}))
-	// 校验：recv_dir 绝对路径
-	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RecvDir: "inbox"}},
-	}))
-}
+	// 4) 非法 JSON → 不检出（不炸）
+	_, ok = detectStaleP2PDirect(`not-json`)
+	require.False(t, ok)
 
-// TestP2PDirectRelayAddrValidation relay_addr 必须 host:port 形态（评审加固）。
-func TestP2PDirectRelayAddrValidation(t *testing.T) {
-	svc := newTestConfigService(t)
-	ctx := context.Background()
-	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RelayAddr: "http://evil.com/"}},
-	}))
-	require.Error(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RelayAddr: "noport"}},
-	}))
-	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
-		P2P: &P2PSection{Direct: &conf.P2PDirectConfig{RelayAddr: "relay.example.com:56787"}},
-	}))
+	// 5) 段存在但 registry_url 为空串 → 仍检出（键名在，值为空）
+	stale, ok = detectStaleP2PDirect(`{"p2p":{"direct":{"registry_url":""}}}`)
+	require.True(t, ok)
+	require.Equal(t, "", stale.RegistryURL)
 }

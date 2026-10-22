@@ -8,7 +8,8 @@ import (
 
 // TestEffective 归一语义：多主备取首个 → 去空白 → 留空回填官方公共。
 //
-// 搬迁前 app/p2px 与 app/federation 各存一份同值副本，此处固化为单源断言。
+// 搬迁前 app/p2px 与 app/federation 各存一份同值副本，此处固化为单源断言；
+// Wave B' 起直传包退役，消费方只剩联邦域。
 func TestEffective(t *testing.T) {
 	// 留空 = 官方公共注册中心
 	assert.Equal(t, DefaultPublic, Effective(""))

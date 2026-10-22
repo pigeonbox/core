@@ -27,7 +27,7 @@ func PostP2PInvite(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: errcode.CodeInvalidParam, Message: "请求体无效"})
 		return
 	}
-	inv, err := getP2px().AddInvite(req.GetCode(), req.GetFromName(), req.GetNote())
+	inv, err := getFederationMailbox().AddInvite(req.GetCode(), req.GetFromName(), req.GetNote())
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
 		return

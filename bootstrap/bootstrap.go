@@ -391,13 +391,7 @@ func Cleanup() {
 		fedRT.stop()
 		return nil
 	}, 5*time.Second)
-	// 直传子进程先于数据库停：杀在途 p2pc 进程组 + 停配额监控（P2a）
-	mgr.Add("p2px", func(context.Context) error {
-		if p2pxSvcInstance != nil {
-			return p2pxSvcInstance.Stop()
-		}
-		return nil
-	}, 5*time.Second)
+	// 直传子进程的停机收口随 Wave B' 一并退役（Box 侧不再 spawn p2pc）。
 	mgr.Add("database", func(context.Context) error {
 		if database != nil {
 			return db.Close()

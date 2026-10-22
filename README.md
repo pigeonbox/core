@@ -19,7 +19,7 @@ PigeonBox 业务核心库:18 个域服务(含 config 系统配置中心) + 数�
 | 目录 | 说明 |
 |------|------|
 | `bootstrap/` | 库入口:`Bootstrap(configPath)` 拉起全部业务,返回 `*server.Hertz` |
-| `app/` | 18 个域服务:share / chunk / anonymous / presign / admin / config / user / notify / qrcode / setup / storage / federation / mcp / moderation / oidc / preview / request / p2px(模块间近零耦合;跨域引用仅 admin→config 与 share→moderation 钩子窄接口,原 presign→share 已消解) |
+| `app/` | 17 个域服务:share / chunk / anonymous / presign / admin / config / user / notify / qrcode / setup / storage / federation / mcp / moderation / oidc / preview / request(模块间近零耦合;跨域引用仅 admin→config 与 share→moderation 钩子窄接口,原 presign→share 已消解;2026-10-22 Wave B' 删 p2px 设备直传编排域) |
 | `repo/` | 数据访问:db(gorm dao/model)、redis、external;dao 构造**必填 `*gorm.DB`** 依赖注入,全局回退已退役 |
 | `storage/` | 存储抽象(OpenDAL 多后端) |
 | `pkg/` | 12 包横切设施:auth / baseurl / errors / gate / logger / memkv / metrics / middleware / resp / security / transfer / utils |
@@ -28,16 +28,18 @@ PigeonBox 业务核心库:18 个域服务(含 config 系统配置中心) + 数�
 | `conf/` | 配置结构定义 |
 | `gen/` | thrift 生成的 handler / router(模型类型在 [`pigeonbox/contracts`](https://github.com/pigeonbox/contracts)) |
 
-> **p2px(P2P 设备直传 supervisor)**:standalone 部署模式专属,进程内调度设备直传任务,
-> 数据面 spawn `p2pc` 子进程(PAKE/打洞/QUIC 直传)完成传输;与 federation 同约束——
-> public/admin 拆分模式下不可用。管理面 `/admin/p2p/*` 由 contracts
-> `AdminP2PService`(`idl/p2p.thrift`)定义,经 IDL gen 链接入;v0.20.0 起由六端点
-> 扩至**九端点**(新增 invites 待收列表/accept 认领/invite-push 推送),并支持联邦
-> 实例间推送邀请——公开收件 `POST /api/v1/p2p/invite`(P2PPublicService,限流归桶;
-> 口令=bearer,信任级同手工交接)。
+> **p2p 联邦面**:2026-10-22 两应用分拆(Wave B')后,Box 侧**只保留联邦面** ——
+> 设备直传(p2pc/p2pcweb)已拆为独立应用 **PigeonBeam(信鸽直传)**,Box 不再编排
+> 直传(直传九端点与 p2px 域整体退役)。`/admin/p2p/*` 由 contracts
+> `AdminP2PService`(`idl/p2p.thrift`)定义,经 IDL gen 链接入,现存**四端点**
+> (invites 待收列表 / invites/accept 认领 / invite-push 推送 / directory 在线名录);
+> 另有公开收件 `POST /api/v1/p2p/invite`(P2PPublicService,限流归桶;
+> 口令=bearer,信任级同手工交接)。accept 为**纯信封**动作(出箱 + 留痕 + 返回
+> 信封),文件接收由 PigeonBeam 客户端完成。
 >
-> **mcp**:单端点 19 个工具;2026-10-14 新增 p2p_status / p2p_tasks / p2p_send /
-> p2p_recv 四个 admin 级工具(设备直传管理面,与 p2px 域联动)。
+> **mcp**:单端点 18 个工具;P2P 工具为联邦三件套(p2p_peers / p2p_invites /
+> p2p_accept,admin 级);直传四工具(p2p_status / p2p_tasks / p2p_send / p2p_recv)
+> 随直传编排层一并退役。
 
 ## 分层职责(继承自原仓库 internal 设计)
 

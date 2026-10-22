@@ -95,29 +95,3 @@ func TestDirectoryPrimaryRegistry(t *testing.T) {
 		t.Fatalf("应只打主注册中心: primary=%d backup=%d", primaryHits, backupHits)
 	}
 }
-
-// TestChainRegistryProvider 双源兜底：联邦段有值用联邦段，否则回退直传段；
-// 两段皆无值 = 配置缺失（ok=false）。
-func TestChainRegistryProvider(t *testing.T) {
-	ctx := context.Background()
-	fed := func(context.Context) (string, bool) { return "http://fed:12346", true }
-	direct := func(context.Context) (string, bool) { return "http://direct:12346", true }
-
-	// 联邦段有值 → 用联邦段
-	if u, ok := ChainRegistryProvider(fed, direct)(ctx); !ok || u != "http://fed:12346" {
-		t.Fatalf("联邦段优先被破: %q %v", u, ok)
-	}
-	// 联邦段无值 → 回退直传段（存量兼容）
-	none := func(context.Context) (string, bool) { return "", false }
-	if u, ok := ChainRegistryProvider(none, direct)(ctx); !ok || u != "http://direct:12346" {
-		t.Fatalf("直传段兜底失效: %q %v", u, ok)
-	}
-	// 两段皆无 → 配置缺失
-	if _, ok := ChainRegistryProvider(none, none)(ctx); ok {
-		t.Fatal("两段皆无应判配置缺失")
-	}
-	// nil provider 跳过
-	if u, ok := ChainRegistryProvider(nil, direct)(ctx); !ok || u != "http://direct:12346" {
-		t.Fatalf("nil provider 应被跳过: %q %v", u, ok)
-	}
-}

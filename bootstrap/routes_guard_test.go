@@ -74,15 +74,10 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		// ===== ratelimit（IDL）=====
 		"GET /admin/ratelimit/config", "PUT /admin/ratelimit/config",
 		"GET /admin/ratelimit/status", "POST /admin/ratelimit/test",
-		// ===== p2p 设备直传（IDL，P2a 2026-10-14）=====
-		"GET /admin/p2p/status", "GET /admin/p2p/tasks",
-		"GET /admin/p2p/tasks/:task_id/log",
-		"POST /admin/p2p/send", "POST /admin/p2p/recv",
-		"POST /admin/p2p/cancel", "POST /admin/p2p/publish",
-		// 配对码接受门裁决（2026-10-18）
-		"POST /admin/p2p/tasks/:task_id/approve",
-		// ===== p2p 浏览器文件直发（2026-10-15:p2pcweb 体验融入管理台）=====
-		"POST /admin/p2p/send/upload",
+		// ===== p2p 联邦面（IDL；2026-10-22 Wave B' 设备直传九端点退役）=====
+		// 直传面（status/tasks/tasks/:task_id/log/send/send/upload/recv/cancel/
+		// tasks/:task_id/approve/publish）随 Box 侧直传编排层整体退役，
+		// 由独立应用 PigeonBeam 承担 —— 契约表同步减员。
 		// ===== p2p 推送邀请（P3，2026-10-14）=====
 		"POST /api/v1/p2p/invite", "GET /admin/p2p/invites",
 		"POST /admin/p2p/invites/accept", "POST /admin/p2p/invite-push",

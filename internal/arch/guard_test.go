@@ -37,11 +37,9 @@ var pkgForbidden = []string{"app", "bootstrap", "gen", "repo", "storage", "trans
 var appCrossDomainAllow = map[string]map[string]string{
 	"share": {"moderation": "内容审核横切钩子（fail-closed 通道）"},
 	"admin": {"config": "管理面是配置域（app/config，2026-10-10 自 admin 独立）的 API 门面：委派方法+类型别名；装配层与新代码直指 config 域"},
-	// 2026-10-22 Wave B B0 波（两应用分拆）：联邦信封管理（invite+directory）
-	// 由直传包搬入联邦域，依赖方向定为 p2px → federation（联邦不依赖直传）。
-	// 收口条件：Wave B 删 app/p2px 直传编排层时本边随包消失（届时门面调用点
-	// 改指联邦域，p2px 整包退场），故本条为过渡约定边、只许随波次删除。
-	"p2px": {"federation": "联邦信封管理的委托门面（实现已在联邦域；Wave B 删直传编排层时本边消失）"},
+	// 2026-10-22 Wave B'：直传编排层（app/p2px）整体退役，其过渡约定边
+	// p2px → federation 随包消失（联邦信封管理已独立成 app/federation，
+	// 联邦面不依赖直传）。白名单只许删除条目，故本轮为减员。
 }
 
 // transportRepoAllow 规则 4：transport 直连 repo/db 的文件白名单（值为收口 TODO）。

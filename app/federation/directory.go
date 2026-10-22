@@ -39,27 +39,6 @@ type DirectoryPeer struct {
 // bootstrap 装配层），本包只认"基址字符串"。
 type RegistryURLProvider func(ctx context.Context) (string, bool)
 
-// ChainRegistryProvider 组合多个基址来源（按优先级）：前者提供值即用前者，
-// 否则顺延到后者；全部不提供值则返回 ok=false（配置缺失）。
-//
-// 用途（2026-10-22 L4）：注册中心基址真相源改为**联邦段**
-// （SystemConfig.p2p.federation.registry_url / conf.Federation.RegistryURL），
-// 直传段（p2p.direct.registry_url）是搬迁前的历史来源，作存量兼容兜底——
-// 只配了直传段的存量用户不会失去名录。
-func ChainRegistryProvider(providers ...RegistryURLProvider) RegistryURLProvider {
-	return func(ctx context.Context) (string, bool) {
-		for _, p := range providers {
-			if p == nil {
-				continue
-			}
-			if u, ok := p(ctx); ok {
-				return u, true
-			}
-		}
-		return "", false
-	}
-}
-
 // PeerDirectory 联邦节点名录客户端。
 type PeerDirectory struct {
 	registryURL RegistryURLProvider

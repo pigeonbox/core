@@ -1,14 +1,16 @@
-// Package registry 联邦注册中心（p2pd）基址归一——直传域与联邦域共用的单源。
+// Package registry 联邦注册中心（p2pd）基址归一——联邦域的单源。
 //
 // 背景（2026-10-22）：注册中心基址归一此前在 app/p2px（p2px.go/watcher.go）与
 // app/federation（directory.go）各存一份**同值私有实现**（连官方公共注册中心
 // 常量也是两份副本）——改一处即分叉，且无门禁能发现。本包是该事实的唯一真相
-// 源，两域均改为调用此处，重复实现已删除。
+// 源，重复实现已删除。
+//
+// 2026-10-22 Wave B'：直传编排层（app/p2px）整体退役，消费方只剩联邦域
+// （app/federation 的注册/心跳与名录）——本包随之成为联邦域独占的归一实现。
 //
 // 语义：Effective = 多主备取首个 → 去首尾空白 → 留空回填官方公共注册中心。
 // 多主备（逗号分隔）是联邦注册中心的既有形态（conf.FederationConfig.RegistryURL
-// 支持 "主,备"，写路径全推、读路径依次 failover）；单值调用方（直传段
-// registry_url）走同一条归一链，行为不变（单值即首个）。
+// 支持 "主,备"，写路径全推、读路径依次 failover）。
 //
 // 与 pkg/baseurl 同款定位：pkg 是最底层共享库，app 域单向依赖它，反向禁止。
 package registry

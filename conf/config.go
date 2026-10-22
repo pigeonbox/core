@@ -90,31 +90,6 @@ func (c *AppConfiguration) ServesAdminPlane() bool {
 	return !c.IsPublicReplica()
 }
 
-// P2PDirectConfig 设备直传参数（2026-10-14 对称节点 P2a；SystemConfig.p2p.direct
-// 在线段，supervisor 域 app/p2px 消费；admin-only，json 键随在线配置）。
-type P2PDirectConfig struct {
-	// Enabled 直传能力总开关（缺省 false）
-	Enabled bool `json:"enabled"`
-	// RegistryURL p2pd 基址，留空 = 官方公共注册中心（与 federation 缺省同源）
-	RegistryURL string `json:"registry_url"`
-	// RelayAddr 显式中继，留空 = 经 /health 自发现
-	RelayAddr string `json:"relay_addr"`
-	// SendRoots 发送路径白名单（绝对路径，空 = 拒绝所有发送；仿 local_import 校验）
-	SendRoots []string `json:"send_roots"`
-	// RecvDir 收件暂存目录，留空 = <data>/p2p-inbox
-	RecvDir string `json:"recv_dir"`
-	// MaxTaskBytes 单任务字节上限（0 = 缺省 50 GiB）
-	MaxTaskBytes int64 `json:"max_task_bytes"`
-	// InboxQuotaBytes 收件区总配额（0 = 缺省 200 GiB）
-	InboxQuotaBytes int64 `json:"inbox_quota_bytes"`
-	// BinaryPath p2pc 路径，留空 = 查找序（PB_P2PC_PATH env > 内置候选）
-	BinaryPath string `json:"binary_path"`
-	// Discoverable 在线名录 opt-in（2026-10-14 邀请信箱）：开启后信箱 watcher
-	// 以 discoverable 注册进 p2pd 名录，可被其他实例推送密封邀请（NAT 后可达）。
-	// 缺省 false=不可发现（名录零敏感但可见性是显式选择）。
-	Discoverable bool `json:"discoverable"`
-}
-
 // FederationConfig P2P 联邦接入（M2；默认关闭。对端服务：github.com/pigeonbox/p2p）。
 // 启用后本站注册进联邦注册中心，口令分享跨站可达（文件仍从本站直出，
 // 注册中心不落盘不见明文）。详见 docs/specs/2026-10-04-p2p-registry-service-design.md。

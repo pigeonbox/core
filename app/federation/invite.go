@@ -143,6 +143,19 @@ func (m *InviteMailbox) TakeInvite(id string) (Invite, error) {
 	return Invite{}, errors.New("邀请不存在或已过期")
 }
 
+// ExpiresIn 某条信封的剩余有效期（秒；已过期返回 0）。
+//
+// 供**已出箱**信封的展示方使用（认领端点返回信封时算剩余时间）——
+// 收件箱只对在箱条目给快照，出箱后条目已不在列表里，无处可查。
+// 时钟同收件箱（构造期注入的时钟优先，测试用假时钟一致）。
+func (m *InviteMailbox) ExpiresIn(inv Invite) int64 {
+	left := int64(m.now().Sub(inv.ReceivedAt.Add(inviteTTL)).Seconds())
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
 // expireInvitesLocked 清过期（调用方持 mu）。
 func (m *InviteMailbox) expireInvitesLocked() {
 	now := m.now()
