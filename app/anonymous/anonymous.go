@@ -139,6 +139,12 @@ func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time
 	}
 	for i := 0; i < 10; i++ {
 		code := randomCode()
+		// 跨列避让（2026-10-23）：取件码若与某个**自定义分享码**撞同一字符串，
+		// 分享域「按码取分享」会优先命中 code 列 ⇒ 那个取件码会打开别人的
+		// 分享（错配）。⇒ 铸造时确认该串在 code 列也未被占用（占用则换码重试）。
+		if taken, cerr := s.fileCodeRepo.CheckCodeExists(ctx, code, 0); cerr == nil && taken {
+			continue
+		}
 		// 真相源落库（唯一索引 + 占用预查防跨分享撞码）；占用则换码重试
 		set, err := s.fileCodeRepo.SetPickupCode(ctx, meta.ShareCode, code)
 		if err != nil {

@@ -314,6 +314,13 @@ func (s *Service) createWithCode(ctx context.Context, customCode string, build f
 			return nil, errors.New("自定义取件码已被占用（仅大小写不同），请换一个")
 		}
 	}
+	// 跨列避让（2026-10-23）：自定义码若与某个**已铸取件码**撞同一字符串，
+	// 分享域「按码取分享」会优先命中 code 列 ⇒ 那个取件码会打开本分享
+	// （错配）。⇒ 自定义码也不能占用取件码已在用的字符串。
+	// 取件码字符集全大写，取件解析时输入会被 ToUpper ⇒ 按大写形比对。
+	if exists, err := s.fileCodeRepo.CheckPickupCodeExists(ctx, strings.ToUpper(customCode)); err == nil && exists {
+		return nil, errors.New("自定义取件码与已有取件码冲突，请换一个")
+	}
 	fc := build(customCode)
 	if err := s.fileCodeRepo.Create(ctx, fc); err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) ||
@@ -731,7 +738,29 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 	return resp, nil
 }
 
-// GetFileByCode 通过代码获取文件
+// pickupCodeLength 取件码长度（6 位；字符集见 app/anonymous 的 codeAlphabet）。
+// 与 8 位分享码长度不重叠 ⇒ 两种码天然不歧义。
+const pickupCodeLength = 6
+
+// GetFileByCode 通过代码获取文件。
+//
+// **同时认 8 位分享码与 6 位取件码**（2026-10-23 新能力）：取件码是
+// `file_codes.pickup_code` 列（DB 真相源，uniqueIndex），分享域按码取分享
+// 时用它兜底 ⇒ 落地后 `/#/share/{取件码}` 可直接打开取件页（此前取件码只能
+// 走匿名通道 `/anonymous/retrieve`，没有页面链接）。
+//
+// 为什么安全：
+//
+//	① 取件码空间 32^6 ≈ 10.7 亿（字符集 ABCDEFGHJKMNPQRSTUVWXYZ23456789），
+//	   且分享域有失败锁定 ⇒ 枚举不可行；
+//	② 取件码本就是「口令语义」的取件凭证（拿到码即可取件，API 指南 §6 明写）
+//	   ⇒ 多一个入口不扩大信息面；
+//	③ 取件码列是 DB 真相源，不依赖匿名域的 Redis 映射 ⇒ 映射过期/重启不失联；
+//	④ 铸造取件码与创建自定义分享码两侧都做了**跨列避让**
+//	   （app/anonymous.GenerateCode / 本文件 createWithCode）⇒ 两种码不会互相串。
+//
+// 优先级：**分享码优先**（code 列先查）——自定义分享码 3-32 位，与取件码撞串
+// 的可能性由上面的跨列避让消除。
 func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCode, error) {
 
 	fileCode, err := s.fileCodeRepo.GetByCode(ctx, code)
@@ -740,9 +769,22 @@ func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCo
 		fileCode, err = s.fileCodeRepo.GetByCodeFolded(ctx, code)
 	}
 	if err != nil {
+		// 取件码兜底：仅 6 位输入才查（其余长度不可能是取件码，省一次索引查询）。
+		// 大小写归一与匿名域 lookupShareCode 一致（取件码字符集全大写）。
+		trimmed := strings.TrimSpace(code)
+		if len(trimmed) == pickupCodeLength {
+			if pc, perr := s.fileCodeRepo.GetByPickupCode(ctx, strings.ToUpper(trimmed)); perr == nil && pc != nil {
+				return s.validateShareRecord(pc)
+			}
+		}
 		return nil, err
 	}
 
+	return s.validateShareRecord(fileCode)
+}
+
+// validateShareRecord 过期 / 管控判定（分享码与取件码两条路径共用）。
+func (s *Service) validateShareRecord(fileCode *model.FileCode) (*model.FileCode, error) {
 	// 检查文件是否过期
 	if fileCode.IsExpired() {
 		return nil, errors.New("file has expired")
