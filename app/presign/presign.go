@@ -260,7 +260,9 @@ func (s *Service) Init(ctx context.Context, meta InitMeta) (*InitResult, error) 
 	// 类型 + 整文件大小校验（presign 为大文件直传通道，上限走
 	// upload.max_file_size 而非单请求体上限；单请求体上限由 HTTP 层约束）
 	if err := utils.CheckWholeFileSize(meta.FileSize); err != nil {
-		return nil, fmt.Errorf("文件过大: 最大允许 %d 字节", utils.GetMaxFileSize())
+		// typed error（带 CodeTooLarge 业务码 + 动态文案）⇒ handler 透传 413
+		// 且前端显示「文件过大: 最大允许 N 字节」，而非泛化的「预签名生成失败」
+		return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
 	}
 	if !utils.IsAllowedExtension(meta.FileName) {
 		return nil, fmt.Errorf("该文件类型禁止上传")
@@ -381,7 +383,7 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 		// 此前误用单请求体上限 GetMaxUploadSize，大文件直传在 Complete 被
 		// upload_size(如 10MB) 误杀，违背该通道"突破单请求限制"的存在意义
 		if err := utils.CheckWholeFileSize(actual); err != nil {
-			return nil, fmt.Errorf("文件过大: %w", err)
+			return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
 		}
 		meta.FileSize = actual
 		// 注意：服务器未接触内容，meta.FileHash 保持客户端提供的值（可为空，
@@ -400,7 +402,7 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 			_ = rc.Close()
 			// 整文件上限（同 s3 路径语义），非单请求体上限
 			if err := utils.CheckWholeFileSize(size); err != nil {
-				return nil, fmt.Errorf("文件过大: %w", err)
+				return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
 			}
 			meta.FileSize = size
 		}

@@ -12,6 +12,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/glebarez/sqlite"
+	"github.com/pigeonbox/contracts/errcode"
+	"github.com/pigeonbox/core/conf"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,6 +91,37 @@ func TestInit_GeneratesUniqueToken(t *testing.T) {
 		assert.False(t, seen[result.UploadID], "upload_id 重复: %s", result.UploadID)
 		seen[result.UploadID] = true
 	}
+}
+
+// TestInit_FileTooLarge_CarriesBusinessCode 钉住「整文件超限」的错误契约（2026-10-23）。
+//
+// 背景：max_file_size 是站点的**业务上限**（管理后台在线可配）。presign init
+// 超限时必须以 CodeTooLarge 业务码 + 动态文案返回，handler 才能透传 413 且前端
+// 显示「文件过大: 最大允许 N 字节」。此前包装成普通 error ⇒ 落 30008
+// 「预签名生成失败」，把清晰文案抹掉。
+func TestInit_FileTooLarge_CarriesBusinessCode(t *testing.T) {
+	old := conf.GetGlobalConfig()
+	conf.SetGlobalConfig(&conf.AppConfiguration{Upload: conf.UploadConfig{
+		MaxFileSize: 4 * 1024 * 1024 * 1024, // 4 GiB
+	}})
+	t.Cleanup(func() { conf.SetGlobalConfig(old) })
+
+	svc, _ := newTestService(t)
+	_, err := svc.Init(context.Background(), InitMeta{
+		FileName:    "big.tar",
+		FileSize:    5 * 1024 * 1024 * 1024, // 5 GiB > 4 GiB
+		ContentType: "application/octet-stream",
+	})
+	require.Error(t, err)
+
+	// typed error 契约：ErrCode() == CodeTooLarge
+	var coder interface{ ErrCode() int }
+	require.True(t, errors.As(err, &coder), "应返回 typed error（带业务码），实际: %T", err)
+	assert.Equal(t, errcode.CodeTooLarge, coder.ErrCode())
+
+	// 动态文案带具体上限值（前端直接展示）
+	assert.Contains(t, err.Error(), "文件过大")
+	assert.Contains(t, err.Error(), "4294967296")
 }
 
 func TestInit_ResultContainsUploadURL(t *testing.T) {

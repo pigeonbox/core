@@ -2,15 +2,38 @@ package utils
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/metrics"
 )
 
 // ErrFileTooLarge 文件超过允许大小
 var ErrFileTooLarge = errors.New("file size exceeds limit")
+
+// FileTooLargeError 文件超过整文件大小上限（upload.max_file_size）。
+//
+// 带业务码（ErrCode）⇒ handler 的 resp.NewTypedError 透传 CodeTooLarge
+// （HTTP 413）并保留动态文案「文件过大: 最大允许 N 字节」；前端已把 10010
+// 列入动态文案白名单，直接显示后端原文。
+//
+// 2026-10-23 背景：此前各处用 fmt.Errorf("文件过大: ...") 包装 ⇒ 退化成普通
+// error，业务码丢失——presign init 落 30008「预签名生成失败」，把后端清晰的
+// 文案抹掉（前端按错误码映射覆盖）；chunk init 更糟，落 500「服务器内部错误」。
+type FileTooLargeError struct{ Limit int64 }
+
+func (e *FileTooLargeError) Error() string {
+	return fmt.Sprintf("文件过大: 最大允许 %d 字节", e.Limit)
+}
+
+// ErrCode 实现 app 侧 typed error 约定（见 pkg/gate.GateError）。
+func (e *FileTooLargeError) ErrCode() int { return errcode.CodeTooLarge }
+
+// NewFileTooLargeError 构造整文件超限错误（带业务码 + 动态文案）。
+func NewFileTooLargeError(limit int64) error { return &FileTooLargeError{Limit: limit} }
 
 // ErrFileTypeNotAllowed 文件类型不允许（黑名单命中或白名单未命中）
 var ErrFileTypeNotAllowed = errors.New("file type not allowed")

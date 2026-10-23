@@ -231,6 +231,14 @@ func Init(ctx context.Context, c *app.RequestContext) {
 	}
 	result, err := getService().Init(ctx, meta)
 	if err != nil {
+		// typed 业务错误（文件超限 → CodeTooLarge/413）按业务码透传并保留
+		// 后端动态文案「文件过大: 最大允许 N 字节」；此前一律 30008 ⇒ 前端
+		// 按错误码映射覆盖成「预签名生成失败」，把清晰文案抹掉。
+		var typed interface{ ErrCode() int }
+		if errors.As(err, &typed) {
+			resp.NewTypedError(c, err)
+			return
+		}
 		resp.NewErrorWithMessage(c, errcode.CodePresignFailed, err.Error())
 		return
 	}
