@@ -65,6 +65,9 @@ func GetPreview(ctx context.Context, c *app.RequestContext) {
 				"code":    errcode.CodeTooManyAttempts,
 				"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", locked.Remain),
 			})
+		case errors.Is(err, previewapp.ErrShareNotReady):
+			// 占位分享：与 select/download 同码同文案（20001）
+			resp.NewErrorWithMessage(c, 20001, "分享未完成上传，暂时无法取件")
 		case errors.Is(err, previewapp.ErrShareNotFound):
 			// 不区分「不存在/已过期」，统一 404 降低探测面
 			c.JSON(consts.StatusNotFound, map[string]interface{}{

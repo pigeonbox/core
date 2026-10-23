@@ -534,15 +534,15 @@ func (s *Service) UpdateUserSettingsJSON(ctx context.Context, raw []byte) error 
 	if err := json.Unmarshal(raw, &incoming); err != nil {
 		return fmt.Errorf("用户配置体必须是 JSON 对象: %w", err)
 	}
-	s.ensureConfigLoaded(ctx)
-	s.configMu.RLock()
+	// 底座 = **已落库**的用户配置（loadPersistedConfig：已在线配置的取持久化值，
+	// 未在线配置的取 yaml 默认）⇒ 不把 env/运行态覆盖值固化进库
+	// （此前取 s.config.User = 运行态 ⇒ 首次部分提交会把 env 值写进 DB）。
 	base := map[string]json.RawMessage{}
-	if s.config != nil && s.config.User != nil {
-		if b, err := json.Marshal(s.config.User); err == nil {
+	if persisted, perr := s.loadPersistedConfig(ctx); perr == nil && persisted != nil && persisted.User != nil {
+		if b, err := json.Marshal(persisted.User); err == nil {
 			_ = json.Unmarshal(b, &base)
 		}
 	}
-	s.configMu.RUnlock()
 
 	merged, err := json.Marshal(mergeJSONObjects(base, incoming))
 	if err != nil {

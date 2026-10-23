@@ -302,10 +302,6 @@ func AdminUpdateUserSettings(ctx context.Context, c *app.RequestContext) {
 		resp.NewErrorWithMessage(c, 10001, err.Error())
 		return
 	}
-	if err := error(nil); err != nil {
-		resp.NewErrorWithMessage(c, 10008, "更新失败: "+err.Error())
-		return
-	}
 	resp.Success(c, map[string]interface{}{"affected": 1})
 }
 

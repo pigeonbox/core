@@ -885,11 +885,9 @@ func (s *Service) UpdateFileUsage(ctx context.Context, code string) (bool, error
 // 下载直链"、匿名通道 20001 的口径分叉（2026-10-23 审计）。
 var ErrShareNotReady = errors.New("分享未完成上传，暂时无法取件")
 
-// IsShareNotReady 判定记录是否为"未完成上传"的占位分享：既无文件路径、也非文本分享。
-// 与匿名通道的判定式逐字一致（!IsTextShare() && GetFilePath() == ""）。
-func IsShareNotReady(fc *model.FileCode) bool {
-	return fc != nil && !fc.IsTextShare() && fc.GetFilePath() == ""
-}
+// IsShareNotReady 判定记录是否为"未完成上传"的占位分享。
+// 判定式在 pkg/codex（唯一真相源，preview/select/download/metadata 共用）。
+func IsShareNotReady(fc *model.FileCode) bool { return codex.IsNotReady(fc) }
 
 // GetFileWithUsage 获取文件并校验密码（不扣次数，扣次数由下载链路调 UpdateFileUsage）。
 // viewerIP 由 handler 从可信解析 middleware.ClientIP(c) 注入。

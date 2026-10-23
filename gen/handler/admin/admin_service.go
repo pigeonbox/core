@@ -5,6 +5,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -347,7 +348,13 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 	// 但**段内**未提及的字段被整体清零（PUT {"upload_ex":{"max_file_size":1024}}
 	// ⇒ 匿名上传/分块上传/魔数校验… 全被清成零值）。现在未提及的字段保留现状，
 	// 显式 null 仍可清空。实现见 app/config.UpdateConfigJSON。
-	if err := getAdminService().UpdateConfigJSON(ctx, c.Request.Body()); err != nil {
+	body := c.Request.Body()
+	// 非法 body ⇒ 400（此前一律 500 ⇒ 与用户配置端点的 400 口径相反）
+	if !json.Valid(body) {
+		c.JSON(consts.StatusBadRequest, &admin.AdminUpdateConfigResp{Code: errcode.CodeInvalidParam, Message: "配置体必须是合法 JSON 对象"})
+		return
+	}
+	if err := getAdminService().UpdateConfigJSON(ctx, body); err != nil {
 		c.JSON(consts.StatusInternalServerError, &admin.AdminUpdateConfigResp{Code: errcode.CodeInternal, Message: err.Error()})
 		return
 	}

@@ -32,6 +32,9 @@ var (
 	ErrPasswordRequired = errors.New("password required")
 	// ErrLocked 密码错误次数过多，临时锁定
 	ErrLocked = errors.New("too many attempts, temporarily locked")
+	// ErrShareNotReady 分享未完成上传（占位分享；与 select/download 同码同文案）
+	ErrShareNotReady = errors.New("share not uploaded yet")
+
 	// ErrPreviewUnavailable 预览不可用（生成失败/存储不可达）
 	ErrPreviewUnavailable = errors.New("preview unavailable")
 	// ErrPreviewBusy 生成并发闸满（防 CPU/内存耗尽：图片解码与 ffmpeg 均为重活，
@@ -94,6 +97,11 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 	// select/download/匿名取件面同规格、同 (IP, code) 失败计数（此前本域
 	// 独立 scope "preview" 且用 FormatLockKey 不折叠取件码大小写，存在
 	// 变体绕过锁定漏洞，随收口一并修复）。
+	// 占位分享（文件未上传）：与 select/download 面同口径 —— 20001
+	// 「分享未完成上传」（此前本域落 500/预览不可用 ⇒ 口径不一致）。
+	if codex.IsNotReady(fileCode) {
+		return nil, ErrShareNotReady
+	}
 	decision := gate.CheckPickup(ctx, gate.PickupState{
 		Expired:       fileCode.IsExpired(),
 		Blocked:       fileCode.IsBlockedShare(),

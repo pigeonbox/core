@@ -37,7 +37,7 @@ import (
 
 // 6 位取件码字符表（去掉易混淆字符 0/O/1/I/L）
 const codeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
-const codeLength = 6
+const codeLength = codex.PickupCodeLength // 唯一真相源在 pkg/codex
 
 // shareCode 分享码长度（file_codes.code，字母数字混合、区分大小写）
 const shareCodeLength = 8
@@ -141,8 +141,9 @@ func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time
 	for i := 0; i < 10; i++ {
 		code := randomCode()
 		// 跨列避让（2026-10-23）：取件码若与某个**自定义分享码**撞同一字符串，
-		// 分享域「按码取分享」会优先命中 code 列 ⇒ 那个取件码会打开别人的
-		// 分享（错配）。⇒ 铸造时确认该串在 code 列也未被占用（占用则换码重试）。
+		// 分享域「按码取分享」按 pkg/codex 的优先级（**取件码优先**）⇒ 会命中
+		// 取件码那条 ⇒ 自定义码那条打不开（错配）。⇒ 铸造时确认该串在 code 列
+		// 也未被占用（占用则换码重试）。
 		//
 		// ⚠️ 必须用**折叠**检查（CheckCodeExistsFolded）：分享域解析在精确未命中后
 		// 还有 UPPER 兜底（大小写不敏感的自定义码）⇒ 只做精确检查会漏掉

@@ -44,12 +44,24 @@ type Repo interface {
 	GetByPickupCode(ctx context.Context, pickupCode string) (*model.FileCode, error)
 }
 
+// IsNotReady 判定记录是否为「未完成上传」的占位分享：既无文件路径、也非文本分享。
+//
+// 与匿名通道的判定式逐字一致（!IsTextShare() && GetFilePath() == ""）。
+// 判定式必须**只有一处**（分散在多域会各自漂移 ⇒ 同一份占位分享在不同端点
+// 给出不同结论）。
+func IsNotReady(fc *model.FileCode) bool {
+	return fc != nil && !fc.IsTextShare() && fc.GetFilePath() == ""
+}
+
 // Resolve 按用户给的码解析分享记录。
 //
 // ① 6 位输入先查取件码列（file_codes.pickup_code，真相源；UPPER 归一，与铸造侧
-//    写入的形态一致 ⇒ 取件码大小写不敏感）；
+//
+//	写入的形态一致 ⇒ 取件码大小写不敏感）；
+//
 // ② 否则查分享码列（精确 → 大小写折叠 UPPER 兜底，折叠开关由调用方传入 ——
-//    本包不读全局配置，保持"数据层不依赖配置"的纪律）。
+//
+//	本包不读全局配置，保持"数据层不依赖配置"的纪律）。
 //
 // 查不到时返回**最后一次**的底层错误（调用方据此映射业务码）。
 func Resolve(ctx context.Context, repo Repo, code string, foldEnabled bool) (*model.FileCode, error) {
@@ -63,7 +75,10 @@ func Resolve(ctx context.Context, repo Repo, code string, foldEnabled bool) (*mo
 	}
 
 	// ② 分享码 / 自定义码：精确 → 大小写折叠
-	fc, err := repo.GetByCode(ctx, code)
+	//    用 trim 后的串（与取件码分支同口径）：旧实现里 MCP 的 resolveFileCode
+	//    会先 TrimSpace 再查 ⇒ 保留该行为，否则 " abc12345 " 这类输入会
+	//    突然查不到（且 6 位能解析、8 位不能 ⇒ 自造口径分叉）。
+	fc, err := repo.GetByCode(ctx, trimmed)
 	if err == nil && fc != nil {
 		return fc, nil
 	}
