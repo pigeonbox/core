@@ -248,9 +248,12 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 	// 取件码通道不记 viewer，取件历史页与到件通知对主取件通道失明。
 	sharehandler.RecordPickupViewer(ctx, meta.ShareCode, middleware.ClientIP(c))
 
-	// 下载链接附时间窗令牌（security.download_token.enabled 时 /share/download 必需）
+	// 下载链接附时间窗令牌（security.download_token.enabled 时 /share/download 必需）。
+	// **「已扣次」口径**：本 retrieve 已扣过取件次数并记了取件人 ⇒ 下发的直链
+	// 下载时不再二次扣次/重复记取件人（否则一次取件扣 2 次、记 2 个取件人，
+	// count 样式下对方可用次数减半；2026-10-24 真机实测）。
 	downloadURL := "/share/download?code=" + meta.ShareCode
-	if tk := security.GenerateDownloadToken(meta.ShareCode); tk != "" {
+	if tk := security.GeneratePaidDownloadToken(meta.ShareCode); tk != "" {
 		downloadURL += "&token=" + tk
 	}
 	data := &anonmodel.RetrieveData{

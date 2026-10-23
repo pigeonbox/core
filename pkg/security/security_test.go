@@ -41,6 +41,48 @@ func TestDownloadTokenUnsigned(t *testing.T) {
 	assert.False(t, VerifyDownloadToken("AbCd1234", "1.aa"))
 }
 
+// 令牌**扣次口径**（2026-10-24）：普通令牌 vs 「已扣次」令牌。
+// 背景：匿名取件 retrieve 扣过一次取件次数，随它下发的直链下载时不得再扣一次
+// （此前一次取件扣 2 次，count 样式下对方可用次数减半）。
+func TestDownloadTokenFlavor(t *testing.T) {
+	SetDownloadTokenSecret("test-secret-32-chars-xxxxxxxxxxxxx")
+	code := "AbCd1234"
+
+	normal := GenerateDownloadToken(code)
+	paid := GeneratePaidDownloadToken(code)
+	require.NotEmpty(t, normal)
+	require.NotEmpty(t, paid)
+
+	// 口径判定
+	assert.Equal(t, TokenNormal, VerifyDownloadTokenFlavor(code, normal), "普通令牌 ⇒ 普通口径")
+	assert.Equal(t, TokenPaid, VerifyDownloadTokenFlavor(code, paid), "已扣次令牌 ⇒ 已扣次口径")
+
+	// 两种口径都算**有效**（有效性 ≠ 扣次口径）
+	assert.True(t, VerifyDownloadToken(code, normal))
+	assert.True(t, VerifyDownloadToken(code, paid))
+
+	// 口径不可互相冒充：已扣次令牌按普通口径验不过（签名载荷不同）
+	assert.False(t, VerifyDownloadTokenFlavor(code, normal) == TokenPaid)
+	assert.False(t, VerifyDownloadTokenFlavor(code, paid) == TokenNormal)
+	// 换 code 一律无效（令牌绑定分享码）
+	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor("other123", paid))
+	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor("other123", normal))
+	// 篡改签名无效
+	bad := paid[:len(paid)-2] + "xx"
+	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor(code, bad))
+	// 格式错误无效
+	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor(code, "not-a-token"))
+}
+
+func TestGeneratePaidDownloadTokenUnsigned(t *testing.T) {
+	saved := downloadTokenSecret
+	downloadTokenSecret = nil
+	defer func() { downloadTokenSecret = saved }()
+
+	assert.Empty(t, GeneratePaidDownloadToken("AbCd1234"))
+	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor("AbCd1234", "1.aa"))
+}
+
 func TestValidateEndpointURL(t *testing.T) {
 	// scheme 白名单
 	assert.ErrorIs(t, ValidateEndpointURL("ftp://minio.local:9000"), ErrEndpointURL)

@@ -661,8 +661,22 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 
 	// 下载令牌校验（security.download_token.enabled，默认开）：
 	// 取件查询/匿名取件接口下发时间窗 HMAC 令牌，恒时比较校验。
+	//
+	// 令牌带**扣次口径**（2026-10-24）：
+	//   - 普通令牌（select 面 / 匿名 download 跳转面签发）：签发方**未**扣次
+	//     ⇒ 下载时扣 1 次取件次数；
+	//   - 「已扣次」令牌（匿名取件 retrieve 面签发）：retrieve 已扣过 1 次
+	//     ⇒ 下载时**不再**扣次。
+	// 此前匿名取件 retrieve 扣一次、随它下发的直链下载又扣一次 ⇒ 一次取件扣两次
+	// （count 过期样式下对方可用次数直接减半），与 8 位分享码路径（select 不扣 +
+	// download 扣 1）口径分叉。
 	tokenEnabled := downloadTokenEnabled()
-	tokenValid := tokenEnabled && token != "" && security.VerifyDownloadToken(code, token)
+	flavor := security.TokenInvalid
+	if tokenEnabled && token != "" {
+		flavor = security.VerifyDownloadTokenFlavor(code, token)
+	}
+	tokenValid := flavor != security.TokenInvalid
+	countAlreadyPaid := flavor == security.TokenPaid
 	if !tokenValid {
 		// 密码保护分享：无有效令牌一律拒绝（令牌未启用的部署也拦下并明示，
 		// 不再提供 ?password= 旁路）
@@ -695,7 +709,7 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 	// 获取分享内容（viewer IP 由 handler 注入，可信代理解析；tokenValid=true
 	// 时域内跳过密码校验——令牌即等价已认证）
 	viewerIP := middleware.ClientIP(c)
-	fileCode, err := getShareService().GetFileWithUsage(ctx, code, "", viewerIP, tokenValid)
+	fileCode, err := getShareService().GetFileWithUsage(ctx, code, "", viewerIP, tokenValid, !countAlreadyPaid)
 	if err != nil {
 		var blocked *shareService.ShareBlockedError
 		if errors.As(err, &blocked) {
@@ -743,7 +757,11 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 	// 6 位取件码解析出的记录在 code 列是 8 位分享码 ⇒ 用原始码去
 	// `WHERE code = ?` 命中 0 行 ⇒ 扣减"失败" ⇒ 误报 403「取件次数已用完」，
 	// 且取件人/到件通知静默丢失（2026-10-23 审计）。
-	if ok, uerr := getShareService().UpdateFileUsage(ctx, fileCode.Code); uerr != nil {
+	//
+	// 「已扣次」令牌：取件面（retrieve）已扣过 1 次 ⇒ 此处**不再扣**（2026-10-24）。
+	if countAlreadyPaid {
+		// 已扣次：匿名取件面 retrieve 已扣 1 次并记了取件人/通知 owner ⇒ 不重复
+	} else if ok, uerr := getShareService().UpdateFileUsage(ctx, fileCode.Code); uerr != nil {
 		// 记录错误但不阻止下载
 		fmt.Printf("更新下载次数失败: %v\n", uerr)
 	} else if !ok {

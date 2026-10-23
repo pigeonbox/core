@@ -893,7 +893,10 @@ func IsShareNotReady(fc *model.FileCode) bool { return codex.IsNotReady(fc) }
 // viewerIP 由 handler 从可信解析 middleware.ClientIP(c) 注入。
 // authedByToken：调用方已校验有效下载令牌（令牌由取件查询在密码/取件校验通过后
 // 签发，等价于已认证——否则密码保护分享"凭令牌下载"还要再输一次密码，令牌失效）。
-func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP string, authedByToken bool) (*model.FileCode, error) {
+// recordViewer：是否记录取件人 + 通知 owner。**「已扣次」令牌须传 false**——
+// 匿名取件面（retrieve）已经记过一次取件人并通知过 owner，再记一次会让一次取件
+// 在取件人列表里出现两次（2026-10-24 修双扣时一并收口）。
+func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP string, authedByToken, recordViewer bool) (*model.FileCode, error) {
 
 	fileCode, err := s.GetFileByCode(ctx, code)
 	if err != nil {
@@ -934,9 +937,11 @@ func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP
 	// 记录取件人 + 通知 owner（fire-and-forget，GoSafe 兜底 panic 不影响进程）。
 	// 用**解析后的分享码**：6 位取件码解析出的记录在 code 列是 8 位分享码 ⇒
 	// 用原始码记 viewer 会命中 0 行 ⇒ 取件人/到件通知静默丢失（2026-10-23 审计）。
-	async.GoSafe(func() {
-		_ = s.RecordViewerAndNotify(context.Background(), fileCode.Code, viewerIP, "")
-	})
+	if recordViewer {
+		async.GoSafe(func() {
+			_ = s.RecordViewerAndNotify(context.Background(), fileCode.Code, viewerIP, "")
+		})
+	}
 
 	return fileCode, nil
 }
