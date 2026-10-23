@@ -16,6 +16,7 @@ import (
 	"github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/baseurl"
+	"github.com/pigeonbox/core/pkg/codex"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -738,55 +739,34 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 	return resp, nil
 }
 
-// pickupCodeLength 取件码长度（6 位；字符集见 app/anonymous 的 codeAlphabet）。
-// 与 8 位分享码长度不重叠 ⇒ 两种码天然不歧义。
-const pickupCodeLength = 6
-
-// GetFileByCode 通过代码获取文件。
+// GetFileByCode 通过代码获取文件（**分享码或 6 位取件码**）。
 //
-// **同时认 8 位分享码与 6 位取件码**（2026-10-23 新能力）：取件码是
-// `file_codes.pickup_code` 列（DB 真相源，uniqueIndex），分享域按码取分享
-// 时用它兜底 ⇒ 落地后 `/#/share/{取件码}` 可直接打开取件页（此前取件码只能
-// 走匿名通道 `/anonymous/retrieve`，没有页面链接）。
+// 解析规则见 pkg/codex（按码解析的唯一真相源）：6 位取件码优先（真相源
+// file_codes.pickup_code 列），否则分享码/自定义码（精确 → 大小写折叠）。
+// 本域与预览域/匿名域/MCP 共用该解析器 ⇒ 同一串码处处解析到同一个分享。
 //
-// 为什么安全：
+// 取件码能被解析 ⇒ 落地后 `{base}/#/share/{取件码}` 可直接打开取件页
+// （此前取件码只能走匿名通道，没有页面链接）。
 //
-//	① 取件码的枚举面本来就有（/anonymous/search 早能按取件码查，且与本面同属
-//	   download 限流桶：per-IP 50 QPS / burst 20）⇒ 本改动**不新增枚举面**；
-//	   取件码空间 32^6 ≈ 10.7 亿（字符集 ABCDEFGHJKMNPQRSTUVWXYZ23456789）。
-//	   ⚠️ 精确点：分享域的**失败锁定**（per IP+code）只记密码错，**不存在的码
-//	   不记失败** ⇒ 枚举的防线是**限流**，不是锁定。
-//	② 取件码本就是「口令语义」的取件凭证（拿到码即可取件，API 指南 §6 明写）
-//	   ⇒ 多一个入口不扩大信息面；
-//	③ 取件码列是 DB 真相源，不依赖匿名域的 Redis 映射 ⇒ 映射过期/重启不失联；
-//	④ 铸造取件码与创建自定义分享码两侧都做了**跨列避让**
-//	   （app/anonymous.GenerateCode / 本文件 createWithCode）⇒ 两种码不会互相串。
-//
-// 优先级：**分享码优先**（code 列先查）——自定义分享码 3-32 位，与取件码撞串
-// 的可能性由上面的跨列避让消除。
+// 为什么安全：① 取件码的枚举面本来就有（/anonymous/search 早能按取件码查，且与
+// 本面同属 download 限流桶：per-IP 50 QPS / burst 20）⇒ 本改动不新增枚举面；
+// 取件码空间 32^6 ≈ 10.7 亿（字符集 ABCDEFGHJKMNPQRSTUVWXYZ23456789）。
+// ⚠️ 精确点：分享域的**失败锁定**（per IP+code）只记密码错，**不存在的码不记
+// 失败** ⇒ 枚举的防线是**限流**，不是锁定。
+// ② 取件码本就是「口令语义」的取件凭证（拿到码即可取件，API 指南 §6 明写）
+// ⇒ 多一个入口不扩大信息面；
+// ③ 取件码列是 DB 真相源，不依赖匿名域的 Redis 映射 ⇒ 映射过期/重启不失联；
+// ④ 铸造取件码与创建自定义分享码两侧都做了**跨列避让**
+// （app/anonymous.GenerateCode / 本文件 createWithCode）⇒ 两种码不会互相串。
 func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCode, error) {
-
-	fileCode, err := s.fileCodeRepo.GetByCode(ctx, code)
-	if err != nil && conf.CodeFoldEnabledOrDefault() {
-		// 精确未命中且查询折叠开启：UPPER 兜底（分享码/自定义口令大小写不敏感）
-		fileCode, err = s.fileCodeRepo.GetByCodeFolded(ctx, code)
-	}
+	fileCode, err := codex.Resolve(ctx, s.fileCodeRepo, code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
-		// 取件码兜底：仅 6 位输入才查（其余长度不可能是取件码，省一次索引查询）。
-		// 大小写归一与匿名域 lookupShareCode 一致（取件码字符集全大写）。
-		trimmed := strings.TrimSpace(code)
-		if len(trimmed) == pickupCodeLength {
-			if pc, perr := s.fileCodeRepo.GetByPickupCode(ctx, strings.ToUpper(trimmed)); perr == nil && pc != nil {
-				return s.validateShareRecord(pc)
-			}
-		}
 		return nil, err
 	}
-
 	return s.validateShareRecord(fileCode)
 }
 
-// validateShareRecord 过期 / 管控判定（分享码与取件码两条路径共用）。
+// validateShareRecord 过期 / 管控判定（各解析路径共用）。
 func (s *Service) validateShareRecord(fileCode *model.FileCode) (*model.FileCode, error) {
 	// 检查文件是否过期
 	if fileCode.IsExpired() {
@@ -898,6 +878,19 @@ func (s *Service) UpdateFileUsage(ctx context.Context, code string) (bool, error
 	return s.fileCodeRepo.DecrementExpiredCount(ctx, code)
 }
 
+// ErrShareNotReady 分享未完成上传（占位记录：文件还没传上来）。
+//
+// 与匿名通道 app/anonymous 的 ErrNotReady 同一语义 ⇒ 两个面对同一份占位分享
+// 给出同一个业务码（20001）与文案，不再是"分享域 200 + 一条指向不存在文件的
+// 下载直链"、匿名通道 20001 的口径分叉（2026-10-23 审计）。
+var ErrShareNotReady = errors.New("分享未完成上传，暂时无法取件")
+
+// IsShareNotReady 判定记录是否为"未完成上传"的占位分享：既无文件路径、也非文本分享。
+// 与匿名通道的判定式逐字一致（!IsTextShare() && GetFilePath() == ""）。
+func IsShareNotReady(fc *model.FileCode) bool {
+	return fc != nil && !fc.IsTextShare() && fc.GetFilePath() == ""
+}
+
 // GetFileWithUsage 获取文件并校验密码（不扣次数，扣次数由下载链路调 UpdateFileUsage）。
 // viewerIP 由 handler 从可信解析 middleware.ClientIP(c) 注入。
 // authedByToken：调用方已校验有效下载令牌（令牌由取件查询在密码/取件校验通过后
@@ -907,6 +900,11 @@ func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP
 	fileCode, err := s.GetFileByCode(ctx, code)
 	if err != nil {
 		return nil, err
+	}
+	// 占位分享（文件未上传）：直接拒，不扣次数、不记取件人
+	// （此前会先扣次数再在下载时 500 —— 匿名通道早已用 ErrNotReady 挡住）。
+	if IsShareNotReady(fileCode) {
+		return nil, ErrShareNotReady
 	}
 
 	// 真实密码校验 + 防爆破锁定（统一取件闸门 pkg/gate.CheckPickup）；持有效
@@ -933,9 +931,11 @@ func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP
 		}
 	}
 
-	// 记录取件人 + 通知 owner（fire-and-forget，GoSafe 兜底 panic 不影响进程）
+	// 记录取件人 + 通知 owner（fire-and-forget，GoSafe 兜底 panic 不影响进程）。
+	// 用**解析后的分享码**：6 位取件码解析出的记录在 code 列是 8 位分享码 ⇒
+	// 用原始码记 viewer 会命中 0 行 ⇒ 取件人/到件通知静默丢失（2026-10-23 审计）。
 	async.GoSafe(func() {
-		_ = s.RecordViewerAndNotify(context.Background(), code, viewerIP, "")
+		_ = s.RecordViewerAndNotify(context.Background(), fileCode.Code, viewerIP, "")
 	})
 
 	return fileCode, nil

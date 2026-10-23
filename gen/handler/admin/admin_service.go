@@ -5,7 +5,6 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -344,12 +343,11 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 	// 直绑 + 旧三段 typed 映射——后者叠加前端 {config:...} 包壳后，ex 段写入
 	// 落不进任何一条路而被静默丢弃（假开关）。契约形态：body = SystemConfig
 	// 局部扁平 JSON（nil 段保留现状），未知键由 json 反序列化自然忽略。
-	cfg := &adminsvc.SystemConfig{}
-	if err := json.Unmarshal(c.Request.Body(), cfg); err != nil {
-		c.JSON(consts.StatusBadRequest, &admin.AdminUpdateConfigResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
-		return
-	}
-	if err := getAdminService().UpdateConfig(ctx, cfg); err != nil {
+	// 字段级合并通道（2026-10-23）：此前是「段级」语义——nil 段保留现状，
+	// 但**段内**未提及的字段被整体清零（PUT {"upload_ex":{"max_file_size":1024}}
+	// ⇒ 匿名上传/分块上传/魔数校验… 全被清成零值）。现在未提及的字段保留现状，
+	// 显式 null 仍可清空。实现见 app/config.UpdateConfigJSON。
+	if err := getAdminService().UpdateConfigJSON(ctx, c.Request.Body()); err != nil {
 		c.JSON(consts.StatusInternalServerError, &admin.AdminUpdateConfigResp{Code: errcode.CodeInternal, Message: err.Error()})
 		return
 	}

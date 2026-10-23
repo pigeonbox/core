@@ -31,7 +31,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/baseurl"
+	"github.com/pigeonbox/core/pkg/codex"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
@@ -405,14 +407,9 @@ func callerCustomCode(c Caller, code string) string {
 // 分享码/自定义口令直查 code 列。此前管理类工具只收分享码，而管理员手里常只有
 // 取件码（用户报障口径），6 位码会直接「分享不存在」。
 func (s *Service) resolveFileCode(ctx context.Context, input string) (*model.FileCode, error) {
-	code := strings.TrimSpace(input)
-	if len(code) == 6 {
-		code = strings.ToUpper(code)
-		if fc, err := s.fileCodeRepo.GetByPickupCode(ctx, code); err == nil && fc != nil {
-			return fc, nil
-		}
-	}
-	return s.fileCodeRepo.GetByCode(ctx, code)
+	// 走 pkg/codex 统一解析器（6 位取件码优先 → 分享码精确 → 大小写折叠）：
+	// 此前本域取件码优先但**不折叠**分享码大小写 ⇒ 与匿名域/分享域口径不一致。
+	return codex.Resolve(ctx, s.fileCodeRepo, input, conf.CodeFoldEnabledOrDefault())
 }
 
 // escapeMD Markdown 链接显示文本转义（[]() 两组括号）。

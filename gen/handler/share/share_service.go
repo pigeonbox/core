@@ -503,6 +503,16 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// 占位分享（文件未上传）：与匿名通道同一业务码（20001）与文案 —— 此前此处
+	// 返回 200 + 一条指向不存在文件的下载直链（点了就是 500）（2026-10-23 审计）。
+	if shareService.IsShareNotReady(fileCode) {
+		c.JSON(consts.StatusNotFound, map[string]interface{}{
+			"code":    errcode.CodeShareNotFound,
+			"message": "分享未完成上传，暂时无法取件",
+		})
+		return
+	}
+
 	// 密码保护校验（统一取件闸门 pkg/gate.CheckPickup；修复史:此处响应包含
 	// 分享正文,空密码提示后必须真正校验密码,此前 TODO 未实现导致任意非空
 	// 密码均可取到内容）
@@ -709,6 +719,15 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 			})
 			return nil, false
 		}
+		if errors.Is(err, shareService.ErrShareNotReady) {
+			// 占位分享（文件未上传）与匿名通道同一业务码与文案（2026-10-23 审计：
+			// 此前此处落泛化 404，而匿名通道是 20001 ⇒ 口径分叉）
+			c.JSON(consts.StatusNotFound, map[string]interface{}{
+				"code":    errcode.CodeShareNotFound,
+				"message": err.Error(),
+			})
+			return nil, false
+		}
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
 			"code":    errcode.CodeNotFound,
 			"message": "分享不存在或已过期",
@@ -717,8 +736,12 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 	}
 	lock.Reset(ctx, lockKey)
 
-	// 原子扣减下载次数（DB 为准）
-	if ok, uerr := getShareService().UpdateFileUsage(ctx, code); uerr != nil {
+	// 原子扣减下载次数（DB 为准）。
+	// ⚠️ 必须用**解析后的分享码**（fileCode.Code）而不是用户原始入参：
+	// 6 位取件码解析出的记录在 code 列是 8 位分享码 ⇒ 用原始码去
+	// `WHERE code = ?` 命中 0 行 ⇒ 扣减"失败" ⇒ 误报 403「取件次数已用完」，
+	// 且取件人/到件通知静默丢失（2026-10-23 审计）。
+	if ok, uerr := getShareService().UpdateFileUsage(ctx, fileCode.Code); uerr != nil {
 		// 记录错误但不阻止下载
 		fmt.Printf("更新下载次数失败: %v\n", uerr)
 	} else if !ok {

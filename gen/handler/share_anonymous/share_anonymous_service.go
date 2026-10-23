@@ -17,7 +17,9 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	anonmodel "github.com/pigeonbox/contracts/gen/share_anonymous"
 	anonapp "github.com/pigeonbox/core/app/anonymous"
+	"github.com/pigeonbox/core/conf"
 	sharehandler "github.com/pigeonbox/core/gen/handler/share"
+	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -62,17 +64,18 @@ func getService() *anonapp.Service {
 // 否则 Redis/内存 KV 两套映射会导致跨实例取件解析失败。
 func CurrentService() *anonapp.Service { return getService() }
 
-// anonymousQueryPath 取件码的查询 API 路径（相对路径）。
+// anonymousPageURL 取件码的**分享页链接**（hash 路由形态）。
 //
-// 形态契约（2026-10-23 真机取证）：必须是**真实可用**的取件查询端点
-// GET /anonymous/search/{取件码}。此前给的是 "/share/select/?code={取件码}"
-// ⇒ 实测直接访问 **404**（/share/select 只认 8 位分享码，取件码查不到）
-// ⇒ 那是一个**坏链**：既不是页面链接（取件码没有页面 URL——分享页路由
-// /share/:code 不认它，取件码只能口头/短信报码），也不是能用的 API 路径。
-//
-// 配套真机守卫：scripts/smoke-full.sh S19（铸造后直接访问该 URL 必须 200）。
-func anonymousQueryPath(pickupCode string) string {
-	return "/anonymous/search/" + pickupCode
+// 真相源：pkg/baseurl.SharePageURL（页面链接 = {base}/#/share/{code}，
+// **不带任何 query**；带令牌的直链是另一形态，见 ShareDownloadURL）。
+// base 解析口径与分片通道的 publicShareURL 一致：显式 server.base_url >
+// 请求来源推断（bootstrap 中间件注入 ctx）> 相对形态。
+func anonymousPageURL(ctx context.Context, code string) string {
+	var configured string
+	if cfg := conf.GetGlobalConfig(); cfg != nil {
+		configured = cfg.Server.BaseURL
+	}
+	return baseurl.SharePageURL(baseurl.Resolve(ctx, configured), code)
 }
 
 // GenerateCode 上传文件时生成 6 位取件码（端到端：建 file_codes + 取件码映射）。
@@ -100,7 +103,10 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	if err := utils.CheckUploadSize(req.FileSize, utils.GetMaxFileSize()); err != nil {
-		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "文件过大")
+		// 超限走 typed error（业务码 10010 + HTTP 413 + 动态文案「最大允许 N 字节」），
+		// 与 presign/chunk/localimport 同一口径（此前此处落 400 CodeInvalidParam
+		// 且文案无上限值 ⇒ 同一语义多种口径）。
+		resp.NewTypedError(c, utils.NewFileTooLargeError(utils.GetMaxFileSize()))
 		return
 	}
 	if !utils.IsAllowedExtension(req.FileName) {
@@ -151,16 +157,21 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 	resp.Success(c, &anonmodel.GenerateCodeData{
 		Code:    pickupCode,
 		FileKey: pickupCode,
-		// 取件码的**查询 API 路径**（相对路径）。
+		// **分享页链接**（hash 路由形态，与 /share/file/、/share/text/ 等其它端点
+		// 的 url 字段同口径）：{base}/#/share/{取件码}。
 		//
-		// 此前给的是 "/share/select/?code={取件码}" ⇒ 实测直接访问 **404**
-		// （/share/select 只认 8 位分享码，取件码查不到）⇒ 这是一个**坏链**：
-		// 既不是页面链接（取件码根本没有页面 URL——分享页路由 /share/:code
-		// 不认它，取件码只能口头/短信报码），也不是能用的 API 路径。
-		// 归一到真实可用的取件查询端点：GET /anonymous/search/{取件码}
-		// （轻量元数据查询，不扣次数、不校验密码；实测 200）。
-		// 要下载走 POST /anonymous/retrieve（响应里的 download_url 带下载令牌）。
-		URL:            anonymousQueryPath(pickupCode),
+		// 演进（三次才对齐）：
+		//  ① 最初下发 "/share/select/?code={取件码}" ⇒ 实测直接访问 **404**
+		//     （/share/select 只认 8 位分享码）⇒ 坏链；
+		//  ② 改下发 "/anonymous/search/{取件码}" ⇒ 能访问，但那是 API 路径
+		//     （返回 JSON 元数据，不是给人点的页面）；
+		//  ③ 现在分享域已认 6 位取件码 ⇒ 取件码**有了**页面链接 ⇒ 与其它端点
+		//     统一给页面链接（此前"取件码没有页面 URL"的前提已失效）。
+		//
+		// 注意：此刻文件可能还没上传（占位分享）⇒ 对方打开会看到
+		// 「分享未完成上传」（20001，与匿名通道同码同文案）；上传完成后同一链接
+		// 即展示文件。查元数据仍走 GET /anonymous/search/{取件码}。
+		URL:            anonymousPageURL(ctx, pickupCode),
 		ExpireSeconds:  int32(time.Until(expireAt).Seconds()),
 		MaxPickupCount: int32(maxCount),
 	})

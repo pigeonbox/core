@@ -37,6 +37,15 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	return s.cfg.UpdateConfig(ctx, newConfig)
 }
 
+// UpdateConfigJSON 按**字段级**合并提交的 JSON 到已落库配置后保存（委派 config 域）。
+//
+// 语义与整段替换不同：提交里出现的字段生效（显式 null 视为清空），未提及的
+// 字段保留现状 —— 此前段内未提及字段会被整体清零（改一个 max_file_size 顺手
+// 关掉匿名上传/分块上传/魔数校验，2026-10-23 真机实测）。
+func (s *Service) UpdateConfigJSON(ctx context.Context, raw []byte) error {
+	return s.cfg.UpdateConfigJSON(ctx, raw)
+}
+
 // UpdateUserSettings 在线更新"用户配置"段（委派 config 域）。
 func (s *Service) UpdateUserSettings(ctx context.Context, u UserSettings) error {
 	return s.cfg.UpdateUserSettings(ctx, u)

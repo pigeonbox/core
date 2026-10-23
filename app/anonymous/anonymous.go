@@ -23,6 +23,7 @@ import (
 	"github.com/oekit/concurrency/singleflight"
 	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/codex"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -142,7 +143,13 @@ func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time
 		// 跨列避让（2026-10-23）：取件码若与某个**自定义分享码**撞同一字符串，
 		// 分享域「按码取分享」会优先命中 code 列 ⇒ 那个取件码会打开别人的
 		// 分享（错配）。⇒ 铸造时确认该串在 code 列也未被占用（占用则换码重试）。
-		if taken, cerr := s.fileCodeRepo.CheckCodeExists(ctx, code, 0); cerr == nil && taken {
+		//
+		// ⚠️ 必须用**折叠**检查（CheckCodeExistsFolded）：分享域解析在精确未命中后
+		// 还有 UPPER 兜底（大小写不敏感的自定义码）⇒ 只做精确检查会漏掉
+		// 「code 列存小写 ws9whp、铸造出大写 WS9WHP」这种组合 ⇒ 两条分享并存，
+		// 而按大写码解析会命中那条小写自定义码 ⇒ 取件码打不开自己的分享、
+		// 反而打开别人的。
+		if taken, cerr := s.fileCodeRepo.CheckCodeExistsFolded(ctx, code, 0); cerr == nil && taken {
 			continue
 		}
 		// 真相源落库（唯一索引 + 占用预查防跨分享撞码）；占用则换码重试
@@ -220,47 +227,18 @@ func (s *Service) lookupShareCode(ctx context.Context, code string) (string, err
 // （短 TTL，防取件码枚举穿透打库）。
 // 真实状态（过期/次数/密码）始终以 DB 为准，缓存仅加速"码→分享码"解析。
 func (s *Service) resolveShareCodeFromDB(ctx context.Context, trimmed, mappingKey string) (string, error) {
-	// DB 回退 ①：6 位输入查 pickup_code 列（真相源；命中回填映射缓存）
-	if len(trimmed) == codeLength {
-		fc, dbErr := s.fileCodeRepo.GetByPickupCode(ctx, trimmed)
-		if dbErr == nil && fc != nil {
-			s.rdb.Set(ctx, mappingKey, fc.Code, dbBackfillTTL)
-			return fc.Code, nil
-		}
+	// DB 回源（2026-10-23 收敛）：走 pkg/codex 统一解析器 —— 取件码优先、
+	// 分享码精确 → 大小写折叠。此前本域与分享域/MCP 各写一套（优先级与折叠
+	// 口径不一致）⇒ 同一串码在不同端点可能解析到不同分享。
+	fc, dbErr := codex.Resolve(ctx, s.fileCodeRepo, trimmed, conf.CodeFoldEnabledOrDefault())
+	if dbErr != nil || fc == nil {
+		// 回源 DB 也没有：放负缓存标记（防取件码枚举穿透打库）
+		s.rdb.Set(ctx, fmt.Sprintf(keyPickupCodeNeg, trimmed), "1", negCacheTTL)
+		return "", ErrCodeNotFound
 	}
-	if isShareCodeShape(trimmed) {
-		fc, dbErr := s.fileCodeRepo.GetByCode(ctx, trimmed)
-		if (dbErr != nil || fc == nil) && conf.CodeFoldEnabledOrDefault() {
-			// 精确未命中且查询折叠开启：UPPER 兜底（分享码/自定义口令大小写不敏感）
-			fc, dbErr = s.fileCodeRepo.GetByCodeFolded(ctx, trimmed)
-		}
-		if dbErr != nil || fc == nil {
-			// 回源 DB 也没有：放负缓存标记
-			s.rdb.Set(ctx, fmt.Sprintf(keyPickupCodeNeg, trimmed), "1", negCacheTTL)
-			return "", ErrCodeNotFound
-		}
-		// 回源命中：回填映射缓存（真实状态仍查 DB）
-		s.rdb.Set(ctx, mappingKey, fc.Code, dbBackfillTTL)
-		return fc.Code, nil
-	}
-	return "", ErrCodeNotFound
-}
-
-// isShareCodeShape 判断输入是否可回退 DB 直查分享码：8 位随机分享码（字母数字，
-// 区分大小写）或自定义取件码（3-32 位字母/数字/-/_，与创建端约束一致，上限放宽
-// 至 64 留裕量）。此前仅放行恰 8 位——自定义码两头不落，/anonymous/search|retrieve|
-// download 恒 404，联邦自定义码跨站程序化取件在最后一公里断裂（v0.11.1 修复）。
-func isShareCodeShape(code string) bool {
-	if len(code) < 3 || len(code) > 64 {
-		return false
-	}
-	for i := 0; i < len(code); i++ {
-		c := code[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '-' && c != '_' {
-			return false
-		}
-	}
-	return true
+	// 回源命中：回填映射缓存（真实状态仍查 DB）
+	s.rdb.Set(ctx, mappingKey, fc.Code, dbBackfillTTL)
+	return fc.Code, nil
 }
 
 // enrichMetaFromDB 分享码直查路径没有 Redis 展示信息，用 DB 记录补齐

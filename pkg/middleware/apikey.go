@@ -252,8 +252,12 @@ func respondAPIKeyError(c *app.RequestContext, err error) {
 		return
 	}
 	c.Abort()
+	// 业务码用 40007（CodeAPIKeyInvalid，"Invalid API Key"）而不是 10002
+	// （CodeUnauthorized「未登录/凭证缺失」）—— 语义更准（凭据**无效** ≠ 未带凭据），
+	// 且对外集成指南与错误码页都写的是 40007（此前它是**从未发射的死常量**，
+	// 文档与实现对不上 ⇒ 2026-10-23 审计修）。
 	c.JSON(http.StatusUnauthorized, map[string]interface{}{
-		"code":    errcode.CodeUnauthorized,
+		"code":    errcode.CodeAPIKeyInvalid,
 		"message": "Invalid API Key",
 	})
 }

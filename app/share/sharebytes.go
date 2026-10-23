@@ -36,7 +36,7 @@ func (s *Service) ShareBytes(ctx context.Context, opts ShareBytesOpts) (*ShareRe
 		return nil, errors.New("该文件类型禁止上传")
 	}
 	if err := utils.CheckUploadSize(int64(len(opts.Content)), utils.GetMaxFileSize()); err != nil {
-		return nil, fmt.Errorf("文件超过大小上限（%d 字节）", utils.GetMaxFileSize())
+		return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
 	}
 
 	_, rel := utils.NewUploadRelPath(name)

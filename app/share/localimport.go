@@ -54,7 +54,7 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 		return nil, errors.New("仅支持导入普通文件")
 	}
 	if err := utils.CheckUploadSize(info.Size(), utils.GetMaxFileSize()); err != nil {
-		return nil, fmt.Errorf("文件超过大小上限（%d 字节）", utils.GetMaxFileSize())
+		return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
 	}
 
 	name := utils.SanitizeFileName(filepath.Base(real))

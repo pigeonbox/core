@@ -11,6 +11,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/codex"
 	"github.com/pigeonbox/core/pkg/gate"
 	previewService "github.com/pigeonbox/core/preview"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -81,8 +83,10 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 		return nil, err
 	}
 
-	// 获取文件信息
-	fileCode, err := s.fileCodeRepo.GetByCode(ctx, req.Code)
+	// 获取文件信息（**分享码或 6 位取件码**）：走 pkg/codex 统一解析器，
+	// 与 select/metadata 口径一致（此前本域只查 code 列 ⇒ 取件码在此 404，
+	// 而分享页能打开 ⇒ 同一输入两端点结论相反）。
+	fileCode, err := codex.Resolve(ctx, s.fileCodeRepo, req.Code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
 		return nil, ErrShareNotFound
 	}
