@@ -133,37 +133,14 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 		return "全局配置未就绪"
 	}
 	if sc.UploadSizeMb <= 0 {
-		return "单文件上限必须大于 0"
+		return "单次请求体上限必须大于 0"
 	}
 
 	cfg := &adminsvc.SystemConfig{}
 
 	// UploadEx：以当前 conf.Upload 为底稿，仅覆盖向导收集的项
 	// （段级整体替换语义，缺底稿会把 open_upload 之外的上传项清成零值）
-	uploadEx := g.Upload
-	uploadEx.OpenUpload = sc.OpenUpload
-	uploadEx.UploadSize = int64(sc.UploadSizeMb) * 1024 * 1024
-
-	// 政策段（2026-10-12 扩容，全部可选：不传 = 保持底稿 yaml/内置默认）
-	if sc.IsSetAllowedExpireStyles() {
-		// 合法样式集合**复用 pkg/utils 的单一真相源**（allExpireStyles）。
-		// 2026-10-22：此处原有一份独立白名单，漏了 "count"（按取件次数过期），
-		// 而 pkg/utils 的合法集合里有 ⇒ 管理员/向导提交的 count 被**静默丢弃**
-		// （配置看起来没生效，且无任何提示）。两处白名单必须同源。
-		styles := make([]string, 0, len(sc.AllowedExpireStyles))
-		for _, st := range sc.AllowedExpireStyles {
-			if utils.IsValidExpireStyle(st) {
-				styles = append(styles, st)
-			}
-		}
-		uploadEx.AllowedExpireStyles = styles
-	}
-	if sc.GetMaxSaveDays() > 0 {
-		uploadEx.MaxSaveSecondsCap = int64(sc.GetMaxSaveDays()) * 24 * 60 * 60
-	}
-	if sc.IsSetAllowedExtensions() {
-		uploadEx.AllowedExtensions = normalizeExtensions(sc.AllowedExtensions)
-	}
+	uploadEx := applyUploadPreConfig(g.Upload, sc)
 	cfg.UploadEx = &uploadEx
 
 	// 注册开关（User 段同为整体替换 → 以生效设置为底稿）
@@ -185,6 +162,45 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 		return err.Error()
 	}
 	return ""
+}
+
+// applyUploadPreConfig 把首启向导的上传策略项映射到 UploadEx（纯函数，可单测）。
+//
+// 语义（2026-10-23 订正）：向导的 upload_size_mb 是**单次请求体**上限
+// （普通直传通道），**不是**单文件上限——此前 IDL 注释与前端标签都写成
+// 「单文件上限」，管理员据此以为限住了单文件大小，实际大文件走预签名直传/
+// 分片通道照传（2026-10-23 的 413 事故即源于这条混淆）。
+//
+// 单文件上限 = max_file_size_mb → upload.max_file_size：服务端权威的业务上限
+// （超限在 presign init 阶段即拒，错误码 10010，零流量）。optional 语义：
+// 不传 = 保持底稿（yaml/内置默认）；显式传 0 = 不限。
+func applyUploadPreConfig(uploadEx conf.UploadConfig, sc *setupmodel.SitePreConfig) conf.UploadConfig {
+	uploadEx.OpenUpload = sc.OpenUpload
+	uploadEx.UploadSize = int64(sc.UploadSizeMb) * 1024 * 1024
+	if sc.IsSetMaxFileSizeMb() {
+		uploadEx.MaxFileSize = int64(sc.GetMaxFileSizeMb()) * 1024 * 1024
+	}
+	// 政策段（2026-10-12 扩容，全部可选：不传 = 保持底稿 yaml/内置默认）
+	if sc.IsSetAllowedExpireStyles() {
+		// 合法样式集合**复用 pkg/utils 的单一真相源**（allExpireStyles）。
+		// 2026-10-22：此处原有一份独立白名单，漏了 "count"（按取件次数过期），
+		// 而 pkg/utils 的合法集合里有 ⇒ 管理员/向导提交的 count 被**静默丢弃**
+		// （配置看起来没生效，且无任何提示）。两处白名单必须同源。
+		styles := make([]string, 0, len(sc.AllowedExpireStyles))
+		for _, st := range sc.AllowedExpireStyles {
+			if utils.IsValidExpireStyle(st) {
+				styles = append(styles, st)
+			}
+		}
+		uploadEx.AllowedExpireStyles = styles
+	}
+	if sc.GetMaxSaveDays() > 0 {
+		uploadEx.MaxSaveSecondsCap = int64(sc.GetMaxSaveDays()) * 24 * 60 * 60
+	}
+	if sc.IsSetAllowedExtensions() {
+		uploadEx.AllowedExtensions = normalizeExtensions(sc.AllowedExtensions)
+	}
+	return uploadEx
 }
 
 // normalizeExtensions 扩展名归一（小写 + 点前缀 + 去空），防向导/配置面写入
