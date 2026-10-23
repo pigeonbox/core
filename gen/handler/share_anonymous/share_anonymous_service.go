@@ -62,6 +62,19 @@ func getService() *anonapp.Service {
 // 否则 Redis/内存 KV 两套映射会导致跨实例取件解析失败。
 func CurrentService() *anonapp.Service { return getService() }
 
+// anonymousQueryPath 取件码的查询 API 路径（相对路径）。
+//
+// 形态契约（2026-10-23 真机取证）：必须是**真实可用**的取件查询端点
+// GET /anonymous/search/{取件码}。此前给的是 "/share/select/?code={取件码}"
+// ⇒ 实测直接访问 **404**（/share/select 只认 8 位分享码，取件码查不到）
+// ⇒ 那是一个**坏链**：既不是页面链接（取件码没有页面 URL——分享页路由
+// /share/:code 不认它，取件码只能口头/短信报码），也不是能用的 API 路径。
+//
+// 配套真机守卫：scripts/smoke-full.sh S19（铸造后直接访问该 URL 必须 200）。
+func anonymousQueryPath(pickupCode string) string {
+	return "/anonymous/search/" + pickupCode
+}
+
 // GenerateCode 上传文件时生成 6 位取件码（端到端：建 file_codes + 取件码映射）。
 // @router /anonymous/generate [POST]
 func GenerateCode(ctx context.Context, c *app.RequestContext) {
@@ -138,7 +151,16 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 	resp.Success(c, &anonmodel.GenerateCodeData{
 		Code:           pickupCode,
 		FileKey:        pickupCode,
-		URL:            "/share/select/?code=" + pickupCode,
+		// 取件码的**查询 API 路径**（相对路径）。
+		//
+		// 此前给的是 "/share/select/?code={取件码}" ⇒ 实测直接访问 **404**
+		// （/share/select 只认 8 位分享码，取件码查不到）⇒ 这是一个**坏链**：
+		// 既不是页面链接（取件码根本没有页面 URL——分享页路由 /share/:code
+		// 不认它，取件码只能口头/短信报码），也不是能用的 API 路径。
+		// 归一到真实可用的取件查询端点：GET /anonymous/search/{取件码}
+		// （轻量元数据查询，不扣次数、不校验密码；实测 200）。
+		// 要下载走 POST /anonymous/retrieve（响应里的 download_url 带下载令牌）。
+		URL:            anonymousQueryPath(pickupCode),
 		ExpireSeconds:  int32(time.Until(expireAt).Seconds()),
 		MaxPickupCount: int32(maxCount),
 	})

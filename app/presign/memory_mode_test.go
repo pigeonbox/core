@@ -27,8 +27,8 @@ func TestMemoryMode_InitCompleteFlow(t *testing.T) {
 	svc := newMemoryTestService(t)
 	mock := &mockShareService{
 		returnCode: "shareABC123",
-		returnURL:  "/share/shareABC123",
-		returnFull: "http://test.local/share/shareABC123",
+		returnURL:  "/#/share/shareABC123",
+		returnFull: "http://test.local/#/share/shareABC123",
 	}
 	svc.SetShareService(mock)
 

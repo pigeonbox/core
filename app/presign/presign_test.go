@@ -111,8 +111,8 @@ func TestComplete_HappyPath(t *testing.T) {
 	svc, _ := newTestService(t)
 	mock := &mockShareService{
 		returnCode: "shareABC123",
-		returnURL:  "/share/shareABC123",
-		returnFull: "http://test.local/share/shareABC123",
+		returnURL:  "/#/share/shareABC123",
+		returnFull: "http://test.local/#/share/shareABC123",
 	}
 	svc.SetShareService(mock)
 
@@ -133,8 +133,8 @@ func TestComplete_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, completed)
 	assert.Equal(t, "shareABC123", completed.ShareCode)
-	assert.Equal(t, "/share/shareABC123", completed.ShareURL)
-	assert.Equal(t, "http://test.local/share/shareABC123", completed.FullShareURL)
+	assert.Equal(t, "/#/share/shareABC123", completed.ShareURL)
+	assert.Equal(t, "http://test.local/#/share/shareABC123", completed.FullShareURL)
 	assert.Equal(t, "test.txt", completed.FileName)
 	assert.Equal(t, int64(1024), completed.FileSize)
 	assert.Equal(t, "192.168.1.1", completed.OwnerIP)
