@@ -5,11 +5,13 @@ package handler
 
 import (
 	"context"
-	"github.com/pigeonbox/contracts/errcode"
+	"errors"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/pigeonbox/contracts/errcode"
 
+	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/pkg/resp"
 )
 
@@ -26,6 +28,11 @@ func ShareMetadata(ctx context.Context, c *app.RequestContext) {
 	}
 	meta, err := getShareService().GetShareMetadata(ctx, code)
 	if err != nil {
+		// 占位分享（文件未上传）：与 select/download/preview 面同码同文案（20001）
+		if errors.Is(err, shareService.ErrShareNotReady) {
+			c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeShareNotFound, "message": "分享未完成上传，暂时无法取件"})
+			return
+		}
 		// 不区分「不存在/已过期/被封禁」，统一 404 降低探测面
 		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "分享不存在或已过期"})
 		return

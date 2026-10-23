@@ -36,6 +36,12 @@ func (s *Service) GetShareMetadata(ctx context.Context, code string) (*ShareMeta
 	if err != nil {
 		return nil, err
 	}
+	// 占位分享（文件未上传）：与 select/download/preview 面同口径 —— 报
+	// ErrShareNotReady（handler 映射 20001），而不是报 type=file 让前端
+	// 渲染出一个"存在但下不到"的文件卡（口径分叉）。
+	if IsShareNotReady(fc) {
+		return nil, ErrShareNotReady
+	}
 	meta := &ShareMetadata{
 		Code:         fc.Code,
 		Size:         fc.Size,
