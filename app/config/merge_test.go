@@ -99,3 +99,30 @@ func TestUpdateConfigJSON_FieldLevelMerge(t *testing.T) {
 		require.Error(t, svc.UpdateConfigJSON(ctx, []byte(`[1,2,3]`)))
 	})
 }
+
+// 用户配置段（/admin/config/user）同样是**字段级合并**（2026-10-23）。
+//
+// 缺陷：此前绑定进结构体后**整段替换** ⇒ 只提交 allowuserregistration 会把
+// sessionexpiryhours / useruploadsize / userstoragequota 一并清零（0 =
+// 走包默认/不限）⇒ 看着只改一个开关，实际把会话时长等配置弄没了。
+func TestUpdateUserSettingsJSON_FieldLevelMerge(t *testing.T) {
+	svc := newTestConfigService(t)
+	ctx := context.Background()
+
+	require.NoError(t, svc.UpdateUserSettings(ctx, UserSettings{
+		AllowUserRegistration: true,
+		UserUploadSize:        10 * 1024 * 1024,
+		UserStorageQuota:      1024 * 1024 * 1024,
+		SessionExpiryHours:    168,
+	}))
+
+	// 只提交一个字段 ⇒ 其余保留
+	require.NoError(t, svc.UpdateUserSettingsJSON(ctx, []byte(`{"allowuserregistration":false}`)))
+	got, err := svc.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.User)
+	assert.False(t, got.User.AllowUserRegistration, "提交的字段应生效")
+	assert.Equal(t, int64(10*1024*1024), got.User.UserUploadSize, "未提及字段被清零")
+	assert.Equal(t, int64(1024*1024*1024), got.User.UserStorageQuota, "未提及字段被清零")
+	assert.Equal(t, 168, got.User.SessionExpiryHours, "未提及字段被清零 ⇒ 会话立刻过期")
+}

@@ -51,6 +51,12 @@ func (s *Service) UpdateUserSettings(ctx context.Context, u UserSettings) error 
 	return s.cfg.UpdateUserSettings(ctx, u)
 }
 
+// UpdateUserSettingsJSON 按**字段级**合并提交的 JSON 到当前用户配置段后保存（委派 config 域）。
+// 语义：部分提交不得把未提及的字段清零（见 config 域同名方法）。
+func (s *Service) UpdateUserSettingsJSON(ctx context.Context, raw []byte) error {
+	return s.cfg.UpdateUserSettingsJSON(ctx, raw)
+}
+
 // LoadRuntimeStorage 读取持久化的运行时存储配置（storage.RuntimePersister 实现，委派）。
 func (s *Service) LoadRuntimeStorage(ctx context.Context) *conf.StorageConfig {
 	return s.cfg.LoadRuntimeStorage(ctx)

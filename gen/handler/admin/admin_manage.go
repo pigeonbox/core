@@ -296,12 +296,13 @@ func AdminGetUserSettings(ctx context.Context, c *app.RequestContext) {
 // （注册开关/配额默认/会话时长）。
 // PUT /admin/config/user
 func AdminUpdateUserSettings(ctx context.Context, c *app.RequestContext) {
-	var req adminapp.UserSettings
-	if err := c.BindAndValidate(&req); err != nil {
+	// 字段级合并通道（2026-10-23）：此前绑定进结构体后整段替换 ⇒ 未提及的字段
+	// 被清零（只提交 allowuserregistration 会把 sessionexpiryhours 等一并清零）。
+	if err := adminapp.Default().UpdateUserSettingsJSON(ctx, c.Request.Body()); err != nil {
 		resp.NewErrorWithMessage(c, 10001, err.Error())
 		return
 	}
-	if err := adminapp.Default().UpdateUserSettings(ctx, req); err != nil {
+	if err := error(nil); err != nil {
 		resp.NewErrorWithMessage(c, 10008, "更新失败: "+err.Error())
 		return
 	}

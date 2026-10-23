@@ -520,6 +520,41 @@ func (s *Service) UpdateUserSettings(ctx context.Context, u UserSettings) error 
 	return s.UpdateConfig(ctx, next)
 }
 
+// UpdateUserSettingsJSON 按**字段级**合并提交的 JSON 到当前用户配置段后保存。
+//
+// 与 UpdateConfigJSON 同一原则：部分提交**不得**把未提及的字段清零 ——
+// 例如只提交 {"allowuserregistration":true}，此前会把 sessionexpiryhours /
+// useruploadsize / userstoragequota 一并清零（0 = 走包默认/不限）⇒ 看着只改
+// 一个开关，实际把会话时长等配置弄没了（2026-10-23 真机实测同类问题）。
+//
+// 合并底座 = 当前**生效**的用户配置（已在线配置的取持久化值，未配置的取 yaml
+// 默认）⇒ 合并后未提及的字段保持当前生效值。
+func (s *Service) UpdateUserSettingsJSON(ctx context.Context, raw []byte) error {
+	var incoming map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &incoming); err != nil {
+		return fmt.Errorf("用户配置体必须是 JSON 对象: %w", err)
+	}
+	s.ensureConfigLoaded(ctx)
+	s.configMu.RLock()
+	base := map[string]json.RawMessage{}
+	if s.config != nil && s.config.User != nil {
+		if b, err := json.Marshal(s.config.User); err == nil {
+			_ = json.Unmarshal(b, &base)
+		}
+	}
+	s.configMu.RUnlock()
+
+	merged, err := json.Marshal(mergeJSONObjects(base, incoming))
+	if err != nil {
+		return err
+	}
+	u := UserSettings{}
+	if err := json.Unmarshal(merged, &u); err != nil {
+		return err
+	}
+	return s.UpdateUserSettings(ctx, u)
+}
+
 // LoadRuntimeStorage 读取持久化的运行时存储配置（storage.RuntimePersister 实现）。
 // 无记录/未设置返回 nil；DB 不可用返回 nil（与配置加载的降级策略一致）。
 func (s *Service) LoadRuntimeStorage(ctx context.Context) *conf.StorageConfig {
