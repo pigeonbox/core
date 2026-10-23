@@ -384,7 +384,6 @@ func scopeLabel(level int) string {
 	}
 }
 
-
 // mcpOwnerIP 归因 IP（游客/用户同源；transport 层已做可信代理解析）。
 func mcpOwnerIP(c Caller) string {
 	if c.IP == "" {
@@ -400,7 +399,6 @@ func callerCustomCode(c Caller, code string) string {
 	}
 	return code
 }
-
 
 // resolveFileCode 把工具输入解析为分享记录：恰 6 位输入先按取件码查 DB 真相源
 // （pickup_code 列，语义对齐匿名取件链路 lookupShareCode 的回退序），未命中再按

@@ -149,8 +149,8 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	resp.Success(c, &anonmodel.GenerateCodeData{
-		Code:           pickupCode,
-		FileKey:        pickupCode,
+		Code:    pickupCode,
+		FileKey: pickupCode,
 		// 取件码的**查询 API 路径**（相对路径）。
 		//
 		// 此前给的是 "/share/select/?code={取件码}" ⇒ 实测直接访问 **404**

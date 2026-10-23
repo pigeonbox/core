@@ -36,93 +36,129 @@ type toolSpec struct {
 var toolSpecs = []toolSpec{
 	{
 		Name: "share_text", MinScope: scopeGuest,
-		Desc:     "创建文本分享，返回取件码、分享链接与 Markdown 链接",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "share_text", Description: "创建文本分享，返回取件码、分享链接与 Markdown 链接"}, toolGuard(scopeGuest, s.shareText)) },
+		Desc: "创建文本分享，返回取件码、分享链接与 Markdown 链接",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "share_text", Description: "创建文本分享，返回取件码、分享链接与 Markdown 链接"}, toolGuard(scopeGuest, s.shareText))
+		},
 	},
 	{
 		Name: "share_file", MinScope: scopeGuest,
-		Desc:     "上传文件并创建文件分享（base64 内容，走配额/审核/扩展名白名单链路），返回取件码、分享链接、Markdown 链接与直链",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "share_file", Description: "上传文件并创建文件分享（base64 内容，走配额/审核/扩展名白名单链路），返回取件码、分享链接、Markdown 链接与直链"}, toolGuard(scopeGuest, s.shareFile)) },
+		Desc: "上传文件并创建文件分享（base64 内容，走配额/审核/扩展名白名单链路），返回取件码、分享链接、Markdown 链接与直链",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "share_file", Description: "上传文件并创建文件分享（base64 内容，走配额/审核/扩展名白名单链路），返回取件码、分享链接、Markdown 链接与直链"}, toolGuard(scopeGuest, s.shareFile))
+		},
 	},
 	{
 		Name: "create_request_code", MinScope: scopeUser,
-		Desc:     "创建寄件码（反向收件投递链接）：发给对方让其上传文件，落成你名义的分享",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "create_request_code", Description: "创建寄件码（反向收件投递链接）：发给对方让其上传文件，落成你名义的分享"}, toolGuard(scopeUser, s.createRequestCode)) },
+		Desc: "创建寄件码（反向收件投递链接）：发给对方让其上传文件，落成你名义的分享",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "create_request_code", Description: "创建寄件码（反向收件投递链接）：发给对方让其上传文件，落成你名义的分享"}, toolGuard(scopeUser, s.createRequestCode))
+		},
 	},
 	{
 		Name: "preview_share", MinScope: scopeUser,
-		Desc:     "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "preview_share", Description: "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）"}, toolGuard(scopeUser, s.previewShare)) },
+		Desc: "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "preview_share", Description: "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）"}, toolGuard(scopeUser, s.previewShare))
+		},
 	},
 	{
 		Name: "get_share", MinScope: scopeAdmin,
-		Desc:     "按分享码或 6 位取件码查询分享信息（不消耗取件次数）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "get_share", Description: "按分享码或 6 位取件码查询分享信息（不消耗取件次数）"}, toolGuard(scopeAdmin, s.getShare)) },
+		Desc: "按分享码或 6 位取件码查询分享信息（不消耗取件次数）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "get_share", Description: "按分享码或 6 位取件码查询分享信息（不消耗取件次数）"}, toolGuard(scopeAdmin, s.getShare))
+		},
 	},
 	{
 		Name: "get_share_content", MinScope: scopeAdmin,
-		Desc:     "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "get_share_content", Description: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）"}, toolGuard(scopeAdmin, s.getShareContent)) },
+		Desc: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "get_share_content", Description: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）"}, toolGuard(scopeAdmin, s.getShareContent))
+		},
 	},
 	{
 		Name: "download_share_file", MinScope: scopeAdmin,
-		Desc:     "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "download_share_file", Description: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）"}, toolGuard(scopeAdmin, s.downloadShareFile)) },
+		Desc: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "download_share_file", Description: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）"}, toolGuard(scopeAdmin, s.downloadShareFile))
+		},
 	},
 	{
 		Name: "list_shares", MinScope: scopeAdmin,
-		Desc:     "分页列出全站分享记录（可按分享码/取件码/文件名搜索）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "list_shares", Description: "分页列出全站分享记录（可按分享码/取件码/文件名搜索）"}, toolGuard(scopeAdmin, s.listShares)) },
+		Desc: "分页列出全站分享记录（可按分享码/取件码/文件名搜索）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "list_shares", Description: "分页列出全站分享记录（可按分享码/取件码/文件名搜索）"}, toolGuard(scopeAdmin, s.listShares))
+		},
 	},
 	{
 		Name: "delete_share", MinScope: scopeAdmin,
-		Desc:     "删除指定分享（DB 记录 + 物理文件，写审计日志）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "delete_share", Description: "删除指定分享（DB 记录 + 物理文件，写审计日志）"}, toolGuard(scopeAdmin, s.deleteShare)) },
+		Desc: "删除指定分享（DB 记录 + 物理文件，写审计日志）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "delete_share", Description: "删除指定分享（DB 记录 + 物理文件，写审计日志）"}, toolGuard(scopeAdmin, s.deleteShare))
+		},
 	},
 	{
 		Name: "get_system_status", MinScope: scopeAdmin,
-		Desc:     "系统运行状态（文件/用户/上传统计）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "get_system_status", Description: "系统运行状态（文件/用户/上传统计）"}, toolGuard(scopeAdmin, s.getSystemStatus)) },
+		Desc: "系统运行状态（文件/用户/上传统计）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "get_system_status", Description: "系统运行状态（文件/用户/上传统计）"}, toolGuard(scopeAdmin, s.getSystemStatus))
+		},
 	},
 	{
 		Name: "get_storage_info", MinScope: scopeAdmin,
-		Desc:     "存储使用状态（类型/容量/文件数）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "get_storage_info", Description: "存储使用状态（类型/容量/文件数）"}, toolGuard(scopeAdmin, s.getStorageInfo)) },
+		Desc: "存储使用状态（类型/容量/文件数）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "get_storage_info", Description: "存储使用状态（类型/容量/文件数）"}, toolGuard(scopeAdmin, s.getStorageInfo))
+		},
 	},
 	{
 		Name: "list_users", MinScope: scopeAdmin,
-		Desc:     "分页列出用户",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "list_users", Description: "分页列出用户"}, toolGuard(scopeAdmin, s.listUsers)) },
+		Desc: "分页列出用户",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "list_users", Description: "分页列出用户"}, toolGuard(scopeAdmin, s.listUsers))
+		},
 	},
 	{
 		Name: "cleanup_expired", MinScope: scopeAdmin,
-		Desc:     "清理全部过期分享（DB + 物理文件）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "cleanup_expired", Description: "清理全部过期分享（DB + 物理文件）"}, toolGuard(scopeAdmin, s.cleanupExpired)) },
+		Desc: "清理全部过期分享（DB + 物理文件）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "cleanup_expired", Description: "清理全部过期分享（DB + 物理文件）"}, toolGuard(scopeAdmin, s.cleanupExpired))
+		},
 	},
 	{
 		Name: "federation_status", MinScope: scopeAdmin,
-		Desc:     "P2P 联邦状态（是否启用/节点 ID/注册中心/最近心跳）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "federation_status", Description: "P2P 联邦状态（是否启用/节点 ID/注册中心/最近心跳）"}, toolGuard(scopeAdmin, s.federationStatus)) },
+		Desc: "P2P 联邦状态（是否启用/节点 ID/注册中心/最近心跳）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "federation_status", Description: "P2P 联邦状态（是否启用/节点 ID/注册中心/最近心跳）"}, toolGuard(scopeAdmin, s.federationStatus))
+		},
 	},
 	{
 		Name: "federation_resolve", MinScope: scopeAdmin,
-		Desc:     "查询口令在联邦内的源节点（未接入联邦则不可达）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "federation_resolve", Description: "查询口令在联邦内的源节点（未接入联邦则不可达）"}, toolGuard(scopeAdmin, s.federationResolve)) },
+		Desc: "查询口令在联邦内的源节点（未接入联邦则不可达）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "federation_resolve", Description: "查询口令在联邦内的源节点（未接入联邦则不可达）"}, toolGuard(scopeAdmin, s.federationResolve))
+		},
 	},
 	{
 		Name: "p2p_peers", MinScope: scopeAdmin,
-		Desc:     "在线名录：列出可发现的 P2P 对端（node_id/名称/对外地址/上线时刻；名录 opt-in，零敏感）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "p2p_peers", Description: "在线名录：列出可发现的 P2P 对端（node_id/名称/对外地址/上线时刻；名录 opt-in，零敏感）"}, toolGuard(scopeAdmin, s.p2pPeers)) },
+		Desc: "在线名录：列出可发现的 P2P 对端（node_id/名称/对外地址/上线时刻；名录 opt-in，零敏感）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "p2p_peers", Description: "在线名录：列出可发现的 P2P 对端（node_id/名称/对外地址/上线时刻；名录 opt-in，零敏感）"}, toolGuard(scopeAdmin, s.p2pPeers))
+		},
 	},
 	{
 		Name: "p2p_invites", MinScope: scopeAdmin,
-		Desc:     "列出待收邀请（其他实例经名录推送的密封邀请，TTL 10 分钟）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "p2p_invites", Description: "列出待收邀请（其他实例经名录推送的密封邀请，TTL 10 分钟）"}, toolGuard(scopeAdmin, s.p2pInvites)) },
+		Desc: "列出待收邀请（其他实例经名录推送的密封邀请，TTL 10 分钟）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "p2p_invites", Description: "列出待收邀请（其他实例经名录推送的密封邀请，TTL 10 分钟）"}, toolGuard(scopeAdmin, s.p2pInvites))
+		},
 	},
 	{
 		Name: "p2p_accept", MinScope: scopeAdmin,
-		Desc:     "认领待收邀请（纯信封：出箱并返回信封；直传接收请用 PigeonBeam 客户端完成）",
-		Register: func(s *Service, srv *sdk.Server) { sdk.AddTool(srv, &sdk.Tool{Name: "p2p_accept", Description: "认领待收邀请（纯信封：出箱并返回信封；直传接收请用 PigeonBeam 客户端完成）"}, toolGuard(scopeAdmin, s.p2pAccept)) },
+		Desc: "认领待收邀请（纯信封：出箱并返回信封；直传接收请用 PigeonBeam 客户端完成）",
+		Register: func(s *Service, srv *sdk.Server) {
+			sdk.AddTool(srv, &sdk.Tool{Name: "p2p_accept", Description: "认领待收邀请（纯信封：出箱并返回信封；直传接收请用 PigeonBeam 客户端完成）"}, toolGuard(scopeAdmin, s.p2pAccept))
+		},
 	},
 }
 
@@ -183,12 +219,12 @@ func (s *Service) shareText(ctx context.Context, in shareTextIn, caller Caller) 
 // ============ 工具 2/18：share_file ============
 
 type shareFileIn struct {
-	FileName     string `json:"file_name" jsonschema:"文件名（须通过扩展名白名单）"`
+	FileName      string `json:"file_name" jsonschema:"文件名（须通过扩展名白名单）"`
 	ContentBase64 string `json:"content_base64" jsonschema:"文件内容的 base64 编码"`
-	ExpireValue  int    `json:"expire_value,omitempty" jsonschema:"过期数值，默认 1"`
-	ExpireStyle  string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year/forever/count（count 按取件次数，对方最多取 N 次），默认 day"`
-	Password     string `json:"password,omitempty" jsonschema:"可选取件密码（提供即开启密码保护）"`
-	CustomCode   string `json:"custom_code,omitempty" jsonschema:"可选自定义取件码（3-32 位字母/数字/-/_，冲突报错；仅登录用户）"`
+	ExpireValue   int    `json:"expire_value,omitempty" jsonschema:"过期数值，默认 1"`
+	ExpireStyle   string `json:"expire_style,omitempty" jsonschema:"过期样式：minute/hour/day/week/month/year/forever/count（count 按取件次数，对方最多取 N 次），默认 day"`
+	Password      string `json:"password,omitempty" jsonschema:"可选取件密码（提供即开启密码保护）"`
+	CustomCode    string `json:"custom_code,omitempty" jsonschema:"可选自定义取件码（3-32 位字母/数字/-/_，冲突报错；仅登录用户）"`
 }
 
 func (s *Service) shareFile(ctx context.Context, in shareFileIn, caller Caller) (shareCreatedOut, error) {
@@ -339,15 +375,15 @@ type getShareIn struct {
 }
 
 type getShareOut struct {
-	Code           string         `json:"code" jsonschema:"分享码"`
-	PickupCode     string         `json:"pickup_code,omitempty" jsonschema:"6 位取件码（未铸造时为空）"`
-	Kind           string         `json:"kind" jsonschema:"分享类型：text 为文本，file 为文件"`
-	Name           string         `json:"name" jsonschema:"展示名（文本取前 20 字符，文件取原始名）"`
-	SizeBytes      int64          `json:"size_bytes" jsonschema:"内容大小（字节）"`
-	RemainingCount int            `json:"remaining_count" jsonschema:"剩余取件次数（-1 表示不限，0 表示已耗尽）"`
-	UsedCount      int            `json:"used_count" jsonschema:"已用取件次数"`
-	ExpiresAt      string         `json:"expires_at,omitempty" jsonschema:"过期时间（RFC3339；永久分享为空）"`
-	CreatedAt      string         `json:"created_at" jsonschema:"创建时间（RFC3339）"`
+	Code           string          `json:"code" jsonschema:"分享码"`
+	PickupCode     string          `json:"pickup_code,omitempty" jsonschema:"6 位取件码（未铸造时为空）"`
+	Kind           string          `json:"kind" jsonschema:"分享类型：text 为文本，file 为文件"`
+	Name           string          `json:"name" jsonschema:"展示名（文本取前 20 字符，文件取原始名）"`
+	SizeBytes      int64           `json:"size_bytes" jsonschema:"内容大小（字节）"`
+	RemainingCount int             `json:"remaining_count" jsonschema:"剩余取件次数（-1 表示不限，0 表示已耗尽）"`
+	UsedCount      int             `json:"used_count" jsonschema:"已用取件次数"`
+	ExpiresAt      string          `json:"expires_at,omitempty" jsonschema:"过期时间（RFC3339；永久分享为空）"`
+	CreatedAt      string          `json:"created_at" jsonschema:"创建时间（RFC3339）"`
 	Files          []shareFileItem `json:"files,omitempty" jsonschema:"子文件清单（多文件分享）"`
 }
 
@@ -424,8 +460,8 @@ type downloadShareFileIn struct {
 }
 
 type downloadShareFileOut struct {
-	FileName     string `json:"file_name" jsonschema:"文件名"`
-	SizeBytes    int64  `json:"size_bytes" jsonschema:"文件大小（字节）"`
+	FileName      string `json:"file_name" jsonschema:"文件名"`
+	SizeBytes     int64  `json:"size_bytes" jsonschema:"文件大小（字节）"`
 	ContentBase64 string `json:"content_base64" jsonschema:"文件内容（base64 编码）"`
 }
 
