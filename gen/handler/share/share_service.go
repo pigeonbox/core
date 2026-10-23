@@ -522,7 +522,10 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 			PasswordHash: fileCode.PasswordHash,
 		}, gate.PickupCheck{
 			ClientIP: middleware.ClientIP(c),
-			Code:     code,
+			// 失败记账用**规范分享码**而不是用户原始入参：同一分享有两个入口
+			// （8 位分享码 / 6 位取件码）⇒ 用原始码记账会变成**两把钥匙** ⇒
+			// 密码爆破预算翻倍（2026-10-23 审计）。
+			Code:     fileCode.Code,
 			Password: password,
 			// 本面历史规格：空密码是「需要密码」提示态，不记失败
 			MissingCountsFailure: false,
@@ -559,10 +562,9 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 
 	// 下发下载令牌（security.download_token.enabled 时 /share/download 必须携带）
 	token := security.GenerateDownloadToken(fileCode.Code)
-	downloadURL := fmt.Sprintf("/share/download?code=%s", fileCode.Code)
-	if token != "" {
-		downloadURL += "&token=" + token
-	}
+	// 直链走形态真相源（pkg/baseurl.ShareDownloadURL）：相对形态 + query 传码与令牌
+	// （令牌必须在 query——落在 '#' 之后服务端收不到）。
+	downloadURL := baseurl.ShareDownloadURL("", fileCode.Code, token)
 
 	// 契约响应（v0.6.0 起 ShareDetail 载全字段；此前为 ad-hoc map，
 	// download_url/token/encrypted/is_multi/files 六个字段游窜契约外）

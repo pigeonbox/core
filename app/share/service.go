@@ -918,8 +918,10 @@ func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP
 			RequireAuth:  true,
 			PasswordHash: fileCode.PasswordHash,
 		}, gate.PickupCheck{
-			ClientIP:             viewerIP,
-			Code:                 code,
+			ClientIP: viewerIP,
+			// 失败记账用**规范分享码**（6 位取件码解析后）⇒ 与 select 面同一把
+			// 钥匙 ⇒ 同一分享的两种入口共享爆破预算（2026-10-23 审计）。
+			Code:                 fileCode.Code,
 			Password:             password,
 			MissingCountsFailure: true, // 保持本通道历史规格：空密码按失败记账
 		})

@@ -101,8 +101,10 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 		RequireAuth:   fileCode.RequireAuth,
 		PasswordHash:  fileCode.PasswordHash,
 	}, gate.PickupCheck{
-		ClientIP:             req.ClientIP,
-		Code:                 req.Code,
+		ClientIP: req.ClientIP,
+		// 失败记账用**规范分享码**（6 位取件码解析后）⇒ 与 select/下载/匿名面
+		// 同一把钥匙，爆破预算不翻倍（2026-10-23 审计）。
+		Code:                 fileCode.Code,
 		Password:             req.Password,
 		MissingCountsFailure: true, // 保持本域历史规格：空密码按失败记账
 	})

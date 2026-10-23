@@ -289,8 +289,10 @@ func (s *Service) Retrieve(ctx context.Context, code, password, clientIP string)
 		RequireAuth:   fc.RequireAuth,
 		PasswordHash:  fc.PasswordHash,
 	}, gate.PickupCheck{
-		ClientIP:             clientIP,
-		Code:                 code,
+		ClientIP: clientIP,
+		// 失败记账用**解析后的分享码**（shareCode）而不是用户给的码 ⇒ 同一分享
+		// 的 6 位取件码与 8 位分享码共享一把钥匙，爆破预算不翻倍（2026-10-23 审计）。
+		Code:                 shareCode,
 		Password:             password,
 		MissingCountsFailure: true, // 保持本域历史规格：空密码按失败记账
 	})
