@@ -33,6 +33,12 @@ func ShareMetadata(ctx context.Context, c *app.RequestContext) {
 			c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeShareNotFound, "message": "分享未完成上传，暂时无法取件"})
 			return
 		}
+		// 取件次数已用完：20004「超过取件次数」（2026-10-24）——此前混在
+		// 「不存在/已过期」的 404 里（IsExpired 当年含次数语义）。
+		if errors.Is(err, shareService.ErrShareCountExhausted) {
+			c.JSON(consts.StatusForbidden, map[string]interface{}{"code": errcode.CodeShareReachLimit, "message": "超过取件次数"})
+			return
+		}
 		// 不区分「不存在/已过期/被封禁」，统一 404 降低探测面
 		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "分享不存在或已过期"})
 		return

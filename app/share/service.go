@@ -918,6 +918,14 @@ func (s *Service) ListPickups(ctx context.Context, code string, limit int) ([]mo
 // 下载直链"、匿名通道 20001 的口径分叉（2026-10-23 审计）。
 var ErrShareNotReady = errors.New("分享未完成上传，暂时无法取件")
 
+// ErrShareCountExhausted 取件次数已用完（2026-10-24：次数耗尽从 IsExpired 里
+// 拆出后，「耗尽」不再混作「过期/不存在」，各面给独立错误码
+// —— 20004 CodeShareReachLimit / 匿名通道 20007 CodePickupCodeExhausted）。
+//
+// 本哨兵供 app/share 的元数据面（GetShareMetadata）区分「次数用完」与
+// 「不存在/已过期/被封禁」⇒ handler 据此回 20004 而不是笼统的 404。
+var ErrShareCountExhausted = errors.New("取件次数已用完")
+
 // IsShareNotReady 判定记录是否为"未完成上传"的占位分享。
 // 判定式在 model（唯一真相源，preview/select/download/metadata 共用）。
 func IsShareNotReady(fc *model.FileCode) bool { return model.IsNotReady(fc) }

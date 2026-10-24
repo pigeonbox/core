@@ -437,6 +437,13 @@ func (s *Service) getShareContent(ctx context.Context, in getShareContentIn, cal
 	if err != nil {
 		return getShareContentOut{}, fmt.Errorf("分享不存在或已过期")
 	}
+	// 次数已用完 ⇒ 拒绝（2026-10-24）：本工具**回传文本正文** = 一次内容交付。
+	// MCP 的 share_text/share_file 支持 count 样式（按取件次数）⇒ 这类分享
+	// 的「最多取 N 次」承诺必须在读回面也成立，否则上限形同虚设。
+	// （拆分前 IsExpired 含次数语义 ⇒ 本工具同样拒；拆分后漏了这道闸。）
+	if fc.IsCountExhausted() {
+		return getShareContentOut{}, fmt.Errorf("取件次数已用完（分享已失效）")
+	}
 	out := getShareContentOut{Code: fc.Code, Kind: shareKind(fc), Name: displayFileName(fc), SizeBytes: fc.Size}
 	if fc.IsTextShare() {
 		out.Text = fc.Text
@@ -472,6 +479,14 @@ func (s *Service) downloadShareFile(ctx context.Context, in downloadShareFileIn,
 	}
 	if fc.IsExpired() {
 		return downloadShareFileOut{}, fmt.Errorf("分享已过期（内容待清理任务释放，可先在管理端续期）")
+	}
+	// 次数已用完 ⇒ 拒绝（2026-10-24）：本工具回传**文件内容** = 一次内容交付。
+	// MCP 的 share_text/share_file 支持 count 样式（按取件次数）⇒ 这类分享
+	// 的「最多取 N 次」承诺必须在读回面也成立，否则上限形同虚设。
+	// （拆分前 IsExpired 含次数语义 ⇒ 本工具同样拒；拆分后漏了这道闸。）
+	// 工具描述里的「不消耗取件次数」= 不**扣**次，不是无视上限。
+	if fc.IsCountExhausted() {
+		return downloadShareFileOut{}, fmt.Errorf("取件次数已用完（分享已失效）")
 	}
 	if fc.IsTextShare() {
 		return downloadShareFileOut{}, fmt.Errorf("文本分享请用 get_share_content 读取正文")

@@ -367,6 +367,14 @@ func SearchByCode(ctx context.Context, c *app.RequestContext) {
 		resp.NewErrorWithMessage(c, errcode.CodeInternal, sanitizeInternalMsg(err))
 		return
 	}
+	// 取件次数已用完：独立错误码（20007），与 /anonymous/download 同口径
+	// （2026-10-24）。本面回显文件名/大小/取件统计 ⇒ 耗尽后继续回显等于
+	// 「分享已失效但元信息仍可读」；旧口径（IsExpired 含次数）本就在这里 404，
+	// 拆分后因 Peek 只判时间而漏掉了这道闸。
+	if fc.IsCountExhausted() {
+		resp.NewErrorByCode(c, errcode.CodePickupCodeExhausted)
+		return
+	}
 	maxCount := int32(0)
 	if fc.ExpiredCount == -1 {
 		maxCount = 0 // 无限在前端通常显示为 0 或特殊值

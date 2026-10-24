@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pigeonbox/core/pkg/utils"
+	"github.com/pigeonbox/core/repo/db/model"
 )
 
 // 回归：/share/metadata 语义——查询不扣次数、不要求密码、不外泄文本内容/密码哈希。
@@ -86,4 +87,47 @@ func TestGetShareMetadata(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.GetShareMetadata(ctx, expired.Code)
 	require.Error(t, err, "过期分享应拒绝元数据查询")
+}
+
+// 回归（2026-10-24）：取件次数用完后，元数据面**不得**再回显文件名/大小。
+//
+// 缺陷：model.FileCode.IsExpired() 拆分前含次数语义（ExpiredCount==0 ⇒ 过期）
+// ⇒ 本面在额度用完后报「已过期」；拆分后 IsExpired() 只判时间 ⇒ 本面漏掉了
+// 次数闸 ⇒ 分享已失效但**文件名/大小/统计仍可被任意持码者读走**（旧口径 404）。
+//
+// 错误码口径：耗尽给 ErrShareCountExhausted（typed）⇒ handler 映射 20004
+// 「超过取件次数」，不再与「不存在/已过期」一起塌成 404。
+//
+// 断言必须能变红：把 app/share/metadata.go 里的 IsCountExhausted 闸门删掉，
+// 本用例即失败。
+func TestGetShareMetadata_CountExhausted(t *testing.T) {
+	svc, gormDB, _, _, _ := newTestServiceWithDB(t)
+	ctx := context.Background()
+
+	// count 样式 = 按取件次数（1 次）
+	resp, err := svc.CreateShare(ctx, &ShareFileReq{
+		Channel:      "direct",
+		FilePath:     "uploads/2026/10/24/limited.txt",
+		Size:         7,
+		Text:         "limited.txt",
+		ExpiredAt:    utils.CalculateExpireTime(1, "day"),
+		ExpiredCount: utils.CalculateExpireCount("count", 1),
+		UploadType:   "authenticated",
+	})
+	require.NoError(t, err)
+
+	// 额度未用完 ⇒ 元数据正常返回
+	meta, err := svc.GetShareMetadata(ctx, resp.Code)
+	require.NoError(t, err, "额度未用完时元数据应可查")
+	require.Equal(t, "limited.txt", meta.Name)
+
+	// 额度用完 ⇒ 必须拒，且错误可被 handler 识别为「次数耗尽」
+	require.NoError(t, gormDB.Model(&model.FileCode{}).
+		Where("code = ?", resp.Code).
+		Update("expired_count", 0).Error)
+
+	_, err = svc.GetShareMetadata(ctx, resp.Code)
+	require.Error(t, err, "额度用完后元数据面必须拒绝（否则泄露文件名/大小）")
+	require.ErrorIs(t, err, ErrShareCountExhausted,
+		"耗尽错误必须是 typed error，handler 据此映射 20004 而非笼统 404")
 }

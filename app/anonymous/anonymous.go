@@ -372,6 +372,13 @@ func (s *Service) Peek(ctx context.Context, code string) (*CodeMeta, *model.File
 	// 过期分享与不存在同语义（统一 404 防探测），与 /share/metadata、Retrieve
 	// 对齐——此前仅查封禁不查过期，过期分享的元数据经本端点永久可查
 	// （v0.11.1 修复）。
+	//
+	// ⚠️ **次数耗尽不在本层拦截**（2026-10-24）：Peek 是「查得到但已失效」的
+	// 元信息面，把耗尽态在这里吞成 ErrCodeNotFound ⇒ 调用方（/anonymous/download
+	// 与 /anonymous/search）拿到的就是「码不存在」⇒ 20007「取件码已用完」这条
+	// 独立错误码永远发射不出来，「次数耗尽」又退回了「不存在/已过期」的伪装。
+	// ⇒ 本层只判**时间**过期；次数耗尽由调用方按自己的口径判定
+	// （/anonymous/download → 20007；/anonymous/search → 20007）。
 	if fc.IsExpired() {
 		return nil, nil, ErrCodeNotFound
 	}

@@ -42,6 +42,13 @@ func (s *Service) GetShareMetadata(ctx context.Context, code string) (*ShareMeta
 	if IsShareNotReady(fc) {
 		return nil, ErrShareNotReady
 	}
+	// 次数已用完 ⇒ 不再返回元信息（2026-10-24）：IsExpired 拆出「次数耗尽」后，
+	// 本面少了这道闸 ⇒ 次数用完的分享**仍会泄露文件名/大小**（旧口径是 404）。
+	// 用 typed error（而非内联 errors.New）⇒ handler 能把它映射到规范码
+	// 20004「超过取件次数」，而不是和「不存在/已过期」一起塌成 404。
+	if fc.IsCountExhausted() {
+		return nil, ErrShareCountExhausted
+	}
 	meta := &ShareMetadata{
 		Code:         fc.Code,
 		Size:         fc.Size,
