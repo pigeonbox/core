@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oekit/pkg/convert"
 )
 
 // probeTimeout 外部进程单次调用上限（2026-10-08 加固）：恶意/损坏媒体文件可让
@@ -140,7 +142,7 @@ func (g *VideoGenerator) getVideoInfo(ctx context.Context, filePath string) (*Vi
 	if err != nil {
 		return nil, err
 	}
-	duration, _ := strconv.ParseFloat(strings.TrimSpace(string(durationOutput)), 64)
+	duration := convert.Str2Float64(strings.TrimSpace(string(durationOutput)), 0)
 
 	// 获取视频分辨率
 	resolutionCmd := exec.CommandContext(ctx, ffprobePath,

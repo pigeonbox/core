@@ -14,6 +14,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"go.uber.org/zap"
 
+	"github.com/oekit/pkg/convert"
 	"github.com/pigeonbox/contracts/errcode"
 	anonmodel "github.com/pigeonbox/contracts/gen/share_anonymous"
 	anonapp "github.com/pigeonbox/core/app/anonymous"
@@ -121,7 +122,7 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 	// 过期时间：从请求读，默认 24h
 	expireAt := time.Now().Add(24 * time.Hour)
 	if req.IsSetExpireValue() && req.IsSetExpireStyle() {
-		v, _ := strconv.Atoi(req.GetExpireValue())
+		v := convert.Str2Int(req.GetExpireValue(), 0)
 		if err := utils.CheckExpireStyleAllowed(req.GetExpireStyle()); err != nil {
 			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 			return

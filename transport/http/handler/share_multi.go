@@ -10,12 +10,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/oekit/pkg/convert"
 	"github.com/oekit/pkg/pathx"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/app/chunk"
@@ -93,7 +93,7 @@ func parseMultiCommonFromJSON(ctx context.Context, c *app.RequestContext) *multi
 
 // parseMultiCommonFromForm multipart 表单版本
 func parseMultiCommonFromForm(ctx context.Context, c *app.RequestContext) *multiCommonParams {
-	expireValue, _ := strconv.Atoi(c.DefaultPostForm("expire_value", "1"))
+	expireValue := convert.Str2Int(c.DefaultPostForm("expire_value", "1"), 0)
 	expireStyle := c.DefaultPostForm("expire_style", "day")
 	requireAuth := c.DefaultPostForm("require_auth", "false") == "true"
 	password := c.DefaultPostForm("password", "")

@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
+
+	"github.com/oekit/pkg/encoding"
 )
 
 // =====================================================================
@@ -81,7 +83,7 @@ func newFixtureUser(t *testing.T, g *gorm.DB, status string) *model.User {
 func newFixtureKey(t *testing.T, g *gorm.DB, userID uint, mutate func(*model.UserAPIKey)) (string, *model.UserAPIKey) {
 	t.Helper()
 	plain := apiKeyPlainPrefix + fmt.Sprintf("%032x", time.Now().UnixNano())
-	rec := &model.UserAPIKey{UserID: userID, Name: "test", Prefix: plain[:12], KeyHash: sha256Hex(plain)}
+	rec := &model.UserAPIKey{UserID: userID, Name: "test", Prefix: plain[:12], KeyHash: encoding.Sha256(plain)}
 	if mutate != nil {
 		mutate(rec)
 	}

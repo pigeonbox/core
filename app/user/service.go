@@ -2,8 +2,6 @@ package user
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,6 +18,8 @@ import (
 	"github.com/pigeonbox/core/repo/db/model"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+
+	"github.com/oekit/pkg/encoding"
 )
 
 type CreateUserReq struct {
@@ -478,8 +478,7 @@ func GenerateRandomKey() string {
 
 // HashAPIKey 计算密钥的 SHA256 哈希
 func HashAPIKey(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])
+	return encoding.Sha256(key)
 }
 
 // GetKeyPrefix 获取密钥的前缀（用于展示）

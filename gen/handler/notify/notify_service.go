@@ -4,12 +4,12 @@ package notify
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"github.com/oekit/pkg/convert"
 	"github.com/pigeonbox/contracts/errcode"
 	notifymodel "github.com/pigeonbox/contracts/gen/notify"
 	notifyapp "github.com/pigeonbox/core/app/notify"
@@ -294,8 +294,8 @@ func Mine(ctx context.Context, c *app.RequestContext) {
 	if !ok {
 		return
 	}
-	page, _ := strconv.Atoi(string(c.Query("page")))
-	pageSize, _ := strconv.Atoi(string(c.Query("page_size")))
+	page := convert.Str2Int(string(c.Query("page")), 0)
+	pageSize := convert.Str2Int(string(c.Query("page_size")), 0)
 	data, err := getService().ListForUser(ctx, uid, page, pageSize)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})

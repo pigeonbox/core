@@ -2,8 +2,6 @@ package middleware
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +13,8 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
 	"golang.org/x/time/rate"
+
+	"github.com/oekit/pkg/encoding"
 )
 
 // apiKeyPlainPrefix API Key 明文前缀（与 app/user 签发端一致）。
@@ -64,12 +64,6 @@ func extractAPIKey(c *app.RequestContext) (string, bool) {
 		return key, true
 	}
 	return "", false
-}
-
-// sha256Hex Key 摘要（与 app/user.HashAPIKey 同算法：hex(SHA-256)）
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
 }
 
 // ===== TouchLastUsed 写节流 =====
@@ -181,7 +175,7 @@ func validateAPIKey(ctx context.Context, c *app.RequestContext, plainKey string)
 		_, _ = lock.RecordFailure(ctx, lockKey)
 		return ctx, errInvalidAPIKey
 	}
-	principal, err := apiKeyStore.FindActiveByHash(ctx, sha256Hex(plainKey))
+	principal, err := apiKeyStore.FindActiveByHash(ctx, encoding.Sha256(plainKey))
 	if err != nil {
 		// Key 不存在/已吊销/已过期/属主非 active 统一按无效 Key 处理（防枚举）
 		_, _ = lock.RecordFailure(ctx, lockKey)

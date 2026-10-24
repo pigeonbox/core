@@ -16,6 +16,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/oekit/concurrency/async"
+	"github.com/oekit/pkg/convert"
 	"github.com/pigeonbox/contracts/errcode"
 	sharemodel "github.com/pigeonbox/contracts/gen/share"
 	shareService "github.com/pigeonbox/core/app/share"
@@ -1084,8 +1085,8 @@ func UserSharesList(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	page, _ := strconv.Atoi(string(c.Query("page")))
-	pageSize, _ := strconv.Atoi(string(c.Query("page_size")))
+	page := convert.Str2Int(string(c.Query("page")), 0)
+	pageSize := convert.Str2Int(string(c.Query("page_size")), 0)
 
 	items, total, err := getShareService().ListUserShares(ctx, uid,
 		string(c.Query("status")), string(c.Query("search")), page, pageSize)

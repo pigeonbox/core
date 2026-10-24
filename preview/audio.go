@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
+
+	"github.com/oekit/pkg/convert"
 )
 
 // AudioGenerator 音频预览生成器
@@ -83,7 +84,7 @@ func (g *AudioGenerator) getAudioInfo(ctx context.Context, filePath string) (*Au
 	if err != nil {
 		return nil, err
 	}
-	duration, _ := strconv.ParseFloat(strings.TrimSpace(string(durationOutput)), 64)
+	duration := convert.Str2Float64(strings.TrimSpace(string(durationOutput)), 0)
 
 	return &AudioInfo{
 		Duration: int(duration),
