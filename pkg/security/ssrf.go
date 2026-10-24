@@ -10,11 +10,31 @@ import (
 	"time"
 
 	"github.com/oekit/concurrency/singleflight"
+	"github.com/oekit/pkg/urlguard"
 	"github.com/pigeonbox/core/conf"
 )
 
 // ErrEndpointURL 存储端点 URL 不合法
 var ErrEndpointURL = fmt.Errorf("存储端点 URL 不合法")
+
+// endpointGuard 出站地址的网段判定器（oekit/pkg/urlguard）。
+//
+// 阻断范围比本仓历史口径更全：除 loopback/RFC1918/链路本地/未指定外，
+// 还挡组播/保留段（224/4、240/4）、0.0.0.0/8、IPv6 组播与 ULA。
+//
+// **CGNAT 100.64.0.0/10 显式豁免**：Tailscale 等 overlay 网络的节点地址
+// 落在该段，历史口径不拦它——端点就绪性由用户自己负责，显式豁免以保持
+// 既有行为（豁免写在代码里而不是靠运气）。
+var endpointGuard = mustEndpointGuard()
+
+func mustEndpointGuard() *urlguard.Guard {
+	g, err := urlguard.New(urlguard.WithAllowCIDRs("100.64.0.0/10"))
+	if err != nil {
+		// 固定字面量，构造失败只可能是代码写错——带病运行没有意义。
+		panic(fmt.Sprintf("security: urlguard: %v", err))
+	}
+	return g
+}
 
 // dnsCache 端点解析结果短缓存，避免每次校验都打 DNS（5 分钟 TTL）。
 // 未命中的并发解析经 singleflight 合并：同 host 共享一次 LookupIP，
@@ -67,7 +87,7 @@ func ValidateEndpointURL(rawURL string) error {
 		return nil
 	}
 	for _, ip := range ips {
-		if isPrivateOrLocal(ip) {
+		if endpointGuard.CheckIP(ip) != nil {
 			return fmt.Errorf("%w: 端点解析到私网/保留地址 %s；如为局域网存储请在配置中开启 security.ssrf.allow_private_networks", ErrEndpointURL, ip)
 		}
 	}
@@ -95,7 +115,7 @@ func ValidateEndpointHost(hostPort string) error {
 	}
 	ips := resolveHost(host)
 	for _, ip := range ips {
-		if isPrivateOrLocal(ip) {
+		if endpointGuard.CheckIP(ip) != nil {
 			return fmt.Errorf("%w: 端点解析到私网/保留地址 %s；如为局域网存储请在配置中开启 security.ssrf.allow_private_networks", ErrEndpointURL, ip)
 		}
 	}
@@ -136,9 +156,4 @@ func dnsCacheLookup(host string) ([]net.IP, bool) {
 		return e.ips, true
 	}
 	return nil, false
-}
-
-func isPrivateOrLocal(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
