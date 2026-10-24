@@ -903,6 +903,28 @@ func (s *Service) HasPickupCharge(ctx context.Context, code, sessionKey string) 
 	return s.fileCodeRepo.HasPickupCharge(ctx, code, sessionKey)
 }
 
+// FindShareByUploadID 按上传会话 ID 回读已建的分享（**上传完成面的幂等键**）。
+//
+// 背景（2026-10-24 审计，core v0.32.6）：chunk/presign 的 Complete 此前不检查
+// 是否已建过分享 ⇒ 同一 upload_id 二次 Complete 会**再建一条分享**（各有独立
+// 取件额度 ⇒ 「最多取 N 次」实际可取 2N 次；真机已出现 1 组重复数据）。
+//
+// ⇒ 完成面先回读：命中即幂等返回（同一个分享码），不新建行、不重复扣次、
+// 不重复计配额。未命中返回 (nil, nil)（调用方按「首次」继续建）。
+func (s *Service) FindShareByUploadID(ctx context.Context, uploadID string) (*model.FileCode, error) {
+	if uploadID == "" {
+		return nil, nil
+	}
+	fc, err := s.fileCodeRepo.FirstByUploadID(ctx, uploadID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return fc, nil
+}
+
 // ListPickups 取某分享的逐条取件明细（owner 侧「取件历史」用）。
 //
 // 数据源 = 计次记录表（一次取件 = 一行）⇒ 多文件逐个下载/断点续传不会被

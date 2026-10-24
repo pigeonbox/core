@@ -155,6 +155,13 @@ type ShareCreateResp struct {
 // share 域适配器；避免 app 跨域 import）。
 type ShareServiceInterface interface {
 	CreateShare(ctx context.Context, req *ShareCreateReq) (*ShareCreateResp, error)
+	// FindShareByUploadID 按上传会话 ID 回读已建分享的**分享码**（上传完成面的
+	// **幂等键**：同一 upload_id 二次 Complete 必须复用同一个分享，而不是再建
+	// 一条 ⇒ 否则 owner 的「最多取 N 次」额度翻倍。2026-10-24 审计，
+	// core v0.32.6）。未命中返回 ("", nil)。
+	//
+	// 只回分享码（base URL 由消费侧自算）⇒ 窄接口保持窄。
+	FindShareByUploadID(ctx context.Context, uploadID string) (string, error)
 }
 
 // NewService 创建 service。rdb nil 归一化：typed-nil 接口会骗过
@@ -429,20 +436,34 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 	}
 
 	// 4. 校验是否已完成
+	//
+	// 幂等（2026-10-24 审计，core v0.32.6）：已标记完成 ⇒ **回读**该 upload_id
+	// 已建的分享并返回（同一个分享码），而不是直接报错。
+	//   · 修复前：二次 Complete 报错（客户端重试 ⇒ 拿不到结果）；
+	//   · 修复前更糟：标记在**建分享之前**（见下）⇒ 建分享失败时 meta 已标记
+	//     ⇒ 客户端重试只得 ErrAlreadyComplete ⇒ **已上传对象永久成孤儿**。
+	//   · 本次把标记挪到建分享**之后** ⇒ 建分享失败 ⇒ 未标记 ⇒ 可重试；
+	//     已标记 ⇒ 分享必然已存在 ⇒ 回读复用（幂等）。
 	if meta.Complete {
+		existingCode, ferr := s.shareService.FindShareByUploadID(ctx, meta.UploadID)
+		if ferr == nil && existingCode != "" {
+			base := baseurl.Resolve(ctx, s.resolveBaseURL(ctx))
+			return &CompleteResult{
+				InitMeta:     &meta,
+				ShareCode:    existingCode,
+				ShareURL:     baseurl.SharePageURL("", existingCode),
+				FullShareURL: baseurl.SharePageURL(base, existingCode),
+				OwnerIP:      ownerIP,
+			}, nil
+		}
 		return nil, ErrAlreadyComplete
 	}
 
-	// 5. 标记完成
-	meta.Complete = true
-	updatedJSON, _ := json.Marshal(meta)
-	// 保留 meta 一段时间供查询（5 分钟）
-	s.rdb.Set(ctx, fmt.Sprintf(keyUploadMeta, uploadID), updatedJSON, 5*time.Minute)
-
-	// 6. 调 share service 写分享表
+	// 5. 调 share service 写分享表
 	shareCode, shareURL, fullShareURL, pickupCode, shareErr := s.createShareRecord(ctx, &meta, ownerIP)
 	if shareErr != nil {
-		// 写分享表失败不算 fatal（meta 已标记 complete），返回 shareErr 让调用方决定
+		// 建分享失败 ⇒ **不标记** complete ⇒ 客户端可重试（此前先标记 ⇒ 重试
+		// 只会得到 ErrAlreadyComplete ⇒ 已上传对象永久孤儿）。
 		return &CompleteResult{
 			InitMeta:     &meta,
 			ShareCode:    "",
@@ -451,6 +472,13 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 			OwnerIP:      ownerIP,
 		}, fmt.Errorf("create share record: %w", shareErr)
 	}
+
+	// 6. 标记完成（**建分享之后**）：分享已落地才标记 ⇒ 失败可重试、重复调用
+	// 命中上面的幂等回读分支。
+	meta.Complete = true
+	updatedJSON, _ := json.Marshal(meta)
+	// 保留 meta 一段时间供查询（5 分钟）
+	s.rdb.Set(ctx, fmt.Sprintf(keyUploadMeta, uploadID), updatedJSON, 5*time.Minute)
 
 	return &CompleteResult{
 		InitMeta:     &meta,

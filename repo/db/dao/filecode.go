@@ -44,6 +44,34 @@ func (r *FileCodeRepository) GetByCode(ctx context.Context, code string) (*model
 	return &fileCode, nil
 }
 
+// FirstByUploadID 按上传会话 ID 查已建的分享（**幂等回读**用）。
+//
+// 背景（2026-10-24 审计，core v0.32.6）：上传完成面（chunk/presign 的 Complete）
+// 此前**不检查是否已建过分享** ⇒ 同一 upload_id 二次 Complete（双击 / 客户端
+// 重试 / 网络重试）会**再建一条分享**：两个分享各有独立的取件次数额度与取件码
+// ⇒ owner 设的「最多取 N 次」实际可取 2N 次；用户存储统计也被双计。
+// （真机实测：13 条带 upload_id 的分享里已有 **1 组重复** ⇒ 该缺陷已在生产
+// 数据上发生。）
+//
+// ⇒ 完成面先按 upload_id 回读已有分享 ⇒ 命中即**幂等返回**（同一个分享码），
+// 不新建行、不重复扣次、不重复计配额。
+//
+// 命中多条时取 **id 最小**（最早建的那条）⇒ 与 GetByCodeFolded 的确定性口径
+// 一致；空 upload_id 不参与（普通分享没有上传会话）。
+func (r *FileCodeRepository) FirstByUploadID(ctx context.Context, uploadID string) (*model.FileCode, error) {
+	if uploadID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var fileCode model.FileCode
+	err := r.db().WithContext(ctx).
+		Where("upload_id = ? AND deleted_at IS NULL", uploadID).
+		Order("id ASC").First(&fileCode).Error
+	if err != nil {
+		return nil, err
+	}
+	return &fileCode, nil
+}
+
 // GetByCodeFolded 大小写折叠检索（UPPER 归一；码表全 ASCII，sqlite/mysql/pg 通吃）。
 // 调用方必须先精确 GetByCode 未命中再兜底本方法，热路径不恒走函数查询；
 // 多行同码不同大小写时按 id 升序取最早一条，保证结果确定性。

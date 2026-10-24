@@ -29,6 +29,15 @@ type mockShareService struct {
 	returnURL  string
 	returnFull string
 	returnErr  error
+	// existingShareCode 预置的「已建分享码」（幂等回读命中时返回；空 = 未命中）
+	existingShareCode string
+}
+
+// FindShareByUploadID 回读已建分享（幂等复用路径；默认未命中）。
+func (m *mockShareService) FindShareByUploadID(ctx context.Context, uploadID string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.existingShareCode, nil
 }
 
 func (m *mockShareService) CreateShare(ctx context.Context, req *ShareCreateReq) (*ShareCreateResp, error) {

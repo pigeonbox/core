@@ -662,6 +662,33 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// 幂等：同一 upload_id 已建过分享 ⇒ **复用**（不新建行、不重复扣次、
+	// 不重复计配额，**也不再合并出第二份物理文件**）。
+	//
+	// 缺陷（2026-10-24 审计，core v0.32.6）：此前 Complete **不检查**是否已建过
+	// 分享 ⇒ 双击 / 客户端重试 / 网络重试 二次 complete 同一 upload_id 会
+	// **再建一条分享**：两个分享各有独立的取件次数额度与取件码 ⇒ owner 设的
+	// 「最多取 N 次」实际可取 2N 次；用户存储统计也被双计；每次合并还会生成新的
+	// UUID 物理路径 ⇒ **磁盘上留下第二份**（仅 Cancel 回收分片）。
+	// 真机实测：13 条带 upload_id 的分享里已有 **1 组重复** ⇒ 已在生产数据发生。
+	//
+	// 位置在**合并之前**：重试不该再把分片合并一遍（浪费 IO + 多一份物理文件）。
+	if existing, ferr := getShareService().FindShareByUploadID(ctx, uploadID); ferr == nil && existing != nil {
+		// 会话状态可能没同步（上次 ShareFile 成功但 CompleteUpload 失败）⇒ 补标记
+		_ = getChunkService().CompleteUpload(ctx, uploadID)
+		c.JSON(consts.StatusOK, &chunkmodel.ChunkUploadCompleteResp{
+			Code:    0,
+			Message: "上传完成",
+			Data: &chunkmodel.ChunkUploadCompleteData{
+				ShareCode: existing.Code,
+				ShareURL:  chunkSharePageURL(ctx, existing.Code),
+				FileName:  info.FileName,
+				FileSize:  info.FileSize,
+			},
+		})
+		return
+	}
+
 	// 检查所有分片是否已上传
 	uploadedIndexes, err := getChunkService().GetUploadedChunkIndexes(ctx, uploadID)
 	if err != nil {

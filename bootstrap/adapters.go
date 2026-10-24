@@ -326,6 +326,17 @@ func (a presignShareAdapter) CreateShare(ctx context.Context, req *presignApp.Sh
 	}, nil
 }
 
+// FindShareByUploadID 按上传会话 ID 回读已建分享（上传完成面幂等复用：
+// 同一 upload_id 二次 Complete 复用同一个分享，不新建 ⇒ owner 的取件次数
+// 额度不被翻倍。2026-10-24 审计，core v0.32.6）。
+func (a presignShareAdapter) FindShareByUploadID(ctx context.Context, uploadID string) (string, error) {
+	fc, err := a.svc.FindShareByUploadID(ctx, uploadID)
+	if err != nil || fc == nil {
+		return "", err
+	}
+	return fc.Code, nil
+}
+
 // adminDefaultsAdapter user.DefaultsProvider 的 admin 域适配器
 // （管理后台持久化配置优先，无记录回退 yaml——EffectiveUserSettings 语义）。
 type adminDefaultsAdapter struct{}
