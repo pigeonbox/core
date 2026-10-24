@@ -18,6 +18,7 @@ import (
 	dao_preview "github.com/pigeonbox/core/repo/db/dao_preview"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
+	"github.com/oekit/concurrency/syncx"
 	"gorm.io/gorm"
 )
 
@@ -49,10 +50,14 @@ type LockedError struct{ Remain int }
 
 func (e *LockedError) Error() string { return fmt.Sprintf("locked for %ds", e.Remain) }
 
-// previewGenSlots 预览生成并发闸（2026-10-08 加固）：生成是同步重活（图片
+// previewGenGate 预览生成并发闸（2026-10-08 加固）：生成是同步重活（图片
 // 全量解码/ffmpeg 子进程），用满配额即忙拒——try-acquire 不排队，避免请求
 // 堆积把内存换成另一种 DoS。
-var previewGenSlots = make(chan struct{}, 2)
+//
+// 收编 oekit/concurrency/syncx.Gate：上游 Gate 的 TryAcquire 正是「满额即拒、
+// 不排队」的形态，且归还名额幂等（此前自维护的 chan struct{} 归还与占用分离，
+// 重复归还会把名额多还一个）。
+var previewGenGate = syncx.NewGate(2)
 
 // Service 预览域服务。存储实例由 bootstrap 注入；nil 时预览生成不可用
 // （回归 2026-10-03：此前硬编码 data/uploads 路径基，与统一存储不一致）。
@@ -140,12 +145,11 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 		return preview, nil
 	}
 	// 并发闸：只在真实生成路径占用（缓存命中零开销）
-	select {
-	case previewGenSlots <- struct{}{}:
-		defer func() { <-previewGenSlots }()
-	default:
+	release, ok := previewGenGate.TryAcquire()
+	if !ok {
 		return nil, ErrPreviewBusy
 	}
+	defer release()
 	preview, err = s.generatePreview(ctx, fileCode)
 	if err != nil {
 		return nil, ErrPreviewUnavailable
