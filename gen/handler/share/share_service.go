@@ -531,12 +531,20 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	// 取件次数已用完：给**明确**的业务码（20004 CodeShareReachLimit「超过取件
 	// 次数」——该码位此前是保留未发射，正是为此预留），不再伪装成「不存在/已过期」。
 	// 此前「次数耗尽」被 IsExpired 混作过期 ⇒ 404「分享不存在或已过期」。
+	//
+	// 例外：**已经取过的人**仍可再打开（文本分享的正文就在本响应里交付 ⇒ 他得
+	// 能反复看；他不重复扣次）。2026-10-24 回归修复：一刀切拒绝 ⇒ 收件人刷新
+	// 一次就 403，正文都看不到。
 	if fileCode.IsCountExhausted() {
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeShareReachLimit,
-			"message": "超过取件次数",
-		})
-		return
+		already, _ := getShareService().HasPickupCharge(ctx, fileCode.Code,
+			security.TextViewKey(fileCode.Code, middleware.ClientIP(c)))
+		if !already {
+			c.JSON(consts.StatusForbidden, map[string]interface{}{
+				"code":    errcode.CodeShareReachLimit,
+				"message": "超过取件次数",
+			})
+			return
+		}
 	}
 
 	// 密码保护校验（统一取件闸门 pkg/gate.CheckPickup；修复史:此处响应包含
@@ -600,7 +608,9 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	// 计次键 = 本次签发的令牌指纹 ⇒ 随它下发的直链再被下载时**不再重复扣次**
 	//（同一取件会话 = 一次取件）。
 	if shareService.IsTextShare(fileCode) {
-		if !chargePickup(ctx, c, fileCode.Code, security.DownloadTokenFingerprint(token),
+		// 计次键 = (分享码, 取件人 IP) ⇒ **刷新页面不重复扣次**（文本的交付动作
+		// 是「打开」不是「下载」；令牌每次 select 都变，用它判重会误伤刷新）。
+		if !chargePickup(ctx, c, fileCode.Code, security.TextViewKey(fileCode.Code, middleware.ClientIP(c)),
 			middleware.ClientIP(c), "select-text") {
 			return
 		}
@@ -882,8 +892,10 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 	// 如果是文本分享，直接返回文本（IsTextShare = Text 非空且无文件路径；
 	// 文件分享的原始文件名也存在 Text 字段，不能仅凭 Text 判定——回归 P0）
 	if shareService.IsTextShare(fileCode) {
-		// 交付前计次（文本正文即交付内容；同一令牌不重复扣）
-		if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download-text") {
+		// 交付前计次（文本正文即交付内容）：与 select 文本交付**同一个计次键**
+		// （分享码+取件人 IP）⇒ select 交付过的文本，随它下发的直链再下载时
+		// 不重复扣次（同一次取件）。
+		if !chargePickup(ctx, c, fileCode.Code, security.TextViewKey(fileCode.Code, viewerIP), viewerIP, "download-text") {
 			return
 		}
 		c.Header("Content-Type", "text/plain; charset=utf-8")

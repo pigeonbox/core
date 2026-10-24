@@ -79,6 +79,25 @@ func (r *FileCodeRepository) DeleteExpiredPickupCharges(ctx context.Context, bef
 	return res.RowsAffected, nil
 }
 
+// HasPickupCharge 判「该取件会话是否已计次」。
+//
+// 用途：取件页在**次数已用完**时的放行判定 —— 已经取过的人（如文本分享的
+// 正文在取件页交付）应当仍能再打开看（他不重复扣次），而不是被一刀切拒绝。
+func (r *FileCodeRepository) HasPickupCharge(ctx context.Context, code, sessionKey string) (bool, error) {
+	if sessionKey == "" {
+		return false, nil
+	}
+	var n int64
+	err := r.db().WithContext(ctx).
+		Model(&model.PickupCharge{}).
+		Where("code = ? AND token_hash = ?", code, sessionKey).
+		Count(&n).Error
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // ListPickups 取某分享的逐条取件明细（最近 N 条，按时间倒序）。
 //
 // owner 侧「取件历史」的数据源：**一次取件 = 一行**（多文件逐个下载/断点续传

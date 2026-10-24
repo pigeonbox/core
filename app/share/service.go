@@ -897,6 +897,12 @@ func (s *Service) ChargePickup(ctx context.Context, code, tokenFingerprint, chan
 	return s.fileCodeRepo.ChargePickupOnce(ctx, code, tokenFingerprint, channel, viewerIP)
 }
 
+// HasPickupCharge 判「该取件会话是否已计次」（取件页在额度用完时的放行判定：
+// 已经取过的人仍可再打开，不重复扣次）。
+func (s *Service) HasPickupCharge(ctx context.Context, code, sessionKey string) (bool, error) {
+	return s.fileCodeRepo.HasPickupCharge(ctx, code, sessionKey)
+}
+
 // ListPickups 取某分享的逐条取件明细（owner 侧「取件历史」用）。
 //
 // 数据源 = 计次记录表（一次取件 = 一行）⇒ 多文件逐个下载/断点续传不会被

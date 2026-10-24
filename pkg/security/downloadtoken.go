@@ -135,6 +135,28 @@ func tokenFingerprint(token string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// TextViewKey **文本交付面**的计次键：按 (分享码, 取件人 IP) 派生。
+//
+// 为什么文本面不用令牌指纹（2026-10-24 回归修复）：select 每次都会签发**新**令牌
+// ⇒ 令牌指纹每次都不同 ⇒ 收件人**刷新一次页面就扣一次**取件次数 ⇒ 额度很快耗尽，
+// 第三次 select 直接 403「超过取件次数」——**正文都看不了**（改动前 select 从不
+// 扣次，文本分享可以随便刷新查看 ⇒ 这是引入的功能性回归）。
+//
+// 文本的交付动作是「打开页面」而非「下载」⇒ 判重粒度应当是**取件者**而不是
+// 一次请求：同一 IP 重复打开/刷新 = 同一次取件（只扣 1 次，能一直看）；
+// 不同的人（不同 IP）= 各自的取件（各扣 1 次 ⇒ owner 的「N 次」= N 个取件者）。
+//
+// 单向（HMAC）⇒ 落库的不是明文 IP。与 DownloadSessionKey 的域不同（"text|" vs
+// "ip|"）⇒ 两类键不会互相撞。
+func TextViewKey(code, clientIP string) string {
+	if len(downloadTokenSecret) == 0 || clientIP == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, downloadTokenSecret)
+	mac.Write([]byte("text|" + code + "|" + clientIP))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 // DownloadSessionKey 无令牌部署时的兜底「取件会话」键（按分享码 + 取件人 IP）。
 //
 // 场景：`security.download_token.enabled=false` ⇒ 没有令牌 ⇒ 没有天然的
