@@ -29,8 +29,11 @@ type PickupCharge struct {
 	Code string `gorm:"size:255;not null;uniqueIndex:idx_pickup_charge_code_token" json:"code"`
 	// TokenHash 令牌指纹（令牌签名段，hex）。
 	TokenHash string `gorm:"size:64;not null;uniqueIndex:idx_pickup_charge_code_token" json:"token_hash"`
-	// Channel 计次来源通道（select / retrieve / anonymous-download），仅供观测。
+	// Channel 计次来源通道（select / retrieve / download），仅供观测。
 	Channel string `gorm:"size:32" json:"channel"`
+	// IP 取件人 IP（可信代理解析后）——owner 侧「取件历史」逐条展示用。
+	// 落的是明文 IP（与 transfer_logs 一致）；若日后要脱敏，这里是唯一改动点。
+	IP string `gorm:"size:64" json:"ip"`
 	// ChargedAt 计次时刻（= 计次成功时间）。
 	ChargedAt time.Time `gorm:"index" json:"charged_at"`
 }

@@ -24,7 +24,10 @@ import (
 // 返回 created=true 表示本次是**首次**用该令牌（调用方据此扣减次数）；
 // created=false 表示该令牌此前已计次（同一取件会话 ⇒ 不再扣）。
 // 冲突不算错误（并发重复到达是正常情形）。
-func (r *FileCodeRepository) CreatePickupCharge(ctx context.Context, code, tokenHash, channel string) (bool, error) {
+//
+// 登记同时落**取件人 IP** ⇒ owner 侧的逐条取件明细有据可查（此前只有
+// file_codes 的「最后一次 IP + 计数」，看不到逐条）。
+func (r *FileCodeRepository) CreatePickupCharge(ctx context.Context, code, tokenHash, channel, ip string) (bool, error) {
 	if tokenHash == "" {
 		// 无令牌指纹（令牌未启用/未携带）⇒ 不做会话级去重，按「每次都算新取件」处理。
 		return true, nil
@@ -33,6 +36,7 @@ func (r *FileCodeRepository) CreatePickupCharge(ctx context.Context, code, token
 		Code:      code,
 		TokenHash: tokenHash,
 		Channel:   channel,
+		IP:        ip,
 		ChargedAt: time.Now(),
 	}
 	res := r.db().WithContext(ctx).
@@ -75,6 +79,23 @@ func (r *FileCodeRepository) DeleteExpiredPickupCharges(ctx context.Context, bef
 	return res.RowsAffected, nil
 }
 
+// ListPickups 取某分享的逐条取件明细（最近 N 条，按时间倒序）。
+//
+// owner 侧「取件历史」的数据源：**一次取件 = 一行**（多文件逐个下载/断点续传
+// 属同一次取件会话 ⇒ 只有一行，不会把「一次取件」显示成 N 次）。
+func (r *FileCodeRepository) ListPickups(ctx context.Context, code string, limit int) ([]model.PickupCharge, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	var rows []model.PickupCharge
+	err := r.db().WithContext(ctx).
+		Where("code = ?", code).
+		Order("charged_at DESC, id DESC").
+		Limit(limit).
+		Find(&rows).Error
+	return rows, err
+}
+
 // ChargePickupOnce 「按取件会话」计次：同一令牌至多扣 1 次取件次数。
 //
 // 返回：
@@ -85,8 +106,8 @@ func (r *FileCodeRepository) DeleteExpiredPickupCharges(ctx context.Context, bef
 //
 // 顺序：先登记（唯一索引裁决「首次」），再原子扣减；扣减失败（次数耗尽或 DB 错）
 // ⇒ 撤销登记，让后续重试仍是一次「新取件」（不因一次失败把额度白扔）。
-func (r *FileCodeRepository) ChargePickupOnce(ctx context.Context, code, tokenHash, channel string) (charged bool, exhausted bool, err error) {
-	created, err := r.CreatePickupCharge(ctx, code, tokenHash, channel)
+func (r *FileCodeRepository) ChargePickupOnce(ctx context.Context, code, tokenHash, channel, ip string) (charged bool, exhausted bool, err error) {
+	created, err := r.CreatePickupCharge(ctx, code, tokenHash, channel, ip)
 	if err != nil {
 		return false, false, err
 	}

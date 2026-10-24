@@ -834,7 +834,7 @@ func chargePickup(ctx context.Context, c *app.RequestContext, code, fingerprint,
 		// 逐个下载会逐个扣次（关闭令牌时重现「次数=1 只能下载第一个文件」）。
 		fingerprint = security.DownloadSessionKey(code, viewerIP)
 	}
-	charged, exhausted, err := getShareService().ChargePickup(ctx, code, fingerprint, channel)
+	charged, exhausted, err := getShareService().ChargePickup(ctx, code, fingerprint, channel, viewerIP)
 	if err != nil {
 		// 计次失败不阻断交付（与旧口径一致：记录错误但放行）——
 		// DB 抖动不该让整个取件不可用。

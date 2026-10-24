@@ -885,15 +885,24 @@ func (s *Service) UpdateFileUsage(ctx context.Context, code string) (bool, error
 //
 // tokenFingerprint = 下载令牌的计次指纹（pkg/security 校验时给出；令牌未启用
 // 或未携带时为空 ⇒ 无会话概念，按「每次交付都算一次取件」处理）。
+// viewerIP = 取件人 IP（可信代理解析后）⇒ 随计次记录落库，供 owner 侧逐条展示。
 //
 // 返回：
 //   - charged=true：本次交付**真正扣了**取件次数（该令牌的首次使用）⇒ 调用方
 //     应在此记取件人 + 通知 owner；
-//   - exhausted=true：取件次数已用完且本令牌尚未计次 ⇒ 拒绝交付（10003）；
+//   - exhausted=true：取件次数已用完且本令牌尚未计次 ⇒ 拒绝交付（20004）；
 //   - charged=false, exhausted=false：同一令牌已计次（同一取件会话内的后续
-//     交付：多文件逐个下载 / 断点续传 / 重复点击）⇒ 不再扣次、也不再记取件人。
-func (s *Service) ChargePickup(ctx context.Context, code, tokenFingerprint, channel string) (charged bool, exhausted bool, err error) {
-	return s.fileCodeRepo.ChargePickupOnce(ctx, code, tokenFingerprint, channel)
+//     交付：多文件逐个下载 / 断续传 / 重复点击）⇒ 不再扣次、也不再记取件人。
+func (s *Service) ChargePickup(ctx context.Context, code, tokenFingerprint, channel, viewerIP string) (charged bool, exhausted bool, err error) {
+	return s.fileCodeRepo.ChargePickupOnce(ctx, code, tokenFingerprint, channel, viewerIP)
+}
+
+// ListPickups 取某分享的逐条取件明细（owner 侧「取件历史」用）。
+//
+// 数据源 = 计次记录表（一次取件 = 一行）⇒ 多文件逐个下载/断点续传不会被
+// 显示成「取件 N 次」（那正是此前只有「最后 IP + 计数」时看不出来的失真）。
+func (s *Service) ListPickups(ctx context.Context, code string, limit int) ([]model.PickupCharge, error) {
+	return s.fileCodeRepo.ListPickups(ctx, code, limit)
 }
 
 // ErrShareNotReady 分享未完成上传（占位记录：文件还没传上来）。
@@ -1036,6 +1045,10 @@ func (s *Service) modelToResp(ctx context.Context, fileCode *model.FileCode) *Sh
 // contracts 生成模型 sharemodel.UserShareItemData（idl/share.thrift
 // UserShareItemData），此前 Go/TS 双手抄在 pickup_code 变更时被迫三处同步。
 
+// pickupDetailLimit 每条分享随列表返回的取件明细条数上限（owner 侧「取件历史」）。
+// 明细是增强信息：超出的旧记录可在管理端传输日志里看全量。
+const pickupDetailLimit = 20
+
 // deletedAtToPtr gorm.DeletedAt → *time.Time（nil 表示未删除）
 func deletedAtToPtr(d gorm.DeletedAt) *time.Time {
 	if d.Valid {
@@ -1072,6 +1085,24 @@ func (s *Service) ListUserShares(ctx context.Context, userID uint, status, searc
 		item := toUserShareItemData(f)
 		if counts != nil {
 			item.FileCount = int32(counts[f.ID])
+		}
+		// 逐条取件明细（2026-10-24）：owner 侧「取件历史」的数据源。
+		// 一次取件 = 一行 ⇒ 多文件逐个下载/断点续传不会被显示成「取件 N 次」。
+		// 取不到明细不阻断列表（明细是增强信息，不是列表的必需项）。
+		if rows, perr := s.fileCodeRepo.ListPickups(ctx, f.Code, pickupDetailLimit); perr == nil && len(rows) > 0 {
+			recs := make([]*sharemodel.PickupRecord, 0, len(rows))
+			for _, r := range rows {
+				rec := &sharemodel.PickupRecord{
+					PickedAt: r.ChargedAt.UTC().Format(time.RFC3339Nano),
+					IP:       r.IP,
+				}
+				if r.Channel != "" {
+					ch := r.Channel
+					rec.Channel = &ch
+				}
+				recs = append(recs, rec)
+			}
+			item.Pickups = recs
 		}
 		items = append(items, item)
 	}
