@@ -195,20 +195,36 @@ func (j *Janitor) CleanupLogs(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
-// CleanupPickupCharges 清理取件计次记录（2026-10-24）。
+// CleanupPickupCharges 清理取件记录（2026-10-24）。
 //
-// 计次记录按「下载令牌」去重，令牌 TTL 之外不可能再被用来计次 ⇒ 超过
-// TTL+1h 的记录可安全删除（否则表无限膨胀）。
-func (j *Janitor) CleanupPickupCharges(ctx context.Context, ttl time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-(ttl + time.Hour))
-	n, err := j.fileCodeRepo.DeleteExpiredPickupCharges(ctx, cutoff)
+// 这张表有两个角色：**去重键**（同一令牌不重复计次，令牌过期后即可丢）与
+// **owner 侧取件历史的逐条明细**（IP/时间/交付面，要留很久）。
+// ⇒ 清理窗口**必须按明细的留存需求**给（默认 30 天），不能跟着令牌 TTL 走
+// （此前取 TTL+1h ⇒ owner 看到的明细最多存在 1 小时 ⇒ 逐条历史形同虚设）。
+//
+// retentionDays = 0 ⇒ 永久保留（不按时间删）。
+//
+// 另清「孤儿」：分享被硬删后其明细没有主人可看 ⇒ 一并删除（软删/回收站不算）。
+func (j *Janitor) CleanupPickupCharges(ctx context.Context, retentionDays int) (int64, error) {
+	var total int64
+	if retentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -retentionDays)
+		n, err := j.fileCodeRepo.DeleteExpiredPickupCharges(ctx, cutoff)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	orphan, err := j.fileCodeRepo.DeleteOrphanPickupCharges(ctx)
 	if err != nil {
-		return 0, err
+		return total, err
 	}
-	if n > 0 {
-		logger.Info("pickup charge cleanup done", zap.Int64("deleted", n))
+	total += orphan
+	if total > 0 {
+		logger.Info("pickup record cleanup done",
+			zap.Int64("deleted", total), zap.Int("retention_days", retentionDays))
 	}
-	return n, nil
+	return total, nil
 }
 
 // CleanupStaleUploads 清理弃管的分片会话（治理 2026-10-03）：

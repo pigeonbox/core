@@ -132,6 +132,15 @@ type MCPConfig struct {
 type AdminConfig struct {
 	// LogRetentionDays 审计/传输日志保留天数（0 = 永久）。env: PB_ADMIN_LOG_RETENTION_DAYS
 	LogRetentionDays int `mapstructure:"log_retention_days"`
+	// PickupDetailRetentionDays **取件明细**保留天数（0 = 永久）。
+	// env: PB_ADMIN_PICKUP_DETAIL_RETENTION_DAYS
+	//
+	// 为什么与 LogRetentionDays 分开（2026-10-24）：取件计次记录表同时承担两个角色
+	// ——①「同一令牌不重复计次」的去重键（令牌过期后即可丢）；② owner 侧「取件历史」
+	// 的逐条明细（IP / 时间 / 交付面）⇒ ②的留存需求**远长于**①。
+	// 此前两者共用一个「令牌 TTL + 1h」的清理窗口 ⇒ **owner 看到的明细最多只存在
+	// 1 小时**（第二天打开取件历史，明细全空）⇒ 「逐条取件历史」形同虚设。
+	PickupDetailRetentionDays int `mapstructure:"pickup_detail_retention_days"`
 }
 
 // ModerationConfig 内容审核配置（治理 2026-10-03；默认关闭，词表为空恒放行）

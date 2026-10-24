@@ -64,14 +64,34 @@ func (r *FileCodeRepository) DeletePickupCharge(ctx context.Context, code, token
 		Delete(&model.PickupCharge{}).Error
 }
 
-// DeleteExpiredPickupCharges 清理过期计次记录（令牌 TTL 之外的记录已无意义：
-// 令牌本身已失效，不会再被用来计次）。返回删除行数。
+// DeleteExpiredPickupCharges 清理超过留存期的取件记录（0 = 永久保留）。
+//
+// ⚠️ 留存期**不能**跟着令牌 TTL 走（2026-10-24 缺陷）：这张表同时是
+// ①「同一令牌不重复计次」的去重键（令牌过期后即可丢）与 ② owner 侧「取件历史」
+// 的逐条明细（IP/时间/交付面，要留很久）⇒ 清理窗口若取 TTL+1h，owner 看到的明细
+// **最多只存在 1 小时** ⇒ 逐条取件历史形同虚设。
 //
 // 同样**硬删**（Unscoped）：软删行仍占唯一索引 ⇒ 同一令牌无法再登记。
 func (r *FileCodeRepository) DeleteExpiredPickupCharges(ctx context.Context, before time.Time) (int64, error) {
+	if before.IsZero() {
+		return 0, nil // 0 = 永久保留
+	}
 	res := r.db().WithContext(ctx).
 		Unscoped().
 		Where("charged_at < ?", before).
+		Delete(&model.PickupCharge{})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
+// DeleteOrphanPickupCharges 清理「分享已不存在」的孤儿明细（分享被硬删后，
+// 其取件明细留着既占空间、又没有主人可看）。软删（回收站）不算孤儿。
+func (r *FileCodeRepository) DeleteOrphanPickupCharges(ctx context.Context) (int64, error) {
+	res := r.db().WithContext(ctx).
+		Unscoped().
+		Where("code NOT IN (SELECT code FROM file_codes WHERE deleted_at IS NULL)").
 		Delete(&model.PickupCharge{})
 	if res.Error != nil {
 		return 0, res.Error

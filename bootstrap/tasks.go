@@ -14,9 +14,11 @@ import (
 	adminApp "github.com/pigeonbox/core/app/admin"
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
 	"github.com/pigeonbox/core/pkg/logger"
-	securityPkg "github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/repo/db"
 )
+
+// defaultPickupDetailRetentionDays 取件明细默认留存天数（兜底：全局配置未就绪时）。
+const defaultPickupDetailRetentionDays = 30
 
 // 后台任务生命周期：各循环共享一根 ctx（backgroundContext），Cleanup 的
 // teardown 阶段统一取消（stopBackgroundTasks），排水由 drainBackgroundTasks
@@ -94,8 +96,13 @@ func startExpiredFileCleanup(svc *adminApp.Service) {
 // （报告策略见 janitor）。
 func startMaintenanceJanitor() {
 	retention := 90
+	// 取件明细留存天数（0=永久）：owner 侧「取件历史」的逐条明细要留很久，
+	// **不能**跟着下载令牌 TTL 走（2026-10-24 缺陷：TTL+1h ⇒ 明细最多存在
+	// 1 小时 ⇒ 逐条历史形同虚设）。
+	pickupDetailDays := defaultPickupDetailRetentionDays
 	if config != nil {
 		retention = config.Admin.LogRetentionDays
+		pickupDetailDays = config.Admin.PickupDetailRetentionDays
 	}
 	j := adminApp.NewJanitor(db.GetDB(), getBootstrapStorageService(), retention) // 装配层显式句柄
 	// 管理端孤儿端点（POST /admin/storage/clean-presign-orphans 与
@@ -117,7 +124,7 @@ func startMaintenanceJanitor() {
 			logger.Info("retention logs cleaned", zap.Int64("count", n))
 		}
 		// 取件计次记录（一个下载令牌至多扣 1 次）——按令牌 TTL 清理
-		if n, err := j.CleanupPickupCharges(ctx, securityPkg.DownloadTokenTTL()); err != nil {
+		if n, err := j.CleanupPickupCharges(ctx, pickupDetailDays); err != nil {
 			logger.Warn("pickup charge cleanup failed", zap.Error(err))
 		} else if n > 0 {
 			logger.Info("pickup charges cleaned", zap.Int64("count", n))

@@ -108,6 +108,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("moderation.enabled", false)
 	v.SetDefault("moderation.block_action", "reject")
 	v.SetDefault("admin.log_retention_days", 90)
+	// 取件明细留存（owner 侧「取件历史」的逐条明细）——默认 30 天。
+	// ⚠️ 不能跟着下载令牌 TTL 走（此前 TTL+1h ⇒ 明细最多存在 1 小时 ⇒
+	// owner 第二天打开取件历史明细全空 ⇒ 逐条历史形同虚设）。
+	v.SetDefault("admin.pickup_detail_retention_days", 30)
 	// P2P 联邦（M2）默认关闭；启用须显式配置 registry_url + public_url
 	v.SetDefault("federation.enabled", false)
 	v.SetDefault("federation.node_key_path", "data/federation.key")
@@ -207,7 +211,8 @@ var envBindings = map[string][]string{
 	"moderation.clamav.enabled": {"PB_MODERATION_CLAMAV_ENABLED"},
 	"moderation.clamav.addr":    {"PB_MODERATION_CLAMAV_ADDR"},
 	// admin 运维
-	"admin.log_retention_days": {"PB_ADMIN_LOG_RETENTION_DAYS"},
+	"admin.log_retention_days":           {"PB_ADMIN_LOG_RETENTION_DAYS"},
+	"admin.pickup_detail_retention_days": {"PB_ADMIN_PICKUP_DETAIL_RETENTION_DAYS"},
 	// federation（P2P 联邦接入）
 	"federation.enabled":                   {"PB_FEDERATION_ENABLED"},
 	"federation.registry_url":              {"PB_FEDERATION_REGISTRY_URL"},
