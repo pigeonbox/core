@@ -10,14 +10,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/oekit/pkg/pathx"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/app/chunk"
 	shareService "github.com/pigeonbox/core/app/share"
@@ -367,8 +366,12 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 			// 传 `../../etc/passwd` 即可把任意可读文件绑成可下载分享。
 			// 现仅接受服务端生成命名空间 uploads/（presign genObjectKey 布局），
 			// 且清洗后不得逃逸存储根（存储层 localContain 兜底双保险）。
-			cleanKey := path.Clean(filepath.ToSlash(e.ObjectKey))
-			if !strings.HasPrefix(cleanKey, "uploads/") || strings.Contains(cleanKey, "..") {
+			// 路径合法性交上游 pathx.SanitizeRelStrict 严格档：统一把 "\" 当分隔符
+			// （Windows 风格载荷在 Linux 上按平台解释会漏判），并拒绝绝对路径/UNC/
+			// 盘符/显式 ".." 段。此前是 path.Clean + 「含 .. 子串」判定——子串口径
+			// 连带误杀含 ".." 的合法名，且对 "uploads\x" 这类形态给不出结论。
+			cleanKey, ok := pathx.SanitizeRelStrict(e.ObjectKey)
+			if !ok || !strings.HasPrefix(cleanKey, "uploads/") {
 				cleanupStored(ctx, st, bound)
 				c.JSON(consts.StatusBadRequest, map[string]interface{}{
 					"code":    errcode.CodeInvalidParam,
@@ -385,7 +388,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 				})
 				return
 			}
-			size, serr := st.GetFileSize(ctx, e.ObjectKey)
+			size, serr := st.GetFileSize(ctx, cleanKey)
 			if serr != nil || size <= 0 {
 				cleanupStored(ctx, st, bound)
 				c.JSON(consts.StatusBadRequest, map[string]interface{}{
@@ -395,7 +398,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 				return
 			}
 			bound = append(bound, shareService.StoredFileEntry{
-				RelPath:  e.ObjectKey,
+				RelPath:  cleanKey,
 				FileName: name,
 				Size:     size,
 			})
