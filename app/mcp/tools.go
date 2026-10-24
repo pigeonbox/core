@@ -29,7 +29,30 @@ type toolSpec struct {
 	Name     string
 	Desc     string
 	MinScope int
+	// Gate 取件闸门策略：声明本工具是否**读分享内容/元信息**（ReadsShare），
+	// 以及次数耗尽时的判定（Exhausted）。
+	//
+	// 为什么要显式声明（2026-10-24）：`IsExpired()` 拆分前含次数语义 ⇒
+	// 「已过期」的工具天然也拒「次数耗尽」；拆分后每个工具各自判过期，
+	// **次数闸就漏了**（实测 MCP 的 get_share_content / download_share_file
+	// 在额度用完后仍回传正文/文件内容 ⇒ count 样式分享的「最多取 N 次」
+	// 承诺在管理面完全失效）。
+	//
+	// ⇒ 把「读不读分享内容」标进**注册表本身**（单一真相源），由取件闸门
+	// 契约守卫（bootstrap/share_surface_contract_test.go）逐个核对：
+	// 凡是 ReadsShare=true 的工具，都必须在契约表里声明耗尽判定并有行为测试覆盖。
+	Gate     *ShareGate
 	Register func(s *Service, srv *sdk.Server)
+}
+
+// ShareGate 单个工具的取件闸门策略。
+type ShareGate struct {
+	// ReadsShare 本工具是否对外交付分享内容或元信息（true ⇒ 必须守次数闸）。
+	ReadsShare bool
+	// Exhausted 次数耗尽时的判定（错误文案/业务码口径）；ReadsShare=false 时留空。
+	Exhausted string
+	// CoveredBy 覆盖该策略的行为测试函数名（守卫机械校验其真实存在）。
+	CoveredBy string
 }
 
 // toolSpecs 全部工具（18 个）。
@@ -65,6 +88,9 @@ var toolSpecs = []toolSpec{
 	{
 		Name: "get_share", MinScope: scopeAdmin,
 		Desc: "按分享码或 6 位取件码查询分享信息（不消耗取件次数）",
+		// 管理面元信息面：与 /admin/files 同规格（管理员本就可见全站分享的
+		// 文件名/大小），**豁免**取件次数闸（次数闸约束的是「对外分发给收件人」）。
+		Gate: &ShareGate{ReadsShare: true, Exhausted: "豁免"},
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "get_share", Description: "按分享码或 6 位取件码查询分享信息（不消耗取件次数）"}, toolGuard(scopeAdmin, s.getShare))
 		},
@@ -72,6 +98,9 @@ var toolSpecs = []toolSpec{
 	{
 		Name: "get_share_content", MinScope: scopeAdmin,
 		Desc: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）",
+		// 交付面：文本分享这里**回传正文** ⇒ 必须守次数闸（count 样式分享的
+		// 「最多取 N 次」承诺不能在管理面被绕过）。
+		Gate: &ShareGate{ReadsShare: true, Exhausted: "取件次数已用完", CoveredBy: "TestToolsCall_CountExhaustedShareDenied"},
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "get_share_content", Description: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）"}, toolGuard(scopeAdmin, s.getShareContent))
 		},
@@ -79,6 +108,8 @@ var toolSpecs = []toolSpec{
 	{
 		Name: "download_share_file", MinScope: scopeAdmin,
 		Desc: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）",
+		// 交付面：回传**文件内容** ⇒ 必须守次数闸（同上）。
+		Gate: &ShareGate{ReadsShare: true, Exhausted: "取件次数已用完", CoveredBy: "TestToolsCall_CountExhaustedFileShareDenied"},
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "download_share_file", Description: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）"}, toolGuard(scopeAdmin, s.downloadShareFile))
 		},

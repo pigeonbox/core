@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/oekit/concurrency/syncx"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/gate"
 	previewService "github.com/pigeonbox/core/preview"
@@ -18,7 +19,6 @@ import (
 	dao_preview "github.com/pigeonbox/core/repo/db/dao_preview"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
-	"github.com/oekit/concurrency/syncx"
 	"gorm.io/gorm"
 )
 

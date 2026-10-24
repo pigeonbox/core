@@ -435,3 +435,28 @@ func (s *Service) ToolNames() []string {
 	}
 	return names
 }
+
+// ShareReadingToolNames 返回「对外交付分享内容/元信息」的工具名。
+//
+// 供取件闸门契约守卫（bootstrap/share_surface_contract_test.go）消费：
+// 凡是读分享内容的工具都必须在契约表里声明「次数耗尽时的判定」并有行为测试
+// 覆盖 ⇒ 新增读内容的工具而忘声明 ⇒ 守卫变红。
+func ShareReadingToolNames() []string {
+	var out []string
+	for _, spec := range toolSpecs {
+		if spec.Gate != nil && spec.Gate.ReadsShare {
+			out = append(out, spec.Name)
+		}
+	}
+	return out
+}
+
+// ShareGatePolicy 返回某工具的取件闸门策略（无策略返回 nil）。
+func ShareGatePolicy(tool string) *ShareGate {
+	for _, spec := range toolSpecs {
+		if spec.Name == tool {
+			return spec.Gate
+		}
+	}
+	return nil
+}
