@@ -108,10 +108,10 @@ func TestRetrieve_HappyPath(t *testing.T) {
 	assert.Equal(t, "f.txt", meta.FileName)
 	assert.Equal(t, int64(100), meta.FileSize)
 
-	// DB 次数已扣减
+	// DB 次数**未**扣减（2026-10-24：扣次统一在内容交付时，retrieve 只发凭证）
 	fc, _ := svc.fileCodeRepo.GetByCode(ctx, "SHARE1")
-	assert.Equal(t, 2, fc.ExpiredCount)
-	assert.Equal(t, 1, fc.UsedCount)
+	assert.Equal(t, 3, fc.ExpiredCount, "retrieve 不消耗取件次数")
+	assert.Equal(t, 0, fc.UsedCount)
 }
 
 // TestRetrieve_NotFound 取件码不存在
@@ -134,20 +134,46 @@ func TestRetrieve_Expired(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCodeExpired)
 }
 
-// TestRetrieve_Exhausted 次数耗尽
+// TestRetrieve_Exhausted 次数耗尽 ⇒ 独立错误码（20007），不再混作「已过期」
+//
+// 2026-10-24 回归锚点：此前「次数耗尽」落在 IsExpired 里 ⇒ 返回 ErrCodeExpired
+// （文案「已过期」）⇒ 用户看到的是「分享过期」而不是「次数用完」。
 func TestRetrieve_Exhausted(t *testing.T) {
 	svc, _, _ := newTestService(t)
 	ctx := context.Background()
-	require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{Code: "SHARE_EXH", FilePath: "uploads/x/SHARE_EXH.bin", ExpiredCount: 1}))
+	require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{Code: "SHARE_EXH", FilePath: "uploads/x/SHARE_EXH.bin", ExpiredCount: 0}))
 	code, err := svc.GenerateCode(ctx, CodeMeta{ShareCode: "SHARE_EXH"}, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 
-	// 第一次成功（1→0）
 	_, err = svc.Retrieve(ctx, code, "", "")
+	assert.ErrorIs(t, err, ErrCodeExhausted)
+	assert.NotErrorIs(t, err, ErrCodeExpired, "次数耗尽不是「过期」")
+}
+
+// TestRetrieve_LastPickupStillDeliverable 末次取件必须能拿到文件（2026-10-24 回归）
+//
+// 缺陷（真实事故级）：此前 retrieve **自己**扣次数 ⇒ count=1 的分享在 retrieve
+// 后计数归零 ⇒ IsExpired()=true ⇒ 随后的下载被判「已过期」⇒ **末次取件必然
+// 404、文件永远拿不到**（而分享页通道 select→download 却能拿到 ⇒ 两条通道
+// 对同一条分享结论相反）。
+//
+// 现在：retrieve 只发凭证（不扣次）⇒ 交付时扣 ⇒ 末次取件可完成交付。
+func TestRetrieve_LastPickupStillDeliverable(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx := context.Background()
+	require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{Code: "SHARE_LAST", FilePath: "uploads/x/SHARE_LAST.bin", ExpiredCount: 1}))
+	code, err := svc.GenerateCode(ctx, CodeMeta{ShareCode: "SHARE_LAST"}, time.Now().Add(time.Hour))
 	require.NoError(t, err)
-	// 第二次：ExpiredCount=0 → IsExpired=true
-	_, err = svc.Retrieve(ctx, code, "", "")
-	assert.ErrorIs(t, err, ErrCodeExpired)
+
+	meta, err := svc.Retrieve(ctx, code, "", "")
+	require.NoError(t, err, "末次取件的取件查询必须成功")
+
+	fc, err := svc.fileCodeRepo.GetByCode(ctx, "SHARE_LAST")
+	require.NoError(t, err)
+	assert.False(t, fc.IsExpired(), "取件查询不得把分享判成过期（否则随后的下载 404）")
+	assert.False(t, fc.IsCountExhausted(), "查询本身不消耗次数")
+	assert.Equal(t, 1, fc.ExpiredCount)
+	assert.Equal(t, "SHARE_LAST", meta.ShareCode)
 }
 
 // TestRetrieve_PasswordWrong 密码错误
@@ -194,9 +220,10 @@ func TestRetrieve_Unlimited(t *testing.T) {
 		_, err := svc.Retrieve(ctx, code, "", "")
 		require.NoError(t, err, "第 %d 次取件应成功", i+1)
 	}
+	// 取件查询不再消耗次数（扣次在交付时）⇒ used_count 保持 0
 	fc, _ := svc.fileCodeRepo.GetByCode(ctx, "SHARE_INF")
 	assert.Equal(t, -1, fc.ExpiredCount)
-	assert.Equal(t, 5, fc.UsedCount)
+	assert.Equal(t, 0, fc.UsedCount)
 }
 
 // TestCancel 作废取件码
@@ -234,9 +261,9 @@ func TestRetrieve_ShareCodeFallback(t *testing.T) {
 	assert.Equal(t, "note.txt", meta.FileName)
 	assert.Equal(t, int64(42), meta.FileSize)
 
-	// 次数照常扣减
+	// 取件查询不消耗次数（扣次在交付时，见 chargePickup）
 	fc, _ := svc.fileCodeRepo.GetByCode(ctx, "Piqck7ZN")
-	assert.Equal(t, 2, fc.ExpiredCount)
+	assert.Equal(t, 3, fc.ExpiredCount)
 }
 
 // TestRetrieve_ShareCodeFallback_CaseFold 分享码查询大小写折叠（2026-10-08 起

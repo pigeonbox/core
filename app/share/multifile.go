@@ -8,7 +8,6 @@ import (
 
 	"github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/pkg/codex"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/metrics"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -181,7 +180,7 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 // ListShareFiles 取分享的文件列表（取件端展示/下载入口）。
 // 旧单文件分享无子表行：合成一条虚拟行（主表字段），保证前端统一渲染。
 func (s *Service) ListShareFiles(ctx context.Context, code string) ([]*ShareFileItem, error) {
-	fc, err := codex.Resolve(ctx, s.fileCodeRepo, code, conf.CodeFoldEnabledOrDefault())
+	fc, err := s.fileCodeRepo.ResolveByCode(ctx, code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +217,7 @@ func (s *Service) shareFileItems(ctx context.Context, fc *model.FileCode) ([]*Sh
 // GetShareChild 取分享内的单个子文件（校验归属，防跨分享枚举文件 ID）。
 // legacy 虚拟行（id=0）返回主表合成的子项。
 func (s *Service) GetShareChild(ctx context.Context, code string, fileID uint) (*model.FileCode, *model.FileCodeFile, error) {
-	fc, err := codex.Resolve(ctx, s.fileCodeRepo, code, conf.CodeFoldEnabledOrDefault())
+	fc, err := s.fileCodeRepo.ResolveByCode(ctx, code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
 		return nil, nil, err
 	}

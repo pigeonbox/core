@@ -73,20 +73,46 @@ type FileCode struct {
 	PickupCode *string `gorm:"uniqueIndex;size:8" json:"pickup_code,omitempty"`
 }
 
-// IsExpired 检查是否过期
+// PickupCodeLength 取件码长度（6 位）——**唯一真相源**。
+//
+// 此前三处各写一份（app/anonymous 的 codeLength、app/share 的 pickupCodeLength、
+// app/mcp 的字面量 6）⇒ 任一处改长度即静默漂移（分享域兜底失效 / MCP 解析失效）。
+const PickupCodeLength = 6
+
+// IsNotReady 判定记录是否为「未完成上传」的占位分享：既无文件路径、也非文本分享。
+//
+// 与匿名通道的判定式逐字一致（!IsTextShare() && GetFilePath() == ""）。
+// 判定式必须**只有一处**（分散在多域会各自漂移 ⇒ 同一份占位分享在不同端点
+// 给出不同结论）。
+func IsNotReady(fc *FileCode) bool {
+	return fc != nil && !fc.IsTextShare() && fc.GetFilePath() == ""
+}
+
+// IsExpired 检查是否**时间**过期。
+//
+// ⚠️ 2026-10-24 起本方法**不再**把「取件次数耗尽」算作过期：
+// 此前 ExpiredCount==0 ⇒ IsExpired()==true ⇒ 两条通道对同一条分享给出相反结论：
+//   - 分享页通道（select → download）：扣次发生在**下载请求内**，末次取件能拿到文件；
+//   - 取件码通道（retrieve → download）：retrieve 先把次数扣到 0 ⇒ 随后的下载被判
+//     「已过期」⇒ **末次取件必然 404，文件永远拿不到**（2026-10-24 审计）。
+//
+// 「次数耗尽」有自己的判定（IsCountExhausted）与错误码（10003 / 20007），
+// 不再伪装成「不存在/已过期」。
 func (f *FileCode) IsExpired() bool {
-	// 检查时间过期
-	if f.ExpiredAt != nil && f.ExpiredAt.Before(time.Now()) {
-		return true
-	}
+	return f.ExpiredAt != nil && f.ExpiredAt.Before(time.Now())
+}
 
-	// 检查次数过期
-	// ExpiredCount 语义：-1=无限(不过期), 0=已耗尽(过期), >0=剩余(不过期)
-	if f.ExpiredCount == 0 {
-		return true
-	}
+// IsCountExhausted 取件次数是否已耗尽（ExpiredCount 语义：-1=无限, 0=已耗尽, >0=剩余）。
+//
+// 与 IsExpired（时间）正交：次数耗尽 ⇒ 不能再发起**新的取件**，
+// 但已扣次的那次取件（同一取件会话内）仍应可完成交付。
+func (f *FileCode) IsCountExhausted() bool {
+	return f.ExpiredCount == 0
+}
 
-	return false
+// IsPickupAvailable 是否还能发起新的取件（时间未过期 且 次数未耗尽）。
+func (f *FileCode) IsPickupAvailable() bool {
+	return !f.IsExpired() && !f.IsCountExhausted()
 }
 
 // GetFilePath 获取文件路径

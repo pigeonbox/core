@@ -14,6 +14,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/contracts/errcode"
 	sharemodel "github.com/pigeonbox/contracts/gen/share"
 	shareService "github.com/pigeonbox/core/app/share"
@@ -57,14 +58,6 @@ func getShareService() *shareService.Service {
 		panic("share service not initialized: SetShareService must be called before serving")
 	}
 	return shareSvc
-}
-
-// RecordPickupViewer 记录取件人并触发到件通知（供匿名 6 位取件码通道复用）。
-// 此前只有 /share/select 链路记 viewer，取件码取件对取件历史/到件通知失明
-// （2026-10-08 用户报告取件历史空态矛盾时顺带定位）。失败静默：取件主流程
-// 不因记录失败受阻。
-func RecordPickupViewer(ctx context.Context, code, viewerIP string) {
-	_ = getShareService().RecordViewerAndNotify(ctx, code, viewerIP, "")
 }
 
 // publicShareURL 公开分享链接：显式 base_url > 请求来源动态推断（bootstrap
@@ -476,19 +469,12 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// 失败锁定预检（防取件码/密码爆破；统一 scope "pickup"，与 download/
-	// 匿名取件/preview 面共享 (IP, code) 失败计数）
-	lock := middleware.GetDefaultLockout()
-	lockKey := gate.PickupLockKey(middleware.ClientIP(c), code)
-	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
-		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
-			"code":    errcode.CodeTooManyAttempts,
-			"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain),
-		})
-		return
-	}
-
-	// 获取分享内容
+	// 取件内容（按码解析 → 规范分享码）。
+	//
+	// **先解析再预检锁定**：锁定键必须是**规范分享码**——6 位取件码与 8 位分享码
+	// 指向同一条分享，锁定/失败记账统一在规范码上 ⇒ 同一把钥匙、爆破预算不翻倍。
+	// 此前预检用原始入参、记账用规范码 ⇒ 6 位码入口的 429 预检**恒不命中**
+	//（用户在 6 位码入口看不到预检触发的 429，只有深层闸门才拦）。
 	fileCode, err := getShareService().GetFileByCode(ctx, code)
 	if err != nil {
 		var blocked *shareService.ShareBlockedError
@@ -503,12 +489,35 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// 失败锁定预检（防取件码/密码爆破；统一 scope "pickup"，与 download/
+	// 匿名取件/preview 面共享 (IP, code) 失败计数）
+	lock := middleware.GetDefaultLockout()
+	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
+	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
+		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
+			"code":    errcode.CodeTooManyAttempts,
+			"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain),
+		})
+		return
+	}
+
 	// 占位分享（文件未上传）：与匿名通道同一业务码（20001）与文案 —— 此前此处
 	// 返回 200 + 一条指向不存在文件的下载直链（点了就是 500）（2026-10-23 审计）。
 	if shareService.IsShareNotReady(fileCode) {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
 			"code":    errcode.CodeShareNotFound,
 			"message": "分享未完成上传，暂时无法取件",
+		})
+		return
+	}
+
+	// 取件次数已用完：给**明确**的业务码（20004 CodeShareReachLimit「超过取件
+	// 次数」——该码位此前是保留未发射，正是为此预留），不再伪装成「不存在/已过期」。
+	// 此前「次数耗尽」被 IsExpired 混作过期 ⇒ 404「分享不存在或已过期」。
+	if fileCode.IsCountExhausted() {
+		c.JSON(consts.StatusForbidden, map[string]interface{}{
+			"code":    errcode.CodeShareReachLimit,
+			"message": "超过取件次数",
 		})
 		return
 	}
@@ -560,11 +569,26 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	// 校验通过，清空失败计数
 	lock.Reset(ctx, lockKey)
 
-	// 下发下载令牌（security.download_token.enabled 时 /share/download 必须携带）
+	// 下发下载令牌（security.download_token.enabled 时 /share/download 必须携带）。
+	// 令牌 = **一次取件的凭证**：下载时按令牌计次（同一令牌至多扣 1 次）。
 	token := security.GenerateDownloadToken(fileCode.Code)
+
 	// 直链走形态真相源（pkg/baseurl.ShareDownloadURL）：相对形态 + query 传码与令牌
 	// （令牌必须在 query——落在 '#' 之后服务端收不到）。
 	downloadURL := baseurl.ShareDownloadURL("", fileCode.Code, token)
+
+	// 文本分享：正文在**本响应里交付** ⇒ 交付即取件 ⇒ 在交付前计次。
+	// 此前文本分享在 select 即全文返回却**从不扣次、不记取件人、不写传输日志**
+	// ⇒ owner 设的「按取件次数」上限对文本分享形同虚设（2026-10-24 审计）。
+	// 计次键 = 本次签发的令牌指纹 ⇒ 随它下发的直链再被下载时**不再重复扣次**
+	//（同一取件会话 = 一次取件）。
+	if shareService.IsTextShare(fileCode) {
+		if !chargePickup(ctx, c, fileCode.Code, security.DownloadTokenFingerprint(token),
+			middleware.ClientIP(c), "select-text") {
+			return
+		}
+		logTextView(ctx, fileCode, fileCode.Code, middleware.ClientIP(c))
+	}
 
 	// 契约响应（v0.6.0 起 ShareDetail 载全字段；此前为 ad-hoc map，
 	// download_url/token/encrypted/is_multi/files 六个字段游窜契约外）
@@ -628,15 +652,24 @@ func s3DirectDownloadEnabled() bool {
 	return cfg != nil && cfg.Download.S3DirectDownload
 }
 
-// authorizeAndCharge 下载链路公共鉴权段（DownloadFile / ZipDownload 共用）：
-// 下载闸门 → 防爆破锁定 → 下载令牌校验 → 原子扣减剩余次数。
-// 失败时已写入错误响应并返回 (nil, false)；成功返回分享记录（已扣次数，调用方
-// 无须再扣）。password query 通道已移除（2026-10-16 拍板「一步到位」）：密码经
+// authorizeDownload 下载链路公共鉴权段（DownloadFile / ZipDownload 共用）：
+// 下载闸门 → 防爆破锁定 → 取件内容 → 下载令牌校验 → 密码校验。
+//
+// **不扣次、不记取件人**（2026-10-24）：扣次改到「内容交付前」执行
+// （chargePickup，按取件会话/令牌计次）——此前扣次发生在鉴权段末尾，
+// 早于子文件归属校验与 zip 组装 ⇒ 一次失败请求就白吃一次取件次数。
+//
+// 返回 (fileCode, tokenFingerprint, ok)：
+//   - tokenFingerprint = 令牌的计次指纹（空 = 无有效令牌/令牌未启用 ⇒ 无会话概念，
+//     按「每次交付算一次取件」处理）；
+//   - 失败时已写入错误响应，调用方直接 return。
+//
+// password query 通道已移除（2026-10-16 拍板「一步到位」）：密码经
 // URL query 有浏览器历史/访问日志/Referer 泄漏面，密码保护分享一律走取件流程
 // （retrieve/getShare 以 POST body 校验密码后签发时间窗令牌）换凭证下载；
 // 令牌未启用的部署对密码保护分享同样拒绝并明示原因。破坏性变更随 2.0.0 列车
 // （pb CLI/MCP/前端均不消费该参数，已审计）。
-func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token string) (*model.FileCode, bool) {
+func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token string) (*model.FileCode, string, bool) {
 	// 下载闸门：download.require_login（服务端 enforce）
 	var dlUserID *uint
 	if v, ok := middleware.UserIDFromContext(ctx); ok {
@@ -644,43 +677,55 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 	}
 	if err := gate.CheckDownloadLogin(dlUserID); err != nil {
 		resp.NewTypedError(c, err)
-		return nil, false
+		return nil, "", false
+	}
+
+	// 取件内容（按码解析 → 规范分享码）。
+	//
+	// **先解析再预检/验令牌**（2026-10-24）：
+	// ① 锁定键用规范码 ⇒ 6 位取件码与 8 位分享码共享一把钥匙（预检与记账同键，
+	//    此前预检用原始码 ⇒ 6 位码入口的 429 预检恒不命中）；
+	// ② 令牌按**规范码**校验 ⇒ 用户把下载 URL 的 code 换成 6 位取件码也不再
+	//    莫名 401「令牌无效」（此前签发按规范码、校验按原始码 ⇒ 形态不匹配）。
+	fileCode, err := getShareService().GetFileByCode(ctx, code)
+	if err != nil {
+		var blocked *shareService.ShareBlockedError
+		if errors.As(err, &blocked) {
+			resp.NewTypedError(c, blocked)
+			return nil, "", false
+		}
+		c.JSON(consts.StatusNotFound, map[string]interface{}{
+			"code":    errcode.CodeNotFound,
+			"message": "分享不存在或已过期",
+		})
+		return nil, "", false
 	}
 
 	// 失败锁定预检（防密码爆破；统一 scope "pickup"，与 select/匿名取件/
 	// preview 面共享 (IP, code) 失败计数——此前独立 scope "download"）
 	lock := middleware.GetDefaultLockout()
-	lockKey := gate.PickupLockKey(middleware.ClientIP(c), code)
+	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
 	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
 			"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain),
 		})
-		return nil, false
+		return nil, "", false
 	}
 
 	// 下载令牌校验（security.download_token.enabled，默认开）：
 	// 取件查询/匿名取件接口下发时间窗 HMAC 令牌，恒时比较校验。
-	//
-	// 令牌带**扣次口径**（2026-10-24）：
-	//   - 普通令牌（select 面 / 匿名 download 跳转面签发）：签发方**未**扣次
-	//     ⇒ 下载时扣 1 次取件次数；
-	//   - 「已扣次」令牌（匿名取件 retrieve 面签发）：retrieve 已扣过 1 次
-	//     ⇒ 下载时**不再**扣次。
-	// 此前匿名取件 retrieve 扣一次、随它下发的直链下载又扣一次 ⇒ 一次取件扣两次
-	// （count 过期样式下对方可用次数直接减半），与 8 位分享码路径（select 不扣 +
-	// download 扣 1）口径分叉。
 	tokenEnabled := downloadTokenEnabled()
-	flavor := security.TokenInvalid
+	fingerprint := ""
+	tokenValid := false
 	if tokenEnabled && token != "" {
-		flavor = security.VerifyDownloadTokenFlavor(code, token)
+		fingerprint = security.VerifyDownloadTokenFingerprint(fileCode.Code, token)
+		tokenValid = fingerprint != ""
 	}
-	tokenValid := flavor != security.TokenInvalid
-	countAlreadyPaid := flavor == security.TokenPaid
 	if !tokenValid {
 		// 密码保护分享：无有效令牌一律拒绝（令牌未启用的部署也拦下并明示，
 		// 不再提供 ?password= 旁路）
-		if fc, gerr := getShareService().GetFileByCode(ctx, code); gerr == nil && fc.RequireAuth {
+		if fileCode.RequireAuth {
 			msg := "该分享受密码保护，请通过取件页获取下载凭证"
 			if tokenEnabled && token != "" {
 				msg = "下载令牌无效或已过期，请重新获取取件信息"
@@ -691,7 +736,7 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 				"code":    errcode.CodeDownloadToken,
 				"message": msg,
 			})
-			return nil, false
+			return nil, "", false
 		}
 		if tokenEnabled {
 			msg := "缺少下载令牌，请重新获取取件信息"
@@ -702,19 +747,20 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 				"code":    errcode.CodeDownloadToken,
 				"message": msg,
 			})
-			return nil, false
+			return nil, "", false
 		}
 	}
 
-	// 获取分享内容（viewer IP 由 handler 注入，可信代理解析；tokenValid=true
-	// 时域内跳过密码校验——令牌即等价已认证）
+	// 密码校验（持有效令牌视为已认证——令牌即等价已认证）。
+	// ⚠️ 用**规范分享码**（fileCode.Code）查记录与记账：6 位取件码解析出的记录
+	// 在 code 列是 8 位分享码 ⇒ 用原始码记账会命中 0 行 ⇒ 取件人/到件通知
+	// 静默丢失（2026-10-23 审计）。
 	viewerIP := middleware.ClientIP(c)
-	fileCode, err := getShareService().GetFileWithUsage(ctx, code, "", viewerIP, tokenValid, !countAlreadyPaid)
-	if err != nil {
+	if _, err := getShareService().GetFileWithUsage(ctx, fileCode.Code, "", viewerIP, tokenValid); err != nil {
 		var blocked *shareService.ShareBlockedError
 		if errors.As(err, &blocked) {
 			resp.NewTypedError(c, blocked)
-			return nil, false
+			return nil, "", false
 		}
 		var lockedErr *middleware.LockedError
 		if errors.As(err, &lockedErr) {
@@ -722,7 +768,7 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 				"code":    errcode.CodeTooManyAttempts,
 				"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", lockedErr.RemainingSeconds),
 			})
-			return nil, false
+			return nil, "", false
 		}
 		if err.Error() == "密码错误" {
 			// 失败已由域内统一闸门记账（达阈值触发锁定），此处不再重复计数
@@ -733,7 +779,7 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 					"has_password": true,
 				},
 			})
-			return nil, false
+			return nil, "", false
 		}
 		if errors.Is(err, shareService.ErrShareNotReady) {
 			// 占位分享（文件未上传）与匿名通道同一业务码与文案（2026-10-23 审计：
@@ -742,37 +788,57 @@ func authorizeAndCharge(ctx context.Context, c *app.RequestContext, code, token 
 				"code":    errcode.CodeShareNotFound,
 				"message": err.Error(),
 			})
-			return nil, false
+			return nil, "", false
 		}
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
 			"code":    errcode.CodeNotFound,
 			"message": "分享不存在或已过期",
 		})
-		return nil, false
+		return nil, "", false
 	}
 	lock.Reset(ctx, lockKey)
 
-	// 原子扣减下载次数（DB 为准）。
-	// ⚠️ 必须用**解析后的分享码**（fileCode.Code）而不是用户原始入参：
-	// 6 位取件码解析出的记录在 code 列是 8 位分享码 ⇒ 用原始码去
-	// `WHERE code = ?` 命中 0 行 ⇒ 扣减"失败" ⇒ 误报 403「取件次数已用完」，
-	// 且取件人/到件通知静默丢失（2026-10-23 审计）。
-	//
-	// 「已扣次」令牌：取件面（retrieve）已扣过 1 次 ⇒ 此处**不再扣**（2026-10-24）。
-	if countAlreadyPaid {
-		// 已扣次：匿名取件面 retrieve 已扣 1 次并记了取件人/通知 owner ⇒ 不重复
-	} else if ok, uerr := getShareService().UpdateFileUsage(ctx, fileCode.Code); uerr != nil {
-		// 记录错误但不阻止下载
-		fmt.Printf("更新下载次数失败: %v\n", uerr)
-	} else if !ok {
-		// 次数已耗尽（并发场景下可能在 GetFileWithUsage 之后耗尽）
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeForbidden,
-			"message": "取件次数已用完",
-		})
-		return nil, false
+	return fileCode, fingerprint, true
+}
+
+// chargePickup 交付前计次（按取件会话/下载令牌）。
+//
+// 语义（2026-10-24）：**一个令牌至多扣 1 次取件次数** ——
+//   - 多文件分享逐个下载 / 打包下载 / 断点续传 / 重复点击 ⇒ 同一次取件，只扣 1 次
+//     （此前每个下载请求都扣 ⇒ 「取件次数=1 的多文件分享只能下载第一个文件」，
+//     而打包 zip 又只扣 1 次 ⇒ 两条 UI 路径的次数语义不可比）；
+//   - 记取件人也在此发生（同一取件只记一个取件人，不再每请求刷一次列表）。
+//
+// 返回 false 表示已写错误响应（次数已用完），调用方应立即返回、不再交付。
+func chargePickup(ctx context.Context, c *app.RequestContext, code, fingerprint, viewerIP, channel string) bool {
+	if fingerprint == "" {
+		// 无令牌部署（security.download_token.enabled=false）：没有令牌 ⇒ 没有
+		// 天然的「取件会话」凭证 ⇒ 用 (分享码, 取件人 IP) 兜底，否则多文件
+		// 逐个下载会逐个扣次（关闭令牌时重现「次数=1 只能下载第一个文件」）。
+		fingerprint = security.DownloadSessionKey(code, viewerIP)
 	}
-	return fileCode, true
+	charged, exhausted, err := getShareService().ChargePickup(ctx, code, fingerprint, channel)
+	if err != nil {
+		// 计次失败不阻断交付（与旧口径一致：记录错误但放行）——
+		// DB 抖动不该让整个取件不可用。
+		fmt.Printf("取件计次失败: %v\n", err)
+		return true
+	}
+	if exhausted {
+		// 20004「超过取件次数」（保留码位，此前未发射；前端 i18n 已备该文案）
+		c.JSON(consts.StatusForbidden, map[string]interface{}{
+			"code":    errcode.CodeShareReachLimit,
+			"message": "超过取件次数",
+		})
+		return false
+	}
+	if charged {
+		// 记取件人 + 通知 owner（fire-and-forget，GoSafe 兜底 panic 不影响进程）。
+		async.GoSafe(func() {
+			_ = getShareService().RecordViewerAndNotify(context.Background(), code, viewerIP, "")
+		})
+	}
+	return true
 }
 
 // DownloadFile 下载分享文件
@@ -789,7 +855,8 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	fileCode, ok := authorizeAndCharge(ctx, c, code, token)
+	// 鉴权（不扣次）：解析规范码 → 锁定预检 → 令牌校验 → 密码校验。
+	fileCode, fingerprint, ok := authorizeDownload(ctx, c, code, token)
 	if !ok {
 		return
 	}
@@ -798,9 +865,14 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 	// 如果是文本分享，直接返回文本（IsTextShare = Text 非空且无文件路径；
 	// 文件分享的原始文件名也存在 Text 字段，不能仅凭 Text 判定——回归 P0）
 	if shareService.IsTextShare(fileCode) {
+		// 交付前计次（文本正文即交付内容；同一令牌不重复扣）
+		if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download-text") {
+			return
+		}
 		c.Header("Content-Type", "text/plain; charset=utf-8")
 		c.Header("Content-Disposition", `inline; filename="text.txt"`)
 		c.SetBodyString(fileCode.Text)
+		logTextView(ctx, fileCode, fileCode.Code, viewerIP)
 		return
 	}
 
@@ -813,26 +885,40 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 		}
 	}
 	if fileID > 0 {
-		if streamChildFile(ctx, c, code, fileID, viewerIP) {
+		// 子文件归属校验**在扣次之前**：此前扣次在鉴权段末尾 ⇒ `file=` 不属于
+		// 该分享时返回 404，但取件次数已被吃掉（白扔一次取件机会）。
+		fc, child, gerr := getShareService().GetShareChild(ctx, fileCode.Code, fileID)
+		if gerr != nil || fc == nil || child == nil {
+			c.JSON(consts.StatusNotFound, map[string]interface{}{
+				"code":    errcode.CodeNotFound,
+				"message": "文件不存在或不属于该分享",
+			})
 			return
 		}
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "文件不存在或不属于该分享",
-		})
+		// 计次（按取件会话）：多文件逐个下载 ⇒ 同一令牌只扣 1 次。
+		if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download") {
+			return
+		}
+		streamChildFile(ctx, c, fc, child, viewerIP)
 		return
 	}
-	if items, lerr := getShareService().ListShareFiles(ctx, code); lerr == nil && len(items) > 1 {
-		// 多文件：跳转 zip 端点（鉴权段已在上文完成并扣减次数，zip 端点用
-		// 免重复扣减的内部直通：此处直接流式打包，不再 302，避免浏览器二次请求
-		// 丢失鉴权参数）。zip 组装失败回退错误响应。
-		if streamShareZip(ctx, c, fileCode, viewerIP) {
+	// 用**规范码**列子文件（此前用原始入参 ⇒ 6 位取件码入口解析不到子文件表
+	// ⇒ 多文件分享退化成单文件分支 → 文件路径为空 → 500）。
+	if items, lerr := getShareService().ListShareFiles(ctx, fileCode.Code); lerr == nil && len(items) > 1 {
+		// 多文件：流式 zip 打包（不 302，避免浏览器二次请求丢失鉴权参数）。
+		// 组装失败**在扣次之前**返回 500（不白吃一次取件次数）。
+		rc, zerr := getShareService().ZipStream(ctx, fileCode)
+		if zerr != nil {
+			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
+				"code":    errcode.CodeInternal,
+				"message": "打包下载失败",
+			})
 			return
 		}
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "打包下载失败",
-		})
+		if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download") {
+			return
+		}
+		writeShareZip(ctx, c, fileCode, rc, viewerIP)
 		return
 	}
 
@@ -843,6 +929,11 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 			"code":    errcode.CodeInternal,
 			"message": "文件路径为空",
 		})
+		return
+	}
+
+	// 计次（按取件会话）：断点续传 / 重复点击 ⇒ 同一令牌只扣 1 次。
+	if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download") {
 		return
 	}
 
@@ -919,6 +1010,23 @@ func apiKeyIDPtr(ctx context.Context) *uint {
 		return &id
 	}
 	return nil
+}
+
+// logTextView 文本分享的取件日志（2026-10-24）。
+//
+// 此前文本分享的正文在 /share/select 即交付，而传输日志只在 /share/download
+// 的**文件**分支写 ⇒ 文本分享的取件在传输日志里完全失明（owner 看不到谁读了文本）。
+func logTextView(ctx context.Context, fc *model.FileCode, code, viewerIP string) {
+	var logUser *uint
+	if uid, ok := middleware.UserIDFromContext(ctx); ok {
+		logUser = &uid
+	}
+	transfer.Record(transfer.Entry{
+		Operation: transfer.OpDownload, FileCodeID: fc.ID, Code: code,
+		FileName: "text.txt", FileSize: fc.Size,
+		UserID: logUser, APIKeyID: apiKeyIDPtr(ctx),
+		Username: middleware.UsernameFromContext(ctx), IP: viewerIP,
+	})
 }
 
 // ==================== 用户分享管理（2026-10-09 自 customHandler/share_user.go 收敛进 IDL） ====================

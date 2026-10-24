@@ -167,6 +167,9 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 		dlSecret = "pb-dl:" + config.User.JWTSecret
 	}
 	securityPkg.SetDownloadTokenSecret(dlSecret)
+	// 令牌有效期接配置（2026-10-24：security.download_token.validity_seconds
+	// 此前**从未被读取**——pkg/security 里是硬编码 const 1000s，运维改配置无效）。
+	securityPkg.SetDownloadTokenTTL(config.Security.DownloadToken.ValiditySeconds)
 
 	// 4. 创建默认管理员（public 副本不执行：管理员初始化归 admin/standalone）
 	// PB_DISABLE_DEFAULT_ADMIN=true 时跳过——首启向导（/setup）模式：由访问者

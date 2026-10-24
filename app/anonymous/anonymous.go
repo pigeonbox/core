@@ -23,7 +23,6 @@ import (
 	"github.com/oekit/concurrency/singleflight"
 	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/pkg/codex"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -37,7 +36,7 @@ import (
 
 // 6 位取件码字符表（去掉易混淆字符 0/O/1/I/L）
 const codeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
-const codeLength = codex.PickupCodeLength // 唯一真相源在 pkg/codex
+const codeLength = model.PickupCodeLength // 唯一真相源在 model
 
 // shareCode 分享码长度（file_codes.code，字母数字混合、区分大小写）
 const shareCodeLength = 8
@@ -228,10 +227,10 @@ func (s *Service) lookupShareCode(ctx context.Context, code string) (string, err
 // （短 TTL，防取件码枚举穿透打库）。
 // 真实状态（过期/次数/密码）始终以 DB 为准，缓存仅加速"码→分享码"解析。
 func (s *Service) resolveShareCodeFromDB(ctx context.Context, trimmed, mappingKey string) (string, error) {
-	// DB 回源（2026-10-23 收敛）：走 pkg/codex 统一解析器 —— 取件码优先、
+	// DB 回源（2026-10-23 收敛）：走统一解析器（dao.ResolveByCode）—— 取件码优先、
 	// 分享码精确 → 大小写折叠。此前本域与分享域/MCP 各写一套（优先级与折叠
 	// 口径不一致）⇒ 同一串码在不同端点可能解析到不同分享。
-	fc, dbErr := codex.Resolve(ctx, s.fileCodeRepo, trimmed, conf.CodeFoldEnabledOrDefault())
+	fc, dbErr := s.fileCodeRepo.ResolveByCode(ctx, trimmed, conf.CodeFoldEnabledOrDefault())
 	if dbErr != nil || fc == nil {
 		// 回源 DB 也没有：放负缓存标记（防取件码枚举穿透打库）
 		s.rdb.Set(ctx, fmt.Sprintf(keyPickupCodeNeg, trimmed), "1", negCacheTTL)
@@ -277,11 +276,20 @@ func (s *Service) Retrieve(ctx context.Context, code, password, clientIP string)
 	}
 	enrichMetaFromDB(meta, fc)
 
-	// 4. 统一取件闸门（pkg/gate.CheckPickup）：过期（时间+次数）→ 管控
+	// 4. 统一取件闸门（pkg/gate.CheckPickup）：过期（时间）→ 管控
 	// （blocked/pending_review）→ 未完成登记（FilePath 空且非文本，此前会先扣
 	// 次数再在下载时 500）→ 密码 + 防爆破锁定。锁定与 select/download/preview
 	// 面共享 scope "pickup" 的 (IP, code) 失败计数——此前本域锁定在 handler 层
 	// 且独立 scope "anon"，同一口令跨入口爆破预算翻倍。
+	//
+	// ⚠️ 次数耗尽与时间过期**分开判定**（2026-10-24）：此前两者都落在 IsExpired
+	// 里 ⇒ 匿名通道在 retrieve 里把次数扣到 0 后，随后的下载被判「已过期」⇒
+	// **按取件次数的分享，最后一次取件必然拿不到文件**（分享页通道却能拿到）。
+	// 现在 retrieve 只**检查**不扣减（扣次统一在内容交付时），次数耗尽给独立
+	// 错误码 20007「取件码已用完」。
+	if fc.IsCountExhausted() {
+		return nil, ErrCodeExhausted
+	}
 	decision := gate.CheckPickup(ctx, gate.PickupState{
 		Expired:       fc.IsExpired(),
 		Blocked:       fc.IsBlockedShare(),
@@ -310,22 +318,23 @@ func (s *Service) Retrieve(ctx context.Context, code, password, clientIP string)
 		return nil, ErrPasswordWrong
 	}
 
-	// 6. 原子扣减次数（DB 为准，防并发超卖）
-	ok, err := s.fileCodeRepo.DecrementExpiredCount(ctx, shareCode)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, ErrCodeExhausted
-	}
-
-	// 回填取件结果页展示字段：过期时间 + 扣减后的剩余次数（-1=不限，恒发 0
-	// 时代页面显示"过期时间 -"、"剩余可取次数 0"，误导用户以为文件已失效）
+	// 6. 取件次数：**只检查、不扣减**（2026-10-24）。
+	//
+	// 扣次统一发生在**内容交付时**（/share/download 的 chargePickup，按取件会话
+	// /下载令牌计次）——此前 retrieve 自身扣 1 次、随它下发的直链下载又扣 1 次
+	// ⇒ 一次取件扣两次（count 样式下对方可用次数直接减半）；且「扣到 0 ⇒
+	// IsExpired ⇒ 判过期」使**最后一次取件必然拿不到文件**。
+	// 现在 retrieve 只负责「发凭证」，次数在交付那一刻扣，且同一凭证只扣一次。
+	//
+	// 剩余次数回填：本次**未**扣减 ⇒ 剩余 = 当前剩余（-1=不限）。
+	// 过期时间回填（结果页展示；此前 handler 恒发 0 ⇒ 页面显示"过期时间 -"）。
 	if fc.ExpiredAt != nil {
 		meta.ExpireAt = fc.ExpiredAt.Unix()
 	}
 	meta.RemainingCount = fc.ExpiredCount
 	if fc.ExpiredCount > 0 {
+		// 语义沿用「本次取件后剩余可取次数」（CodeMeta 注释）：本次取件对应的
+		// 那一次交付会扣掉 1 ⇒ 结果页展示 N-1。
 		meta.RemainingCount = fc.ExpiredCount - 1
 	}
 	meta.IsText = fc.IsTextShare()

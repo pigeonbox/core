@@ -179,18 +179,24 @@ func TestShareText_Success(t *testing.T) {
 }
 
 // 测试：取过期分享（ExpiredCount=0 视为已用完）
-func TestGetFileByCode_Expired(t *testing.T) {
+// TestGetFileByCode_CountExhausted_NotExpired 次数耗尽**不是**过期（2026-10-24）
+//
+// 此前 IsExpired() 把 ExpiredCount==0 也算过期 ⇒ 计数归零即「分享已过期」
+// ⇒ ① 末次取件拿不到文件；② 用户看到 404「不存在/已过期」而不是 10003
+// 「取件次数已用完」。现在两者分开：过期只管时间，次数耗尽有独立判定。
+func TestGetFileByCode_CountExhausted_NotExpired(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 
 	resp, err := svc.ShareText(context.Background(), &ShareTextReq{
 		Text:         "expiring",
-		ExpiredCount: 0, // 0 → IsExpired()=true
+		ExpiredCount: 0, // 次数耗尽（不是时间过期）
 	})
 	require.NoError(t, err)
 
-	_, err = svc.GetFileByCode(context.Background(), resp.Code)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "expired")
+	fc, err := svc.GetFileByCode(context.Background(), resp.Code)
+	require.NoError(t, err, "次数耗尽不应被判成「已过期」（否则末次取件拿不到文件）")
+	assert.True(t, fc.IsCountExhausted(), "但次数确实已耗尽")
+	assert.False(t, fc.IsExpired())
 }
 
 // 测试：取不存在的分享
@@ -220,14 +226,14 @@ func TestUpdateFileUsage_DecrementCount(t *testing.T) {
 	assert.Equal(t, 1, fc.ExpiredCount)
 	assert.Equal(t, 1, fc.UsedCount)
 
-	// 第二次取件：1 → 0（此时变为已过期）
+	// 第二次取件：1 → 0（次数耗尽，但**不是**过期——2026-10-24 起两者分开）
 	ok2, err := svc.UpdateFileUsage(context.Background(), resp.Code)
 	require.NoError(t, err)
 	assert.True(t, ok2)
-	// ExpiredCount=0 → IsExpired()=true → GetFileByCode 报错
 	fc2, err := svc.GetFileByCode(context.Background(), resp.Code)
-	assert.Error(t, err)
-	assert.Nil(t, fc2)
+	require.NoError(t, err, "次数耗尽不应让分享变成「不存在/已过期」")
+	assert.True(t, fc2.IsCountExhausted())
+	assert.False(t, fc2.IsExpired())
 
 	// 第三次：已耗尽，ok=false
 	ok3, err := svc.UpdateFileUsage(context.Background(), resp.Code)
@@ -271,17 +277,17 @@ func TestGetFileWithUsage_PasswordCheck(t *testing.T) {
 	require.NoError(t, err)
 
 	// 错误密码 → 报错
-	_, err = svc.GetFileWithUsage(ctx, resp.Code, "wrongpwd", "1.2.3.4", false, true)
+	_, err = svc.GetFileWithUsage(ctx, resp.Code, "wrongpwd", "1.2.3.4", false)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "密码错误")
 
 	// 正确密码 → 成功
-	fc, err := svc.GetFileWithUsage(ctx, resp.Code, "rightpwd", "1.2.3.4", false, true)
+	fc, err := svc.GetFileWithUsage(ctx, resp.Code, "rightpwd", "1.2.3.4", false)
 	require.NoError(t, err)
 	assert.Equal(t, resp.Code, fc.Code)
 
 	// authedByToken=true（有效下载令牌）等价已认证：空密码也应放行
-	_, err = svc.GetFileWithUsage(ctx, resp.Code, "", "1.2.3.4", true, true)
+	_, err = svc.GetFileWithUsage(ctx, resp.Code, "", "1.2.3.4", true)
 	require.NoError(t, err, "持有效下载令牌（取件校验通过后签发）应视为已认证")
 }
 

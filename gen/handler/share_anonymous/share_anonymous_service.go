@@ -18,7 +18,6 @@ import (
 	anonmodel "github.com/pigeonbox/contracts/gen/share_anonymous"
 	anonapp "github.com/pigeonbox/core/app/anonymous"
 	"github.com/pigeonbox/core/conf"
-	sharehandler "github.com/pigeonbox/core/gen/handler/share"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -244,24 +243,22 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 	}
 	lock.Reset(ctx, lockKey)
 
-	// 取件成功：记录取件人 + 到件通知（与 /share/select 链路对齐）。此前 6 位
-	// 取件码通道不记 viewer，取件历史页与到件通知对主取件通道失明。
-	sharehandler.RecordPickupViewer(ctx, meta.ShareCode, middleware.ClientIP(c))
-
 	// 下载链接附时间窗令牌（security.download_token.enabled 时 /share/download 必需）。
-	// **「已扣次」口径**：本 retrieve 已扣过取件次数并记了取件人 ⇒ 下发的直链
-	// 下载时不再二次扣次/重复记取件人（否则一次取件扣 2 次、记 2 个取件人，
-	// count 样式下对方可用次数减半；2026-10-24 真机实测）。
+	// 令牌 = **一次取件的凭证**：下载交付时按令牌计次（同一令牌至多扣 1 次）。
+	// retrieve 本身**不扣次**（2026-10-24：此前 retrieve 扣 1 次 + 下载再扣 1 次
+	// ⇒ 一次取件扣两次；且扣到 0 后 IsExpired 判过期 ⇒ 末次取件必然 404）。
 	downloadURL := "/share/download?code=" + meta.ShareCode
-	if tk := security.GeneratePaidDownloadToken(meta.ShareCode); tk != "" {
+	if tk := security.GenerateDownloadToken(meta.ShareCode); tk != "" {
 		downloadURL += "&token=" + tk
 	}
 	data := &anonmodel.RetrieveData{
-		FileName:        meta.FileName,
-		FileSize:        meta.FileSize,
-		ContentType:     meta.ContentType,
-		DownloadURL:     downloadURL,
-		RemainingCount:  0, // 剩余次数由 DB 管理，前端如需可单独查询
+		FileName:    meta.FileName,
+		FileSize:    meta.FileSize,
+		ContentType: meta.ContentType,
+		DownloadURL: downloadURL,
+		// 剩余可取次数（本次取件后）：此前恒发 0 ⇒ 结果页显示「剩余可取次数 0」
+		// （用户以为文件已失效）。域内已算好，这里如实透传。
+		RemainingCount:  int32(meta.RemainingCount),
 		ExpireAt:        0, // 由 DB 决定
 		RequirePassword: meta.RequireAuth,
 	}
@@ -310,6 +307,17 @@ func Download(ctx context.Context, c *app.RequestContext) {
 	}
 	if fc.IsExpired() {
 		resp.NewErrorByCode(c, errcode.CodePickupCodeExpired)
+		return
+	}
+	// 取件次数已用完：独立错误码（20007），不再落到「已过期」（2026-10-24）。
+	if fc.IsCountExhausted() {
+		resp.NewErrorByCode(c, errcode.CodePickupCodeExhausted)
+		return
+	}
+	// 占位分享（文件还没传上来）：不给令牌（此前会 302 到一个必然 404 的直链，
+	// MCP 的 download_url 正是这个形态 ⇒ AI 客户端拿到直链必然踩空）。
+	if !fc.IsTextShare() && fc.GetFilePath() == "" {
+		resp.NewErrorWithMessage(c, errcode.CodeShareNotFound, "分享未完成上传，暂时无法取件")
 		return
 	}
 	if fc.IsBlockedShare() {

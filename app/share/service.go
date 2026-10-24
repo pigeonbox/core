@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oekit/concurrency/async"
+	// (async 已不在本文件使用：记取件人改由交付前的计次点触发，见 chargePickup)
 	"github.com/oekit/concurrency/retry"
 	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/contracts/errcode"
@@ -16,7 +16,6 @@ import (
 	"github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/baseurl"
-	"github.com/pigeonbox/core/pkg/codex"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -741,7 +740,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 
 // GetFileByCode 通过代码获取文件（**分享码或 6 位取件码**）。
 //
-// 解析规则见 pkg/codex（按码解析的唯一真相源）：6 位取件码优先（真相源
+// 解析规则见 dao.ResolveByCode（按码解析的唯一真相源）：6 位取件码优先（真相源
 // file_codes.pickup_code 列），否则分享码/自定义码（精确 → 大小写折叠）。
 // 本域与预览域/匿名域/MCP 共用该解析器 ⇒ 同一串码处处解析到同一个分享。
 //
@@ -759,7 +758,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 // ④ 铸造取件码与创建自定义分享码两侧都做了**跨列避让**
 // （app/anonymous.GenerateCode / 本文件 createWithCode）⇒ 两种码不会互相串。
 func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCode, error) {
-	fileCode, err := codex.Resolve(ctx, s.fileCodeRepo, code, conf.CodeFoldEnabledOrDefault())
+	fileCode, err := s.fileCodeRepo.ResolveByCode(ctx, code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
 		return nil, err
 	}
@@ -874,8 +873,27 @@ func (s *Service) DeleteFileByCode(ctx context.Context, code string, userID uint
 
 // UpdateFileUsage 原子扣减剩余次数（DB 为准，防并发超卖）。
 // 返回 ok=true 表示扣减成功（可下载）；ok=false 表示已耗尽。
+//
+// ⚠️ 2026-10-24 起**下载链路不再直接调它**：扣次改由 ChargePickup 按「取件会话
+// （下载令牌）」执行（一个令牌至多扣 1 次 ⇒ 多文件逐个下载 / 断点续传 / 重复点击
+// 不再重复吃次数）。本方法保留给「无令牌会话概念」的其它调用面。
 func (s *Service) UpdateFileUsage(ctx context.Context, code string) (bool, error) {
 	return s.fileCodeRepo.DecrementExpiredCount(ctx, code)
+}
+
+// ChargePickup 按「取件会话」计次（2026-10-24）。
+//
+// tokenFingerprint = 下载令牌的计次指纹（pkg/security 校验时给出；令牌未启用
+// 或未携带时为空 ⇒ 无会话概念，按「每次交付都算一次取件」处理）。
+//
+// 返回：
+//   - charged=true：本次交付**真正扣了**取件次数（该令牌的首次使用）⇒ 调用方
+//     应在此记取件人 + 通知 owner；
+//   - exhausted=true：取件次数已用完且本令牌尚未计次 ⇒ 拒绝交付（10003）；
+//   - charged=false, exhausted=false：同一令牌已计次（同一取件会话内的后续
+//     交付：多文件逐个下载 / 断点续传 / 重复点击）⇒ 不再扣次、也不再记取件人。
+func (s *Service) ChargePickup(ctx context.Context, code, tokenFingerprint, channel string) (charged bool, exhausted bool, err error) {
+	return s.fileCodeRepo.ChargePickupOnce(ctx, code, tokenFingerprint, channel)
 }
 
 // ErrShareNotReady 分享未完成上传（占位记录：文件还没传上来）。
@@ -886,17 +904,19 @@ func (s *Service) UpdateFileUsage(ctx context.Context, code string) (bool, error
 var ErrShareNotReady = errors.New("分享未完成上传，暂时无法取件")
 
 // IsShareNotReady 判定记录是否为"未完成上传"的占位分享。
-// 判定式在 pkg/codex（唯一真相源，preview/select/download/metadata 共用）。
-func IsShareNotReady(fc *model.FileCode) bool { return codex.IsNotReady(fc) }
+// 判定式在 model（唯一真相源，preview/select/download/metadata 共用）。
+func IsShareNotReady(fc *model.FileCode) bool { return model.IsNotReady(fc) }
 
-// GetFileWithUsage 获取文件并校验密码（不扣次数，扣次数由下载链路调 UpdateFileUsage）。
+// GetFileWithUsage 获取文件并校验密码（**不扣次数、不记取件人**）。
+//
+// 扣次与记取件人由调用方在**内容交付前**统一执行（ChargePickup + 记 viewer）：
+// ① 扣次必须与「交付」同点（交付失败不该白吃次数）；
+// ② 记取件人必须与扣次同点（同一次取件只记一个取件人，重复下载不刷列表）。
+//
 // viewerIP 由 handler 从可信解析 middleware.ClientIP(c) 注入。
 // authedByToken：调用方已校验有效下载令牌（令牌由取件查询在密码/取件校验通过后
 // 签发，等价于已认证——否则密码保护分享"凭令牌下载"还要再输一次密码，令牌失效）。
-// recordViewer：是否记录取件人 + 通知 owner。**「已扣次」令牌须传 false**——
-// 匿名取件面（retrieve）已经记过一次取件人并通知过 owner，再记一次会让一次取件
-// 在取件人列表里出现两次（2026-10-24 修双扣时一并收口）。
-func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP string, authedByToken, recordViewer bool) (*model.FileCode, error) {
+func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP string, authedByToken bool) (*model.FileCode, error) {
 
 	fileCode, err := s.GetFileByCode(ctx, code)
 	if err != nil {
@@ -932,15 +952,6 @@ func (s *Service) GetFileWithUsage(ctx context.Context, code, password, viewerIP
 		case gate.PickupPasswordMissing, gate.PickupPasswordWrong:
 			return nil, errors.New("密码错误")
 		}
-	}
-
-	// 记录取件人 + 通知 owner（fire-and-forget，GoSafe 兜底 panic 不影响进程）。
-	// 用**解析后的分享码**：6 位取件码解析出的记录在 code 列是 8 位分享码 ⇒
-	// 用原始码记 viewer 会命中 0 行 ⇒ 取件人/到件通知静默丢失（2026-10-23 审计）。
-	if recordViewer {
-		async.GoSafe(func() {
-			_ = s.RecordViewerAndNotify(context.Background(), fileCode.Code, viewerIP, "")
-		})
 	}
 
 	return fileCode, nil
@@ -1161,8 +1172,10 @@ func toUserShareItemData(f *model.FileCode) *sharemodel.UserShareItemData {
 		ViewerIP:     f.ViewerIP,
 		ViewerAt:     formatTimePtr(f.ViewerAt),
 		ViewerCount:  int32(f.ViewerCount),
-		IsExpired:    f.IsExpired(),
-		Status:       f.Status,
+		// 「不可取件」= 时间过期 或 次数耗尽（2026-10-24 起两者分开判定，
+		// 但列表侧要合并展示 ⇒ owner 看到的仍是同一个「已过期」）。
+		IsExpired: f.IsExpired() || f.IsCountExhausted(),
+		Status:    f.Status,
 		// 文件分享的 Text 存原始文件名（非空），须用 IsTextShare 判定（Text 非空且无文件路径）
 		IsTextShare: isTextShare,
 	}

@@ -378,7 +378,9 @@ func (s *Service) FindQuickUploadSource(ctx context.Context, userID uint, fileHa
 	if err != nil || fc == nil {
 		return nil, errors.New("share source not found")
 	}
-	if fc.IsExpired() {
+	// 时间过期**或**次数耗尽都不可作秒传源：次数耗尽的分享其物理文件会被
+	// 清理任务按 expired_count=0 删除 ⇒ 新分享指向一个即将消失的文件。
+	if !fc.IsPickupAvailable() {
 		return nil, errors.New("share expired")
 	}
 	return fc, nil

@@ -74,6 +74,12 @@ func GetPreview(ctx context.Context, c *app.RequestContext) {
 				"code":    errcode.CodeNotFound,
 				"message": "分享不存在或已过期",
 			})
+		case errors.Is(err, previewapp.ErrPickupExhausted):
+			// 取件次数已用完：20004「超过取件次数」（此前混作 404「不存在/已过期」）
+			c.JSON(consts.StatusForbidden, map[string]interface{}{
+				"code":    errcode.CodeShareReachLimit,
+				"message": "超过取件次数",
+			})
 		case errors.Is(err, previewapp.ErrShareBlocked):
 			resp.NewErrorByCode(c, errcode.CodeShareBlocked)
 		case errors.Is(err, previewapp.ErrPasswordRequired):

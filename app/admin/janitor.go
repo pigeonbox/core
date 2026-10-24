@@ -195,6 +195,22 @@ func (j *Janitor) CleanupLogs(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+// CleanupPickupCharges 清理取件计次记录（2026-10-24）。
+//
+// 计次记录按「下载令牌」去重，令牌 TTL 之外不可能再被用来计次 ⇒ 超过
+// TTL+1h 的记录可安全删除（否则表无限膨胀）。
+func (j *Janitor) CleanupPickupCharges(ctx context.Context, ttl time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-(ttl + time.Hour))
+	n, err := j.fileCodeRepo.DeleteExpiredPickupCharges(ctx, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		logger.Info("pickup charge cleanup done", zap.Int64("deleted", n))
+	}
+	return n, nil
+}
+
 // CleanupStaleUploads 清理弃管的分片会话（治理 2026-10-03）：
 // init 后永不 complete 的会话此前永久滞留（目录 + DB 行），且唯一的
 // 手动清理在非 SQLite 库上直接 SQL 报错。incomplete 超龄 → 删目录 + 删行；

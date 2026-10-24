@@ -324,6 +324,10 @@ func initThriftIDLServices(database *gorm.DB) {
 		if err := database.AutoMigrate(&model.FileRequest{}); err != nil {
 			logger.Error("Failed to migrate file_requests table", zap.Error(err))
 		}
+		// 取件计次表（2026-10-24）：一个下载令牌至多扣 1 次取件次数
+		if err := database.AutoMigrate(&model.PickupCharge{}); err != nil {
+			logger.Error("Failed to migrate pickup_charges table", zap.Error(err))
+		}
 	}
 
 	// 6. 注入 storage 到 admin service（过期清理删物理文件；app 服务直注，

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/pkg/codex"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -135,9 +134,9 @@ func (s *Service) deletePhysicalIfUnreferenced(ctx context.Context, filePath str
 //
 // 此前只查 code 列（分享码/自定义码）⇒ 管理员手里只有取件码时查不到
 // （与 MCP 的 resolveFileCode 结论相反 ⇒ 同一输入两个管理面结论相左）。
-// ⇒ 统一走 pkg/codex 解析器。
+// ⇒ 统一走 dao.ResolveByCode 解析器。
 func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCode, error) {
-	return codex.Resolve(ctx, s.fileCodeRepo, code, conf.CodeFoldEnabledOrDefault())
+	return s.fileCodeRepo.ResolveByCode(ctx, code, conf.CodeFoldEnabledOrDefault())
 }
 
 // GetFileByID 按主键取分享记录（管理端详情/下载重定向）。

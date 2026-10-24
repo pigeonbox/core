@@ -14,6 +14,7 @@ import (
 	adminApp "github.com/pigeonbox/core/app/admin"
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
 	"github.com/pigeonbox/core/pkg/logger"
+	securityPkg "github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/repo/db"
 )
 
@@ -114,6 +115,12 @@ func startMaintenanceJanitor() {
 			logger.Warn("log retention cleanup failed", zap.Error(err))
 		} else if n > 0 {
 			logger.Info("retention logs cleaned", zap.Int64("count", n))
+		}
+		// 取件计次记录（一个下载令牌至多扣 1 次）——按令牌 TTL 清理
+		if n, err := j.CleanupPickupCharges(ctx, securityPkg.DownloadTokenTTL()); err != nil {
+			logger.Warn("pickup charge cleanup failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("pickup charges cleaned", zap.Int64("count", n))
 		}
 		if dirs, err := j.CleanupStaleUploads(ctx, 24*time.Hour); err != nil {
 			logger.Warn("stale chunk session cleanup failed", zap.Error(err))

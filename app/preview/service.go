@@ -12,7 +12,6 @@ import (
 	"os"
 
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/pkg/codex"
 	"github.com/pigeonbox/core/pkg/gate"
 	previewService "github.com/pigeonbox/core/preview"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -35,6 +34,9 @@ var (
 	// ErrShareNotReady 分享未完成上传（占位分享；与 select/download 同码同文案）
 	ErrShareNotReady = errors.New("share not uploaded yet")
 
+	// ErrPickupExhausted 取件次数已用完（2026-10-24：此前次数耗尽混作「已过期」
+	// ⇒ 预览面返回 404「分享不存在或已过期」，与文档承诺的 10003 对不上）。
+	ErrPickupExhausted = errors.New("pickup count exhausted")
 	// ErrPreviewUnavailable 预览不可用（生成失败/存储不可达）
 	ErrPreviewUnavailable = errors.New("preview unavailable")
 	// ErrPreviewBusy 生成并发闸满（防 CPU/内存耗尽：图片解码与 ffmpeg 均为重活，
@@ -86,10 +88,10 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 		return nil, err
 	}
 
-	// 获取文件信息（**分享码或 6 位取件码**）：走 pkg/codex 统一解析器，
+	// 获取文件信息（**分享码或 6 位取件码**）：走统一解析器（dao.ResolveByCode），
 	// 与 select/metadata 口径一致（此前本域只查 code 列 ⇒ 取件码在此 404，
 	// 而分享页能打开 ⇒ 同一输入两端点结论相反）。
-	fileCode, err := codex.Resolve(ctx, s.fileCodeRepo, req.Code, conf.CodeFoldEnabledOrDefault())
+	fileCode, err := s.fileCodeRepo.ResolveByCode(ctx, req.Code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
 		return nil, ErrShareNotFound
 	}
@@ -99,8 +101,13 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 	// 变体绕过锁定漏洞，随收口一并修复）。
 	// 占位分享（文件未上传）：与 select/download 面同口径 —— 20001
 	// 「分享未完成上传」（此前本域落 500/预览不可用 ⇒ 口径不一致）。
-	if codex.IsNotReady(fileCode) {
+	if model.IsNotReady(fileCode) {
 		return nil, ErrShareNotReady
+	}
+	// 取件次数已用完：预览也是「拿内容」的面 ⇒ 与 select/download 同口径拒绝
+	// （预览不消耗次数，但次数耗尽后不应再能看到内容摘要）。
+	if fileCode.IsCountExhausted() {
+		return nil, ErrPickupExhausted
 	}
 	decision := gate.CheckPickup(ctx, gate.PickupState{
 		Expired:       fileCode.IsExpired(),

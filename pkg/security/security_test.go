@@ -9,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 令牌 = **一次取件的凭证**（2026-10-24）：
+//   - 形态 "exp.nonce.sig"（nonce 保证同秒签发的令牌互不相同 ⇒ 计次键可靠）；
+//   - 计次指纹单向（HMAC），落库的是指纹不是令牌 ⇒ DB 泄漏不等于泄漏下载凭证。
 func TestDownloadTokenRoundTrip(t *testing.T) {
 	SetDownloadTokenSecret("test-secret-32-chars-xxxxxxxxxxxxx")
 	code := "AbCd1234"
@@ -24,11 +27,12 @@ func TestDownloadTokenRoundTrip(t *testing.T) {
 	// 格式错误
 	assert.False(t, VerifyDownloadToken(code, "not-a-token"))
 	assert.False(t, VerifyDownloadToken(code, "abc.def"))
+	assert.False(t, VerifyDownloadToken(code, "123.abc.def"))
 	// 过期时间戳
-	exp := time.Now().Add(-time.Hour).Unix()
-	forged := strings.Split(token, ".")[1]
-	assert.False(t, VerifyDownloadToken(code, "123."+forged))
-	_ = exp
+	parts := strings.Split(token, ".")
+	require.Len(t, parts, 3, "令牌形态应为 exp.nonce.sig")
+	forged := parts[2]
+	assert.False(t, VerifyDownloadToken(code, "123.abc."+forged))
 }
 
 func TestDownloadTokenUnsigned(t *testing.T) {
@@ -39,48 +43,56 @@ func TestDownloadTokenUnsigned(t *testing.T) {
 
 	assert.Empty(t, GenerateDownloadToken("AbCd1234"))
 	assert.False(t, VerifyDownloadToken("AbCd1234", "1.aa"))
+	assert.Empty(t, VerifyDownloadTokenFingerprint("AbCd1234", "1.aa"))
 }
 
-// 令牌**扣次口径**（2026-10-24）：普通令牌 vs 「已扣次」令牌。
-// 背景：匿名取件 retrieve 扣过一次取件次数，随它下发的直链下载时不得再扣一次
-// （此前一次取件扣 2 次，count 样式下对方可用次数减半）。
-func TestDownloadTokenFlavor(t *testing.T) {
+// TestDownloadTokenNonceUnique 同秒签发的令牌必须互不相同（2026-10-24）。
+//
+// 缺陷：此前载荷是 `code.exp`（秒级）⇒ 同一秒内签发的令牌**逐字节相同**。
+// 计次键取令牌指纹 ⇒ 两个不同取件人被当成「同一次取件」⇒ 第二个不扣次数
+// （额度漏扣，owner 定的次数上限被绕过）。
+func TestDownloadTokenNonceUnique(t *testing.T) {
 	SetDownloadTokenSecret("test-secret-32-chars-xxxxxxxxxxxxx")
 	code := "AbCd1234"
 
-	normal := GenerateDownloadToken(code)
-	paid := GeneratePaidDownloadToken(code)
-	require.NotEmpty(t, normal)
-	require.NotEmpty(t, paid)
-
-	// 口径判定
-	assert.Equal(t, TokenNormal, VerifyDownloadTokenFlavor(code, normal), "普通令牌 ⇒ 普通口径")
-	assert.Equal(t, TokenPaid, VerifyDownloadTokenFlavor(code, paid), "已扣次令牌 ⇒ 已扣次口径")
-
-	// 两种口径都算**有效**（有效性 ≠ 扣次口径）
-	assert.True(t, VerifyDownloadToken(code, normal))
-	assert.True(t, VerifyDownloadToken(code, paid))
-
-	// 口径不可互相冒充：已扣次令牌按普通口径验不过（签名载荷不同）
-	assert.False(t, VerifyDownloadTokenFlavor(code, normal) == TokenPaid)
-	assert.False(t, VerifyDownloadTokenFlavor(code, paid) == TokenNormal)
-	// 换 code 一律无效（令牌绑定分享码）
-	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor("other123", paid))
-	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor("other123", normal))
-	// 篡改签名无效
-	bad := paid[:len(paid)-2] + "xx"
-	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor(code, bad))
-	// 格式错误无效
-	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor(code, "not-a-token"))
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		tok := GenerateDownloadToken(code)
+		require.NotEmpty(t, tok)
+		assert.False(t, seen[tok], "同秒内签发的令牌必须唯一（第 %d 个重复）", i)
+		seen[tok] = true
+	}
 }
 
-func TestGeneratePaidDownloadTokenUnsigned(t *testing.T) {
-	saved := downloadTokenSecret
-	downloadTokenSecret = nil
-	defer func() { downloadTokenSecret = saved }()
+// TestDownloadTokenFingerprintStable 指纹：同一令牌稳定、不同令牌不同、非令牌明文
+func TestDownloadTokenFingerprintStable(t *testing.T) {
+	SetDownloadTokenSecret("test-secret-32-chars-xxxxxxxxxxxxx")
+	code := "AbCd1234"
 
-	assert.Empty(t, GeneratePaidDownloadToken("AbCd1234"))
-	assert.Equal(t, TokenInvalid, VerifyDownloadTokenFlavor("AbCd1234", "1.aa"))
+	tok := GenerateDownloadToken(code)
+	fp := VerifyDownloadTokenFingerprint(code, tok)
+	require.NotEmpty(t, fp, "有效令牌应给出计次指纹")
+	assert.Equal(t, fp, VerifyDownloadTokenFingerprint(code, tok), "指纹稳定")
+	assert.Equal(t, fp, DownloadTokenFingerprint(tok), "签发方算的指纹与校验方一致")
+
+	tok2 := GenerateDownloadToken(code)
+	assert.NotEqual(t, fp, DownloadTokenFingerprint(tok2), "不同令牌指纹不同")
+	assert.NotContains(t, fp, tok, "指纹不得包含令牌明文")
+	assert.NotEqual(t, tok, fp)
+
+	// 无效令牌（换 code）⇒ 指纹为空（调用方据「空 = 无效」拒绝）
+	assert.Empty(t, VerifyDownloadTokenFingerprint("other123", tok))
+}
+
+// TestDownloadTokenTTLFromConfig 令牌有效期接配置（此前配置项从未被读取）
+func TestDownloadTokenTTLFromConfig(t *testing.T) {
+	saved := downloadTokenTTLSec.Load()
+	defer downloadTokenTTLSec.Store(saved)
+
+	SetDownloadTokenTTL(60)
+	assert.Equal(t, 60*time.Second, DownloadTokenTTL())
+	SetDownloadTokenTTL(0) // 非法值 ⇒ 回落默认
+	assert.Equal(t, defaultDownloadTokenTTL, DownloadTokenTTL())
 }
 
 func TestValidateEndpointURL(t *testing.T) {
