@@ -177,7 +177,6 @@ func NewService(gormDB *gorm.DB, rdb *redis.Client, baseURL string, signingKey s
 	}
 }
 
-// SetShareService 注入 share service（用于 Complete 时写分享表）
 // SetBaseURLProvider 注入对外 base 地址的动态来源（2026-10-22 站点公网地址）。
 // 与 share 域同源：管理后台「站点公网地址」一处改，链接与直传回跳地址同时生效。
 func (s *Service) SetBaseURLProvider(fn func(context.Context) string) {
@@ -194,6 +193,7 @@ func (s *Service) resolveBaseURL(ctx context.Context) string {
 	return s.baseURL
 }
 
+// SetShareService 注入 share service（用于 Complete 时写分享表）
 func (s *Service) SetShareService(svc ShareServiceInterface) {
 	s.shareService = svc
 }

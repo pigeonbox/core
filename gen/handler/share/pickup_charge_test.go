@@ -81,12 +81,14 @@ func newChargeTestEnv(t *testing.T, tokenEnabled bool) *gorm.DB {
 	})
 	security.SetDownloadTokenSecret("test-secret-32-chars-xxxxxxxxxxxxx")
 
-	shareSvc = shareService.NewService(g, "http://test.local", storage.NewStorageService(&storage.StorageConfig{
+	// 走 setter（带锁）⇒ 与并发读方同一把锁 ⇒ 无 DATA RACE
+	SetShareService(shareService.NewService(g, "http://test.local", storage.NewStorageService(&storage.StorageConfig{
 		Type:     storage.StorageTypeLocal,
 		DataPath: dataPath,
-	}))
+	})))
 	t.Cleanup(func() {
-		shareSvc = nil
+		// 复位也走 setter（带锁）⇒ 与异步任务的读并发时仍是安全的
+		SetShareService(nil)
 		conf.SetGlobalConfig(nil)
 	})
 	return g

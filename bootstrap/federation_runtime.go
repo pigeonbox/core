@@ -22,16 +22,16 @@ import (
 // 留空 = 官方缺省；自建 p2pd 时显式配置）。信令 56788，中继经 /health 自发现。
 const defaultPublicRegistry = "http://home.enjoye.top:56788"
 
-// fedStartFunc 生产工厂 = federationApp.NewService；测试注入可控工厂。
-type fedStartFunc func(cfg conf.FederationConfig, nodeName string) (*federationApp.Service, error)
+// fedStartFunc 生产工厂 = federationApp.NewNode；测试注入可控工厂。
+type fedStartFunc func(cfg conf.FederationConfig, nodeName string) (*federationApp.Node, error)
 
 type federationRuntime struct {
 	mu         sync.Mutex
 	start      fedStartFunc
-	attach     func(*federationApp.Service) // 挂注入点（share/admin/customHandler/MCP）
-	detach     func()                       // 摘注入点（全部置非类型化 nil——typed-nil 进接口非 nil 的历史坑）
-	standalone func() bool                  // 部署形态注入（棘轮规则 8：不直读全局 conf）
-	current    *federationApp.Service
+	attach     func(*federationApp.Node) // 挂注入点（share/admin/customHandler/MCP）
+	detach     func()                    // 摘注入点（全部置非类型化 nil——typed-nil 进接口非 nil 的历史坑）
+	standalone func() bool               // 部署形态注入（棘轮规则 8：不直读全局 conf）
+	current    *federationApp.Node
 	cfg        conf.FederationConfig
 	nodeName   string
 }
@@ -44,7 +44,7 @@ var fedRT = &federationRuntime{}
 // instance()/apply()/stop()（同锁重入即死锁）；闭包内只允许对注入目标
 // 做 setter 调用（这些 setter 自身已按热切换并发安全加锁）。
 func (r *federationRuntime) init(nodeName string, start fedStartFunc,
-	attach func(*federationApp.Service), detach func(), standalone func() bool) {
+	attach func(*federationApp.Node), detach func(), standalone func() bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.nodeName, r.start, r.attach, r.detach, r.standalone = nodeName, start, attach, detach, standalone
@@ -130,7 +130,7 @@ func (r *federationRuntime) stop() {
 }
 
 // instance 当前联邦实例（nil=未启用）。
-func (r *federationRuntime) instance() *federationApp.Service {
+func (r *federationRuntime) instance() *federationApp.Node {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.current

@@ -10,6 +10,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -29,7 +30,18 @@ import (
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
-var shareSvc *shareService.Service
+// shareSvc 共享的 share service 实例（bootstrap 注入）。
+//
+// 读写**必须**经 shareSvcMu：2026-10-24 实录过一起真实 DATA RACE ——
+// 读方是扣次后的异步通知任务（async.GoSafe 里 getShareService()），写方是
+// 测试 cleanup 把单例复位为 nil ⇒ 无锁的包级变量 ⇒ 读/写并发 ⇒ race。
+// 该 race 此前**从未被 CI 检出**：core CI 的门禁是串行步骤链，gofmt 步先红
+// ⇒ Test(race) 步被 skip ⇒ 整条 race 门禁空转了整整两个发版列车。
+// ⇒ 单例的读写一律走锁；测试复位也走 SetShareService（同一把锁）。
+var (
+	shareSvcMu sync.RWMutex
+	shareSvc   *shareService.Service
+)
 
 // strPtrIfNotEmpty 空串转 nil（契约 optional 字段不外发空串）
 func strPtrIfNotEmpty(s string) *string {
@@ -47,17 +59,22 @@ func boolPtr(b bool) *bool { return &b }
 // getShareService() 懒加载裸实例，quotaChecker/notify/userService/moderator
 // 等注入全部缺失——直传通道的存储配额与审核钩子形同虚设。
 func SetShareService(s *shareService.Service) {
+	shareSvcMu.Lock()
 	shareSvc = s
+	shareSvcMu.Unlock()
 }
 
 func getShareService() *shareService.Service {
-	if shareSvc == nil {
+	shareSvcMu.RLock()
+	s := shareSvc
+	shareSvcMu.RUnlock()
+	if s == nil {
 		// fail-fast：装配缺失必须显式暴露（bootstrap 保证 SetShareService 先于
 		// 服务流量），不再静默自建裸实例——懒加载裸实例曾使配额/审核注入缺失
 		// 而形同虚设（治理 2026-10-03 回归记录）。
 		panic("share service not initialized: SetShareService must be called before serving")
 	}
-	return shareSvc
+	return s
 }
 
 // publicShareURL 公开分享链接：显式 base_url > 请求来源动态推断（bootstrap

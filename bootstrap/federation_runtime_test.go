@@ -28,8 +28,8 @@ func TestFederationRuntimeSwitch(t *testing.T) {
 
 	r := &federationRuntime{}
 	attached, detached := 0, 0
-	r.init("t", federationApp.NewService,
-		func(s *federationApp.Service) { attached++ },
+	r.init("t", federationApp.NewNode,
+		func(s *federationApp.Node) { attached++ },
 		func() { detached++ },
 		func() bool { return conf.GetGlobalConfig().IsStandalone() }, // 测试注入（生产由 wiring 固化）
 	)
@@ -62,7 +62,7 @@ func TestFederationRuntimeSwitch(t *testing.T) {
 	// 装配失败：返回 error 且维持旧实例（回滚）
 	keep := r.instance()
 	rWithFail := &federationRuntime{
-		start: func(cfg conf.FederationConfig, _ string) (*federationApp.Service, error) {
+		start: func(cfg conf.FederationConfig, _ string) (*federationApp.Node, error) {
 			return nil, errors.New("boom")
 		},
 		current: keep,
@@ -105,11 +105,11 @@ func TestFederationRuntimeRegistryDefault(t *testing.T) {
 	var gotRegistry string
 	r := &federationRuntime{}
 	r.init("t",
-		func(cfg conf.FederationConfig, _ string) (*federationApp.Service, error) {
+		func(cfg conf.FederationConfig, _ string) (*federationApp.Node, error) {
 			gotRegistry = cfg.RegistryURL
-			return federationApp.NewService(cfg, "t")
+			return federationApp.NewNode(cfg, "t")
 		},
-		func(*federationApp.Service) {}, func() {},
+		func(*federationApp.Node) {}, func() {},
 		func() bool { return true },
 	)
 	// registry 留空 → 填官方缺省（cfg.PublicURL 显式给，避免推断分支）
@@ -138,8 +138,8 @@ func TestFederationRuntimeConcurrentApply(t *testing.T) {
 	t.Cleanup(func() { conf.SetGlobalConfig(&conf.AppConfiguration{}) })
 
 	r := &federationRuntime{}
-	r.init("t", federationApp.NewService,
-		func(*federationApp.Service) {},
+	r.init("t", federationApp.NewNode,
+		func(*federationApp.Node) {},
 		func() {},
 		func() bool { return true },
 	)

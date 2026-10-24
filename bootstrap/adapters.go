@@ -182,7 +182,7 @@ func (a mcpPreviewAdapter) Preview(ctx context.Context, req mcpApp.PreviewReq) (
 
 // mcpFederationAdapter mcp.FederationAPI 的 federation 域适配器。
 // svc 为 nil（未启用/初始化失败）时上报"未启用"事实而非报错。
-type mcpFederationAdapter struct{ svc *federationApp.Service }
+type mcpFederationAdapter struct{ svc *federationApp.Node }
 
 func (a mcpFederationAdapter) Status() mcpApp.FederationStatus {
 	if a.svc == nil {

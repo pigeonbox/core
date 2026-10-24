@@ -669,6 +669,9 @@ func (s *Service) listUsers(ctx context.Context, in listUsersIn, caller Caller) 
 	}
 	out := listUsersOut{Total: int(total), Page: page, PageSize: pageSize, Items: make([]listUsersItem, 0, len(users))}
 	for _, u := range users {
+		//nolint:staticcheck // S1016 的建议在此不可行：Go 的结构体转换要求两侧
+		// 字段名/类型/**tag** 都相同，而本类型带 jsonschema tag（输出契约）、
+		// 源类型 UserRow 不带 ⇒ 转不进去。逐字段赋值保持两套契约各自独立。
 		out.Items = append(out.Items, listUsersItem{ID: u.ID, Username: u.Username, Email: u.Email, Status: u.Status})
 	}
 	return out, nil
@@ -708,6 +711,8 @@ func (s *Service) federationStatus(ctx context.Context, _ struct{}, caller Calle
 	}
 	st := fed.Status()
 	// 适配器在联邦未启用时返回 Enabled:false（非 nil 接口包 nil 实例）
+	//nolint:staticcheck // S1016 同上：federationStatusOut 带 jsonschema tag、
+	// FederationStatus 不带 ⇒ 结构体转换不合法（Go 要求 tag 相同）。
 	return federationStatusOut{
 		Enabled:    st.Enabled,
 		NodeID:     st.NodeID,
@@ -778,6 +783,8 @@ func (s *Service) p2pPeers(ctx context.Context, _ struct{}, caller Caller) (p2pP
 	}
 	out := p2pPeersOut{Peers: make([]p2pPeerItem, 0, len(peers))}
 	for _, p := range peers {
+		//nolint:staticcheck // S1016 同上：p2pPeerItem 带 jsonschema tag，
+		// P2pPeerInfo 的 url 还带 omitempty 差异 ⇒ 结构体转换不合法。
 		out.Peers = append(out.Peers, p2pPeerItem{
 			NodeID: p.NodeID, Name: p.Name, URL: p.URL, BoxPub: p.BoxPub, OnlineSince: p.OnlineSince,
 		})
@@ -810,6 +817,8 @@ func (s *Service) p2pInvites(ctx context.Context, _ struct{}, caller Caller) (p2
 	}
 	out := p2pInvitesOut{Invites: make([]p2pInviteItem, 0, len(invites))}
 	for _, it := range invites {
+		//nolint:staticcheck // S1016 同上：p2pInviteItem 带 jsonschema tag
+		// 与源类型的 omitempty 差异 ⇒ 结构体转换不合法。
 		out.Invites = append(out.Invites, p2pInviteItem{
 			ID: it.ID, Code: it.Code, FromName: it.FromName, Note: it.Note, ExpiresIn: it.ExpiresIn,
 		})
