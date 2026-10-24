@@ -33,7 +33,7 @@ require (
 	github.com/oekit/concurrency v0.20.4
 	github.com/oekit/core v0.12.0
 	github.com/oekit/kitx v0.3.1
-	github.com/oekit/pkg v0.24.0
+	github.com/oekit/pkg v0.25.0
 	github.com/pkg/sftp v1.13.11
 	github.com/studio-b12/gowebdav v0.13.0
 	golang.org/x/net v0.60.0
