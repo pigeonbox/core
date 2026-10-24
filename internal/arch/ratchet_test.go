@@ -209,19 +209,19 @@ func TestSingletonConsumers(t *testing.T) {
 var globalConfigBaseline = map[string]int{
 	// app/config 两文件 = 配置中心自 admin 独立成域的所有权转移
 	// （原 app/admin/config.go:3 + service.go:1 → config 域 1+3，同批 overlay 重构净减 0）
-	"app/admin/stats.go":                       1,
-	"app/config/config.go":                     1,
-	"app/config/service.go":                    3,
-	"app/share/localfiles.go":                  2,
-	"app/share/localimport.go":                 1,
-	"app/share/service.go":                     1,
-	"app/storage/service.go":                   1,
-	"app/user/service.go":                      2,
-	"bootstrap/bootstrap.go":                   1,
-	"bootstrap/handlers_public.go":             1,
-	"gen/handler/chunk/chunk_service.go":       1,
-	"gen/handler/presign/presign_service.go":   1,
-	"gen/handler/setup/setup_service.go":       1,
+	"app/admin/stats.go":                     1,
+	"app/config/config.go":                   1,
+	"app/config/service.go":                  3,
+	"app/share/localfiles.go":                2,
+	"app/share/localimport.go":               1,
+	"app/share/service.go":                   1,
+	"app/storage/service.go":                 1,
+	"app/user/service.go":                    2,
+	"bootstrap/bootstrap.go":                 1,
+	"bootstrap/handlers_public.go":           1,
+	"gen/handler/chunk/chunk_service.go":     1,
+	"gen/handler/presign/presign_service.go": 1,
+	"gen/handler/setup/setup_service.go":     1,
 	// gen/handler/share_anonymous: 取件码**页面链接**需要显式的 server.base_url
 	// 优先（与分片通道 publicShareURL 同口径：显式配置 > ctx 推断 > 相对形态）。
 	// 2026-10-24 登记：此前该直读点未登记 ⇒ 规则8 判为「新违例」⇒ core CI 的
@@ -230,17 +230,17 @@ var globalConfigBaseline = map[string]int{
 	// 登记 = 承认现状并**冻结**（棘轮只许减不许增）；后续改造为构造注入时可减到 0。
 	"gen/handler/share_anonymous/share_anonymous_service.go": 1,
 	"gen/handler/share/share_service.go":                     3,
-	"gen/handler/storage/storage_service.go":   1,
-	"pkg/gate/gate.go":                         4,
-	"pkg/gate/quota.go":                        1,
-	"pkg/middleware/apikey.go":                 2,
-	"pkg/middleware/lockout.go":                1,
-	"pkg/middleware/ratelimit.go":              1,
-	"pkg/security/ssrf.go":                     2,
-	"pkg/utils/expire.go":                      2,
-	"pkg/utils/filecheck.go":                   6,
-	"transport/http/handler/oidc.go":           1,
-	"transport/http/handler/settings_admin.go": 1,
+	"gen/handler/storage/storage_service.go":                 1,
+	"pkg/gate/gate.go":                                       4,
+	"pkg/gate/quota.go":                                      1,
+	"pkg/middleware/apikey.go":                               2,
+	"pkg/middleware/lockout.go":                              1,
+	"pkg/middleware/ratelimit.go":                            1,
+	"pkg/security/ssrf.go":                                   2,
+	"pkg/utils/expire.go":                                    2,
+	"pkg/utils/filecheck.go":                                 6,
+	"transport/http/handler/oidc.go":                         1,
+	"transport/http/handler/settings_admin.go":               1,
 }
 
 // TestGlobalConfigRatchet 规则 8：conf.GetGlobalConfig() 直读点棘轮。
