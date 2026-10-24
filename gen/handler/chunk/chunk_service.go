@@ -30,6 +30,8 @@ import (
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/model"
+
+	"github.com/oekit/pkg/ptrx"
 )
 
 var chunkSvc *chunkService.Service
@@ -266,7 +268,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 						TotalChunks:   fmt.Sprintf("%d", req.TotalChunks),
 						IsQuickUpload: true,
 						ShareCode:     shareResult.Code,
-						ShareURL:      strPtr(fullShareURL),
+						ShareURL:      ptrx.Of(fullShareURL),
 					},
 				})
 				return
@@ -911,9 +913,6 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 }
 
 // readHeadFrom 从 reader 读取前 n 字节（魔数校验用）；读取失败返回 nil
-// strPtr 字符串转指针（契约 optional 字段）
-func strPtr(s string) *string { return &s }
-
 func readHeadFrom(r io.Reader, n int) []byte {
 	buf := make([]byte, n)
 	read, err := io.ReadFull(r, buf)

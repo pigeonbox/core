@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/pigeonbox/core/storage/opendal"
+
+	"github.com/oekit/pkg/ptrx"
 )
 
 // ErrPresignUnsupported 当前存储后端不支持真预签名直传/直下（local/webdav 走服务端中转）。
@@ -312,7 +314,7 @@ func (s *StorageService) FileExists(ctx context.Context, filePath string) bool {
 }
 
 // boolPtr bool 取指针
-func boolPtr(b bool) *bool { return &b }
+func boolPtr(b bool) *bool { return ptrx.Of(b) }
 
 // GetFileSize 获取文件大小
 func (s *StorageService) GetFileSize(ctx context.Context, filePath string) (int64, error) {

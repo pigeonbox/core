@@ -17,6 +17,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/pkg/convert"
+	"github.com/oekit/pkg/ptrx"
 	"github.com/pigeonbox/contracts/errcode"
 	sharemodel "github.com/pigeonbox/contracts/gen/share"
 	shareService "github.com/pigeonbox/core/app/share"
@@ -49,11 +50,8 @@ func strPtrIfNotEmpty(s string) *string {
 	if s == "" {
 		return nil
 	}
-	return &s
+	return ptrx.Of(s)
 }
-
-// boolPtr 布尔转指针（契约 optional bool 字段）
-func boolPtr(b bool) *bool { return &b }
 
 // SetShareService 注入共享的 share service 实例（bootstrap 调用）。
 // 回归（治理 2026-10-03）：此前未注入，/share/text|file|select|download 走
@@ -445,7 +443,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 	var deduped *bool
 	if shareResult.Deduped {
 		message = "秒传成功（内容已存在，未重复占用存储）"
-		deduped = boolPtr(true)
+		deduped = ptrx.Of(true)
 	}
 	resp := &sharemodel.ShareFileResp{
 		Code:    0,
