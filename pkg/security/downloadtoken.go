@@ -120,4 +120,3 @@ func VerifyDownloadTokenFlavor(code, token string) TokenFlavor {
 		return TokenInvalid
 	}
 }
-

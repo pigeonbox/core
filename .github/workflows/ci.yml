@@ -21,24 +21,39 @@ jobs:
       # CI 都没有 gofmt 步，.golangci.yml 也没开 gofmt linter —— 格式漂移无人拦
       # （core 仓 HEAD 上就压着 19 个漂移文件）。**发现即红，修法是 gofmt -w**，
       # 不设豁免：豁免即免死金牌（与前端 api-body-types-check 门禁同族教训）。
+      #
+      # 2026-10-24 改：下面**每一道门禁都加 `if: always()`** ⇒ 彼此不再阻塞。
+      # 此前是串行步骤链 ⇒ **前一步失败 ⇒ 后面全部 skipped** ⇒ 实录：core 仓
+      # 压着两个未 gofmt 的文件（我自己的 commit 引入）⇒ gofmt 步红 ⇒
+      # Vet / Test(race) / Govulncheck / Lint / **架构棘轮守卫** 全部 skipped
+      # ⇒ 整整两个发版列车，那几道门禁**一行断言都没跑过** ⇒ 期间引入的两个
+      # 架构违规（规则1 依赖边界 / 规则8 全局配置直读）就这么进了 main。
+      # ⇒ **「门禁存在」不等于「门禁跑过」；「前面的失败」也不该让「后面的门禁」
+      # 变成不可见**。加 always() 后，一次 CI 能看到**全部**门禁的状态。
       - name: Gofmt
+        if: always()
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: Vet
+        if: always()
         run: go vet ./...
       # -race 与本机同门槛:transfer/federation 两起数据竞争都是 CI 外本地才暴露的
       - name: Test (race)
+        if: always()
         run: go test -race ./...
 
       # 依赖漏洞门禁（govulncheck）：可达漏洞即红；修复策略=升依赖地板，不许注释绕过
       - name: Govulncheck
+        if: always()
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       # lint 棘轮（.golangci.yml 从 0 issues 起步，只收紧不放宽）
       - name: Lint (golangci-lint)
+        if: always()
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.14
           args: --timeout 9m
       - name: Dep guard(core 不许依赖下游)
+        if: always()
         run: |
           BAD=$(go list -deps ./... | grep -E '^github.com/pigeonbox/(server|frontend|fnos)' || true)
           if [ -n "$BAD" ]; then echo "✗ core 违规依赖:"; echo "$BAD"; exit 1; fi

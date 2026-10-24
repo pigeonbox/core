@@ -222,7 +222,14 @@ var globalConfigBaseline = map[string]int{
 	"gen/handler/chunk/chunk_service.go":       1,
 	"gen/handler/presign/presign_service.go":   1,
 	"gen/handler/setup/setup_service.go":       1,
-	"gen/handler/share/share_service.go":       3,
+	// gen/handler/share_anonymous: 取件码**页面链接**需要显式的 server.base_url
+	// 优先（与分片通道 publicShareURL 同口径：显式配置 > ctx 推断 > 相对形态）。
+	// 2026-10-24 登记：此前该直读点未登记 ⇒ 规则8 判为「新违例」⇒ core CI 的
+	// 棘轮守卫红。而这条守卫自 2026-10-23 起被 gofmt 步骤挡住（前者先失败 ⇒
+	// 后续步骤全 skip）⇒ 实际从未运行过 ⇒ 违规被合进 main 一直没被发现。
+	// 登记 = 承认现状并**冻结**（棘轮只许减不许增）；后续改造为构造注入时可减到 0。
+	"gen/handler/share_anonymous/share_anonymous_service.go": 1,
+	"gen/handler/share/share_service.go":                     3,
 	"gen/handler/storage/storage_service.go":   1,
 	"pkg/gate/gate.go":                         4,
 	"pkg/gate/quota.go":                        1,
