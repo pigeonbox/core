@@ -75,13 +75,21 @@ func ValidateQRCodeData(data string) bool {
 }
 
 // GenerateQRCodeID 生成二维码唯一ID
+//
+// ⚠️ 2026-10-25 审计 A5：原实现的随机失败兜底是
+// `fmt.Sprintf("qr_%x", make([]byte, 8))` ⇒ **恒返回常量** "qr_0000000000000000"
+// ⇒ 该分支下所有二维码 ID 相同 ⇒ 存储层 `QRCodeStore[id] = qr` **互相覆盖**
+// ⇒ 先生成的二维码取不到（拿到的是后一个的内容）。
+//
+// ⇒ 随机源失败**显式报错**（不悄悄给一个会撞的 ID）：rand.Read 失败意味着
+// 系统熵源异常，此时返回错误比返回"一个会撞的 ID"安全。
+//
 // @return string 二维码ID
-func GenerateQRCodeID() string {
+// @return error 随机源不可用
+func GenerateQRCodeID() (string, error) {
 	b := make([]byte, 8)
-	_, err := rand.Read(b)
-	if err != nil {
-		// 如果随机数生成失败，使用时间戳作为ID
-		return fmt.Sprintf("qr_%x", make([]byte, 8))
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("生成二维码 ID 失败（随机源不可用）: %w", err)
 	}
-	return fmt.Sprintf("qr_%x", b)
+	return fmt.Sprintf("qr_%x", b), nil
 }

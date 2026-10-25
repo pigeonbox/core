@@ -35,9 +35,11 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 
+	"github.com/pigeonbox/contracts/errcode"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/gen/router"
+	"github.com/pigeonbox/core/pkg/resp"
 )
 
 // shareSurfaceContract 一个「分享面向外」的面在取件闸门上的契约。
@@ -51,6 +53,15 @@ type shareSurfaceContract struct {
 	Delivers  string
 	Gate      string
 	CoveredBy string
+	// Code 该面在「次数耗尽」时返回的**业务码**（0 = 该面不涉及业务码判定）。
+	// HTTP 该业务码对应的 **HTTP 状态码**（0 = 不校验）。
+	//
+	// 为什么要登记 HTTP 状态（2026-10-25 审计 A9）：此前表里只有业务码 ⇒
+	// 「同语义不同 HTTP 状态」（匿名 20007=200 vs 分享 20004=403）这类退化
+	// **结构上无法被守卫发现**。⇒ 登记后由守卫核对「表里的 HTTP 状态」与
+	// 「运行时实际映射（resp.HTTPStatusForCode）」一致。
+	Code int
+	HTTP int
 }
 
 // shareSurfaceContracts 取件闸门契约表（**新增面向外交付的面必须在此登记**）。
@@ -64,25 +75,26 @@ type shareSurfaceContract struct {
 //   - "豁免"：管理面元信息（与 /admin/files 同规格，不受对外分发配额约束）。
 var shareSurfaceContracts = []shareSurfaceContract{
 	// ===== 创建面（新分享，尚无取件行为）=====
-	{"POST /share/text/", "创建文本分享", "N/A", ""},
-	{"POST /share/file/", "创建文件分享", "N/A", ""},
-	{"POST /anonymous/generate", "铸造取件码（占位）", "N/A", ""},
-	{"POST /api/v1/share/multi-direct", "创建多文件分享", "N/A", ""},
-	{"POST /api/v1/share/multi-bind", "绑定多文件分享", "N/A", ""},
+	{"POST /share/text/", "创建文本分享", "N/A", "", 0, 0},
+	{"POST /share/file/", "创建文件分享", "N/A", "", 0, 0},
+	{"POST /anonymous/generate", "铸造取件码（占位）", "N/A", "", 0, 0},
+	{"POST /api/v1/share/multi-direct", "创建多文件分享", "N/A", "", 0, 0},
+	{"POST /api/v1/share/multi-bind", "绑定多文件分享", "N/A", "", 0, 0},
 
 	// ===== 交付面（读已有分享）=====
-	{"GET /share/select/", "文本正文（交付面）", "20004", "TestSelect_CountExhausted_ReturnsForbidden"},
-	{"GET /share/download", "文件内容（交付面）", "交付点扣次", "TestDownload_CountExhausted_BlocksNewSession_AllowsChargedSession"},
-	{"GET /share/metadata/:code", "分享元信息（文件名/大小）", "20004", "TestShareMetadata_CountExhaustedReturns20004"},
-	{"GET /preview/:code", "预览摘要（内容派生）", "20004", "TestPreview_CountExhausted_ReturnsReachLimit"},
-	{"POST /anonymous/retrieve", "取件凭证（不扣次）", "20007", "TestRetrieve_CountExhausted"},
-	{"GET /anonymous/download/:code", "下载直链（302）", "20007", "TestAnonymousDownload_CountExhausted_ReturnsExhausted"},
-	{"GET /anonymous/search/:code", "分享元信息（文件名/大小）", "20007", "TestSearchByCode_CountExhausted"},
+	{"GET /share/select/", "文本正文（交付面）", "20004", "TestSelect_CountExhausted_ReturnsForbidden", errcode.CodeShareReachLimit, 403},
+	{"GET /share/download", "文件内容（交付面）", "交付点扣次", "TestDownload_CountExhausted_BlocksNewSession_AllowsChargedSession", errcode.CodeShareReachLimit, 403},
+	{"GET /share/metadata/:code", "分享元信息（文件名/大小）", "20004", "TestShareMetadata_CountExhaustedReturns20004", errcode.CodeShareReachLimit, 403},
+	{"GET /preview/:code", "预览摘要（内容派生）", "20004", "TestPreview_CountExhausted_ReturnsReachLimit", errcode.CodeShareReachLimit, 403},
+	{"POST /anonymous/retrieve", "取件凭证（不扣次）", "20007", "TestRetrieve_CountExhausted", errcode.CodePickupCodeExhausted, 403},
+	{"GET /anonymous/download/:code", "下载直链（302）", "20007", "TestAnonymousDownload_CountExhausted_ReturnsExhausted", errcode.CodePickupCodeExhausted, 403},
+	{"GET /anonymous/search/:code", "分享元信息（文件名/大小）", "20007", "TestSearchByCode_CountExhausted", errcode.CodePickupCodeExhausted, 403},
 
 	// ===== MCP 工具（读已有分享）=====
-	{"MCP get_share", "分享元信息（管理面）", "豁免", ""},
-	{"MCP get_share_content", "文本正文 / 文件清单（管理面）", "取件次数已用完", "TestToolsCall_CountExhaustedShareDenied"},
-	{"MCP download_share_file", "文件内容（管理面）", "取件次数已用完", "TestToolsCall_CountExhaustedFileShareDenied"},
+	{"MCP get_share", "分享元信息（管理面）", "豁免", "", 0, 0},
+	{"MCP preview_share", "预览摘要（文本内容派生）", "20004", "TestPreview_CountExhausted_ReturnsReachLimit", errcode.CodeShareReachLimit, 403},
+	{"MCP get_share_content", "文本正文 / 文件清单（管理面）", "取件次数已用完", "TestToolsCall_CountExhaustedShareDenied", 0, 0},
+	{"MCP download_share_file", "文件内容（管理面）", "取件次数已用完", "TestToolsCall_CountExhaustedFileShareDenied", 0, 0},
 }
 
 // shareSurfacePatterns 判定「分享面向外」的路由模式。
@@ -116,9 +128,21 @@ func TestShareSurfaceContractCoverage(t *testing.T) {
 			}
 		}
 	}
-	// MCP 侧读分享内容的工具（注册表标注 ReadsShare 的那些）
+	// MCP 侧读分享内容的工具：
+	//   · 作者自标（Gate.ReadsShare）—— 声明「我交付内容」；
+	//   · 客观判据（出参含内容字段）—— 反射推导，**不依赖作者自觉**。
+	// 两者取并集进核对集合 ⇒ 作者忘自标时，客观判据仍会把它捞进来
+	// （2026-10-25 审计 A2：守卫的发现机制自身有洞 ⇒ preview_share 漏出契约表）。
 	for _, name := range mcpApp.ShareReadingToolNames() {
 		real["MCP "+name] = true
+	}
+	for _, name := range mcpApp.ContentDeliveringToolNames() {
+		real["MCP "+name] = true
+		// 客观判定为交付内容、但作者没自标 ⇒ 自标与客观判据不一致 ⇒ 报出来
+		// （不直接判失败：可能是「管理面豁免」的有意为之，但必须显式登记）
+		if mcpApp.ShareGatePolicy(name) == nil {
+			t.Errorf("MCP 工具 %q 的出参含内容字段（客观判定为交付内容）但未在注册表声明 Gate —— 守卫的发现机制不能只信作者自标；请补 Gate 声明或说明其为管理面豁免", name)
+		}
 	}
 
 	// 契约表索引
@@ -159,6 +183,17 @@ func TestShareSurfaceContractCoverage(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("新增了 %d 个分享面向外的面但未在取件闸门契约表登记（必须声明「交不交付内容/次数耗尽时怎么判/由哪个测试覆盖」）:\n  %s",
 			len(missing), joinLines(missing))
+	}
+
+	// ④b 表内登记的 HTTP 状态必须与运行时映射一致（A9：状态码退化可被发现）
+	for _, c := range shareSurfaceContracts {
+		if c.Code == 0 || c.HTTP == 0 {
+			continue
+		}
+		if got := resp.HTTPStatusForCode(c.Code); got != c.HTTP {
+			t.Errorf("面 %s 登记的 HTTP 状态 %d 与运行时映射（业务码 %d → %d）不一致——同语义不同状态码的退化必须被发现",
+				c.Surface, c.HTTP, c.Code, got)
+		}
 	}
 
 	// ④ 契约表声明的覆盖测试函数必须真实存在（源码树全文检索）

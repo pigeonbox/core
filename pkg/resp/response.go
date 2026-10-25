@@ -165,6 +165,22 @@ func httpStatusForCode(code int) int {
 		return consts.StatusForbidden
 	case code == errcode.CodeNotFound, code == errcode.CodeShareNotFound, code == errcode.CodeFileNotFound, code == errcode.CodePickupCodeNotFound, code == errcode.CodeUserNotFound:
 		return consts.StatusNotFound
+	case code == errcode.CodeShareExpired, code == errcode.CodePickupCodeExpired:
+		// 「已过期」与「不存在」同语义（404，降低存在性探测面）——与本仓既有
+		// 口径一致（各面把「不存在/已过期/被封禁」统一成 404）。
+		return consts.StatusNotFound
+	case code == errcode.CodeShareReachLimit, code == errcode.CodePickupCodeExhausted:
+		// 「取件次数用完」= **拒绝取件**（不是「不存在」）⇒ 403。
+		//
+		// ⚠️ 2026-10-25 审计 A1：此前 2xxxx 业务码**整族未枚举** ⇒ 一律落
+		// `default` ⇒ **HTTP 200**。于是「次数用完」在匿名通道（20007）是 200、
+		// 在分享通道（20004，handler 显式写 403）是 403 ⇒ **同一语义事件两个
+		// 状态码**；客户端若按 HTTP 状态分支（而非按业务码）就会把「额度用完」
+		// 当成成功响应处理。
+		//
+		// ⇒ 2xxxx 族补齐 HTTP 语义，与分享通道对齐（破坏性变更见发布说明：
+		// 客户端应按响应体 `code` 分支，本仓文档亦如此约定）。
+		return consts.StatusForbidden
 	case code == errcode.CodeRateLimit, code == errcode.CodeTooManyAttempts, code == errcode.CodeAnonymousQuota:
 		return consts.StatusTooManyRequests
 	case code == errcode.CodeShareBlocked, code == errcode.CodeSharePendingReview,
@@ -189,6 +205,15 @@ func httpStatusForCode(code int) int {
 	default:
 		return consts.StatusOK
 	}
+}
+
+// HTTPStatusForCode 导出业务码 → HTTP 状态 的映射。
+//
+// 供取件闸门**契约守卫**（bootstrap/share_surface_contract_test.go）核对
+// 「契约表登记的 HTTP 状态」与「运行时实际映射」是否一致 ⇒ 2026-10-25 审计 A9
+// 指出的「契约表只登记业务码 ⇒ 状态码退化结构上无法被发现」由此闭合。
+func HTTPStatusForCode(code int) int {
+	return httpStatusForCode(code)
 }
 
 // NewTypedError 把实现 ErrCode() int 的 typed error（gate/moderation 等）写成

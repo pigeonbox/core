@@ -176,6 +176,47 @@ func (r *ChunkRepository) FirstOrCreateChunk(ctx context.Context, chunk *model.U
 		FirstOrCreate(chunk).Error
 }
 
+// UpsertChunk 按 (upload_id, chunk_index) **幂等写入**分片行：存在则更新其
+// 内容字段，不存在则插入。
+//
+// ⚠️ 为什么不用 FirstOrCreateChunk（2026-10-25 审计 A3）：gorm 的
+// `FirstOrCreate` 命中既有行时**不套用 Assign**（Assign 只在 create 分支生效）
+// ⇒ 已存在的未完成行（completed=false）**不会被更新为已完成** ⇒ 重传仍不生效。
+//
+// 为什么需要它：`GetChunkByIndex` 的 WHERE 含 `completed = true` ⇒ 看不到未完成
+// 的旧行 ⇒ 修前「失败后重传同索引」会**再建一行** ⇒ CountCompletedChunks 按
+// **行数**计 ⇒ 「分片齐全」判定可虚高（声明 5 片只传 4 片也可能计成 5）。
+//
+// 并发：两个请求同时「未命中 ⇒ 插入」时，后者会撞 (upload_id, chunk_index)
+// 唯一索引（迁移 000006）⇒ 捕获唯一冲突后退回更新（幂等语义不破）。
+func (r *ChunkRepository) UpsertChunk(ctx context.Context, chunk *model.UploadChunk) error {
+	fields := map[string]interface{}{
+		"chunk_hash": chunk.ChunkHash,
+		"chunk_size": chunk.ChunkSize,
+		"status":     chunk.Status,
+		"completed":  chunk.Completed,
+	}
+	res := r.db().WithContext(ctx).Model(&model.UploadChunk{}).
+		Where("upload_id = ? AND chunk_index = ?", chunk.UploadID, chunk.ChunkIndex).
+		Updates(fields)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected > 0 {
+		return nil
+	}
+	// 未命中 ⇒ 插入；并发下可能撞唯一索引 ⇒ 退回更新
+	if err := r.db().WithContext(ctx).Create(chunk).Error; err != nil {
+		if isUniqueViolation(err) {
+			return r.db().WithContext(ctx).Model(&model.UploadChunk{}).
+				Where("upload_id = ? AND chunk_index = ?", chunk.UploadID, chunk.ChunkIndex).
+				Updates(fields).Error
+		}
+		return err
+	}
+	return nil
+}
+
 // UpdateOwner 更新会话归属字段（IP 漂移后的会话接管）
 func (r *ChunkRepository) UpdateOwner(ctx context.Context, uploadID string, updates map[string]interface{}) error {
 	return r.db().WithContext(ctx).Model(&model.UploadChunk{}).

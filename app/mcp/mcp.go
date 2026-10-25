@@ -27,6 +27,7 @@ package mcp
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -441,6 +442,10 @@ func (s *Service) ToolNames() []string {
 // 供取件闸门契约守卫（bootstrap/share_surface_contract_test.go）消费：
 // 凡是读分享内容的工具都必须在契约表里声明「次数耗尽时的判定」并有行为测试
 // 覆盖 ⇒ 新增读内容的工具而忘声明 ⇒ 守卫变红。
+//
+// ⚠️ 此集合只含**作者自标** `Gate.ReadsShare` 的工具 ⇒ 它**不能**作为守卫的
+// 唯一发现机制（新增工具忘自标就漏出）⇒ 守卫另用
+// **ContentDeliveringToolNames()**（客观判据）交叉核对。
 func ShareReadingToolNames() []string {
 	var out []string
 	for _, spec := range toolSpecs {
@@ -449,6 +454,68 @@ func ShareReadingToolNames() []string {
 		}
 	}
 	return out
+}
+
+// contentFieldNames 出参里代表「内容」的字段名（小写比对）。
+//
+// 判定「工具是否对外交付**内容**」的客观依据：出参里有这些字段 ⇒ 该工具能把
+// 分享内容（或内容派生物）送出去 ⇒ 必须守取件次数闸。
+var contentFieldNames = map[string]bool{
+	"text":           true, // 文本正文 / 预览摘要
+	"content":        true,
+	"content_base64": true, // 文件内容（base64）
+	"body":           true,
+	"raw":            true,
+	"bytes":          true,
+}
+
+// ContentDeliveringToolNames 返回**客观判定**为「对外交付内容」的工具名。
+//
+// 判据 = 工具出参结构里含内容字段（text / content_base64 / …），由**反射**从
+// toolSpec.Out 推导 ⇒ 与作者的 `Gate.ReadsShare` 标注**互为交叉验证**：
+// 客观判定为交付内容、但没自标 Gate 的工具 ⇒ 取件闸门契约守卫会变红
+// （2026-10-25 审计 A2：`preview_share` 此前就是这样漏出契约表的 —— 它回传
+// 文本摘要，出参里有 `Text`，却没标 ReadsShare）。
+func ContentDeliveringToolNames() []string {
+	var out []string
+	for _, spec := range toolSpecs {
+		if spec.Out == nil {
+			continue
+		}
+		if outTypeDeliversContent(reflect.TypeOf(spec.Out)) {
+			out = append(out, spec.Name)
+		}
+	}
+	return out
+}
+
+// outTypeDeliversContent 反射判定出参类型是否含内容字段（含嵌套结构）。
+func outTypeDeliversContent(t reflect.Type) bool {
+	if t == nil {
+		return false
+	}
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			name := strings.ToLower(strings.Split(f.Tag.Get("json"), ",")[0])
+			if name != "" && contentFieldNames[name] {
+				return true
+			}
+			// 嵌套结构（如 Data *xxx）也一并判定
+			if f.Type.Kind() == reflect.Struct || f.Type.Kind() == reflect.Ptr {
+				if outTypeDeliversContent(f.Type) {
+					return true
+				}
+			}
+		}
+	case reflect.Map:
+		return outTypeDeliversContent(t.Elem())
+	}
+	return false
 }
 
 // ShareGatePolicy 返回某工具的取件闸门策略（无策略返回 nil）。

@@ -30,6 +30,51 @@ import (
 	"github.com/pigeonbox/core/storage"
 )
 
+// multiBindEntry multi-bind 请求的一个条目（分片会话 或 已直传对象，二选一）。
+type multiBindEntry struct {
+	UploadID  string `json:"upload_id"`
+	ObjectKey string `json:"object_key"`
+	FileName  string `json:"file_name"`
+}
+
+// collectMultiBindDeclaredSize 汇总本次 multi-bind 的**申报总大小**（配额预检用）。
+//
+// ⚠️ 2026-10-25 审计 A4：**object_key 条目此前完全不计入**（只累加 upload_id
+// 条目的 chunk 会话申报大小）⇒ 匿名日字节配额 / 登录用户单次上传上限**看不到
+// 它们** ⇒ 绑定 N 个已直传对象可绕过配额（其真实大小在第二遍、**过配额闸之后**
+// 才取）⇒ 站点存储可被撑爆。
+//
+// ⇒ 两条路径都要计入：
+//   - upload_id 条目：chunk 会话申报的 FileSize；
+//   - object_key 条目：存储里的**真实大小**（客户端可控 ⇒ 必须先清洗路径再查，
+//     否则可借任意路径探大小）。
+//
+// 非法 key / 取不到大小 ⇒ 不计入（第二遍会给出明确错误）⇒ 保持 fail-fast 顺序
+// 不变：配额预检仍在合并落盘**之前**（2026-08-19 事故的教训）。
+func collectMultiBindDeclaredSize(ctx context.Context, st storage.StorageInterface, chunkSvc *chunk.Service, entries []multiBindEntry) (int64, error) {
+	var declared int64
+	for _, e := range entries {
+		if e.UploadID == "" && e.ObjectKey == "" {
+			return 0, fmt.Errorf("entry 缺少 upload_id/object_key")
+		}
+		if e.UploadID != "" {
+			if info, gerr := chunkSvc.GetUploadInfo(ctx, e.UploadID); gerr == nil {
+				declared += info.FileSize
+			}
+			continue
+		}
+		// object_key：路径同第二遍的严格档（pathx.SanitizeRelStrict + uploads/ 前缀）
+		cleanKey, ok := pathx.SanitizeRelStrict(e.ObjectKey)
+		if !ok || !strings.HasPrefix(cleanKey, "uploads/") {
+			continue // 非法 key ⇒ 不计入（第二遍会拒）
+		}
+		if size, serr := st.GetFileSize(ctx, cleanKey); serr == nil && size > 0 {
+			declared += size
+		}
+	}
+	return declared, nil
+}
+
 // userIDAny 读请求身份：JWT 走 c.Set（OptionalAuthMiddleware），API Key 走 ctx 值
 // （validateAPIKey newCtx）。两条注入路径并存，必须都查（回归：此前只查 ctx，
 // JWT 用户的 custom_code/配额归属全部静默失效）。
@@ -278,16 +323,12 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	var body struct {
-		Entries []struct {
-			UploadID  string `json:"upload_id"`
-			ObjectKey string `json:"object_key"`
-			FileName  string `json:"file_name"`
-		} `json:"entries"`
-		ExpireValue int    `json:"expire_value"`
-		ExpireStyle string `json:"expire_style"`
-		RequireAuth bool   `json:"require_auth"`
-		Password    string `json:"password"`
-		Encrypted   bool   `json:"encrypted"`
+		Entries     []multiBindEntry `json:"entries"`
+		ExpireValue int              `json:"expire_value"`
+		ExpireStyle string           `json:"expire_style"`
+		RequireAuth bool             `json:"require_auth"`
+		Password    string           `json:"password"`
+		Encrypted   bool             `json:"encrypted"`
 	}
 	if err := json.Unmarshal(c.Request.Body(), &body); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "请求体解析失败: " + err.Error()})
@@ -323,15 +364,10 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 	mergedUploadIDs := make([]string, 0, len(body.Entries))
 
 	// 第一遍：收集申报大小做匿名配额预检（fail-fast，先于合并落盘）
-	var declared int64
-	for _, e := range body.Entries {
-		if e.UploadID == "" && e.ObjectKey == "" {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "entry 缺少 upload_id/object_key"})
-			return
-		}
-		if info, gerr := chunkSvc.GetUploadInfo(ctx, e.UploadID); e.UploadID != "" && gerr == nil {
-			declared += info.FileSize
-		}
+	declared, err := collectMultiBindDeclaredSize(ctx, st, chunkSvc, body.Entries)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		return
 	}
 	if gateUserID == nil {
 		if err := gate.CheckAnonymousQuota(ctx, p.OwnerIP, declared); err != nil {

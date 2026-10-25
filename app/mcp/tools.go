@@ -29,6 +29,14 @@ type toolSpec struct {
 	Name     string
 	Desc     string
 	MinScope int
+	// Out 工具的出参结构（零值实例即可）⇒ 供**客观**判定「本工具是否对外交付
+	// 内容」：反射出参里的内容字段（text / content_base64 / …）。
+	//
+	// 为什么要客观判据（2026-10-25 审计 A2）：守卫此前**只信作者自标的**
+	// `Gate.ReadsShare` ⇒ 新增一个交付内容的工具而忘写 Gate ⇒ 机械守卫**不会**
+	// 变红（`preview_share` 就是这样漏出契约表的）⇒ 守卫的发现机制自身有洞。
+	// ⇒ 客观判据（出参含内容字段）由**出参结构**推导，与作者标注不一致即红。
+	Out any
 	// Gate 取件闸门策略：声明本工具是否**读分享内容/元信息**（ReadsShare），
 	// 以及次数耗尽时的判定（Exhausted）。
 	//
@@ -59,6 +67,7 @@ type ShareGate struct {
 var toolSpecs = []toolSpec{
 	{
 		Name: "share_text", MinScope: scopeGuest,
+		Out:  shareCreatedOut{},
 		Desc: "创建文本分享，返回取件码、分享链接与 Markdown 链接",
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "share_text", Description: "创建文本分享，返回取件码、分享链接与 Markdown 链接"}, toolGuard(scopeGuest, s.shareText))
@@ -66,6 +75,7 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "share_file", MinScope: scopeGuest,
+		Out:  shareCreatedOut{},
 		Desc: "上传文件并创建文件分享（base64 内容，走配额/审核/扩展名白名单链路），返回取件码、分享链接、Markdown 链接与直链",
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "share_file", Description: "上传文件并创建文件分享（base64 内容，走配额/审核/扩展名白名单链路），返回取件码、分享链接、Markdown 链接与直链"}, toolGuard(scopeGuest, s.shareFile))
@@ -73,6 +83,7 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "create_request_code", MinScope: scopeUser,
+		Out:  createRequestCodeOut{},
 		Desc: "创建寄件码（反向收件投递链接）：发给对方让其上传文件，落成你名义的分享",
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "create_request_code", Description: "创建寄件码（反向收件投递链接）：发给对方让其上传文件，落成你名义的分享"}, toolGuard(scopeUser, s.createRequestCode))
@@ -80,6 +91,11 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "preview_share", MinScope: scopeUser,
+		Out: previewShareOut{},
+		// 交付内容（文本摘要）⇒ 必须守取件次数闸（客观判据：出参含 Text 字段）。
+		// 此前**漏标** ⇒ 取件闸门契约守卫按「自标」发现面时它漏出契约表
+		// （2026-10-25 审计 A2：守卫的发现机制自身有洞）。
+		Gate: &ShareGate{ReadsShare: true, Exhausted: "20004", CoveredBy: "TestPreview_CountExhausted_ReturnsReachLimit"},
 		Desc: "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）",
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "preview_share", Description: "取分享内容预览（文本文件返回摘要文本；图片/视频/文档返回元数据；受取件闸门与密码保护约束）"}, toolGuard(scopeUser, s.previewShare))
@@ -87,6 +103,7 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "get_share", MinScope: scopeAdmin,
+		Out:  getShareOut{},
 		Desc: "按分享码或 6 位取件码查询分享信息（不消耗取件次数）",
 		// 管理面元信息面：与 /admin/files 同规格（管理员本就可见全站分享的
 		// 文件名/大小），**豁免**取件次数闸（次数闸约束的是「对外分发给收件人」）。
@@ -97,6 +114,7 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "get_share_content", MinScope: scopeAdmin,
+		Out:  getShareContentOut{},
 		Desc: "读取分享内容（文本返回正文；文件返回元数据与文件清单；不消耗取件次数）",
 		// 交付面：文本分享这里**回传正文** ⇒ 必须守次数闸（count 样式分享的
 		// 「最多取 N 次」承诺不能在管理面被绕过）。
@@ -107,6 +125,7 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "download_share_file", MinScope: scopeAdmin,
+		Out:  downloadShareFileOut{},
 		Desc: "下载文件分享内容（base64 回传；仅单文件分享，已过期拒绝；不消耗取件次数）",
 		// 交付面：回传**文件内容** ⇒ 必须守次数闸（同上）。
 		Gate: &ShareGate{ReadsShare: true, Exhausted: "取件次数已用完", CoveredBy: "TestToolsCall_CountExhaustedFileShareDenied"},
@@ -116,6 +135,7 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "list_shares", MinScope: scopeAdmin,
+		Out:  listSharesOut{},
 		Desc: "分页列出全站分享记录（可按分享码/取件码/文件名搜索）",
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "list_shares", Description: "分页列出全站分享记录（可按分享码/取件码/文件名搜索）"}, toolGuard(scopeAdmin, s.listShares))
@@ -123,6 +143,7 @@ var toolSpecs = []toolSpec{
 	},
 	{
 		Name: "delete_share", MinScope: scopeAdmin,
+		Out:  deleteShareOut{},
 		Desc: "删除指定分享（DB 记录 + 物理文件，写审计日志）",
 		Register: func(s *Service, srv *sdk.Server) {
 			sdk.AddTool(srv, &sdk.Tool{Name: "delete_share", Description: "删除指定分享（DB 记录 + 物理文件，写审计日志）"}, toolGuard(scopeAdmin, s.deleteShare))

@@ -21,18 +21,32 @@ var (
 	qrcodeMu     sync.RWMutex
 	QRCodeStore  = make(map[string]*StoredQRCode)
 	qrcodeMaxCap = 10000
+	// qrcodeSeq 插入序号（单调递增）⇒ 容量超限时能**确定地**淘汰最早写入的条目。
+	qrcodeSeq uint64
 )
 
-// qrcodePut 并发安全写入；超限时丢弃最早写入的条目（近似 LRU，防内存无界）
+// qrcodePut 并发安全写入；超限时淘汰**最早写入**的条目（防内存无界）
+//
+// ⚠️ 2026-10-25 审计 A5：此前实现是 `for k := range QRCodeStore { delete(k); break }`
+// ⇒ Go map 迭代序**随机** ⇒ 删掉的是任意一条 ⇒ 注释承诺的「近似 LRU」不成立
+// （后写入的条目可能先被淘汰，旧的反而留着）⇒ 改为按插入序淘汰。
 func qrcodePut(id string, qr *StoredQRCode) {
 	qrcodeMu.Lock()
 	defer qrcodeMu.Unlock()
 	if len(QRCodeStore) >= qrcodeMaxCap {
-		for k := range QRCodeStore {
-			delete(QRCodeStore, k)
-			break
+		oldestID := ""
+		var oldestSeq uint64
+		for k, v := range QRCodeStore {
+			if oldestID == "" || v.Seq < oldestSeq {
+				oldestID, oldestSeq = k, v.Seq
+			}
+		}
+		if oldestID != "" {
+			delete(QRCodeStore, oldestID)
 		}
 	}
+	qrcodeSeq++
+	qr.Seq = qrcodeSeq
 	QRCodeStore[id] = qr
 }
 
@@ -50,6 +64,8 @@ type StoredQRCode struct {
 	Data    []byte
 	DataStr string
 	Size    int
+	// Seq 插入序号（单调递增）⇒ 容量超限时确定地淘汰最早写入的条目
+	Seq uint64
 }
 
 // GenerateQRCode .
@@ -100,8 +116,15 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// 生成唯一ID
-	id := qrcodeservice.GenerateQRCodeID()
+	// 生成唯一ID（随机源不可用 ⇒ 显式报错，不返回一个会撞的常量 ID）
+	id, idErr := qrcodeservice.GenerateQRCodeID()
+	if idErr != nil {
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
+			"code":    errcode.CodeInternal,
+			"message": idErr.Error(),
+		})
+		return
+	}
 
 	// 存储二维码数据
 	qrcodePut(id, &StoredQRCode{

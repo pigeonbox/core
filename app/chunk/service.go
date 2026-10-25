@@ -241,19 +241,17 @@ func (s *Service) UploadChunk(ctx context.Context, req *UploadChunkReq) (*ChunkR
 		Completed:  true,
 	}
 
-	if existingChunk != nil {
-		// 更新现有记录
-		err = s.chunkRepo.UpdateChunkCompleted(ctx, req.UploadID, req.ChunkIndex, req.ChunkHash)
-		if err != nil {
-			return nil, err
-		}
-		chunk.ID = existingChunk.ID
-	} else {
-		// 创建新记录
-		err = s.chunkRepo.Create(ctx, chunk)
-		if err != nil {
-			return nil, err
-		}
+	// 幂等写入（2026-10-25 审计 A3）：**同一 (upload_id, chunk_index) 只有一行**。
+	//
+	// 修前：GetChunkByIndex 的 WHERE 含 `completed = true` ⇒ **未完成的旧行查不到**
+	// ⇒ 分片失败后重传同索引会**再建一行**（下面的 Update 分支实为死代码）⇒
+	// CountCompletedChunks 按**行数**计 ⇒ 「分片齐全」判定可虚高（声明 5 片
+	// 只传 4 片也可能计成 5）⇒ 合并阶段才发现缺片。
+	//
+	// ⇒ 改用 dao.FirstOrCreateChunk（按 (upload_id, chunk_index) 命中即更新）：
+	// 配合 (upload_id, chunk_index) 唯一索引（迁移 000006）⇒ DB 层也保证唯一。
+	if err = s.chunkRepo.UpsertChunk(ctx, chunk); err != nil {
+		return nil, err
 	}
 
 	return &ChunkResp{

@@ -304,7 +304,7 @@ func (s *Service) matchOrCreate(ctx context.Context, claims idClaims) (*model.Us
 		username = strings.SplitN(claims.Email, "@", 2)[0]
 	}
 	if username == "" {
-		username = "oidc-" + claims.Sub[:8]
+		username = "oidc-" + oidcSubFingerprint(claims.Sub)
 	}
 	base := username
 	for i := 1; ; i++ {
@@ -330,10 +330,26 @@ func (s *Service) matchOrCreate(ctx context.Context, claims idClaims) (*model.Us
 	if claims.Email == "" || !claims.EmailVerified {
 		// 未验证邮箱不落库（与邮箱匹配同门槛，防占位邮箱后续被用于接管）：
 		// email 唯一索引不接受空串重复，以 sub 生成占位
-		user.Email = fmt.Sprintf("oidc-%s@oidc.local", claims.Sub[:8])
+		user.Email = fmt.Sprintf("oidc-%s@oidc.local", oidcSubFingerprint(claims.Sub))
 	}
 	if err := s.userRepo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("OIDC 用户创建失败: %w", err)
 	}
 	return user, nil
+}
+
+// oidcSubFingerprint 取 sub 的稳定短指纹（16 个 hex 字符），用作自动建号时的
+// 用户名后缀与邮箱占位。
+//
+// ⚠️ 越界防护（2026-10-25 审计 A8）：此前直接 `claims.Sub[:8]` ⇒ IdP 返回
+// **长度 < 8** 的 sub（如 "a1"）⇒ **切片越界 panic** ⇒ 该 IdP 的所有 OIDC
+// 登录 500（hertz Recovery 只把它转成 500，不救功能）。sub 的唯一约束是
+// **非空**（见上），长度不保证 ⇒ 不能按固定长度切片。
+//
+// 顺带修掉**碰撞**：取前 8 位时两个 sub 只要前 8 位相同（如
+// "user-0001-xxx" 与 "user-0001-yyy"）就会撞用户名/占位邮箱 ⇒ 后者建号失败
+// （唯一索引冲突）。改用 sha256 指纹 ⇒ 与长度无关、且不同 sub 不碰撞。
+func oidcSubFingerprint(sub string) string {
+	sum := sha256.Sum256([]byte(sub))
+	return hex.EncodeToString(sum[:8])
 }
