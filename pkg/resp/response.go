@@ -198,6 +198,40 @@ func httpStatusForCode(code int) int {
 		return consts.StatusServiceUnavailable
 	case code == errcode.CodeTimeout:
 		return consts.StatusRequestTimeout
+	case code == errcode.CodeStorageInit, code == errcode.CodeStorageUpload,
+		code == errcode.CodeStorageDownload, code == errcode.CodeStorageDelete,
+		code == errcode.CodeStorageIO:
+		// 存储域的服务端侧故障（初始化/上传/下载/删除/IO 失败）⇒ 500
+		return consts.StatusInternalServerError
+	case code == errcode.CodeStorageQuota:
+		// 存储配额超限（空间满）⇒ 507 Insufficient Storage
+		return consts.StatusInsufficientStorage
+	case code == errcode.CodeStorageScheme, code == errcode.CodeEndpointDenied:
+		// 存储方案不支持 / 端点地址不合法（SSRF 防线）⇒ 400
+		return consts.StatusBadRequest
+	case code == errcode.CodePresignFailed:
+		// 预签名**生成**失败（服务端故障）⇒ 500
+		return consts.StatusInternalServerError
+	case code == errcode.CodePresignCompleted:
+		// 上传会话已完成 ⇒ 409 Conflict（拒绝重放直传）。
+		// ⚠️ 此前它与「预签名生成失败」共用 30008 ⇒ 既没有 409 语义，消息也错。
+		return consts.StatusConflict
+	case code == errcode.CodePresignToken:
+		// 预签名 token 无效 ⇒ 403（**刻意不用 401**）。
+		// 理由：前端的 axios 拦截器把 **401 当作会话失效** ⇒ 触发 refresh/跳登录；
+		// 而 presign 的上传令牌**与会话无关**（匿名直传也会带）⇒ 用 401 会把
+		// 「上传凭证无效」误报成「请重新登录」。同族的 share/select 等端点也
+		// 遵循「业务语义 401 不许触发刷新」。
+		return consts.StatusForbidden
+	case code == errcode.CodePresignExpired:
+		// 直传凭证已过期 ⇒ 410 Gone（资源曾存在、现不可用）
+		return consts.StatusGone
+	case code == errcode.CodeFileTypeDenied:
+		// 文件类型不允许 ⇒ 415 Unsupported Media Type
+		return consts.StatusUnsupportedMediaType
+	case code == errcode.CodeContentRejected:
+		// 内容未通过审核 ⇒ 403
+		return consts.StatusForbidden
 	case errcode.IsServerError(code):
 		return consts.StatusInternalServerError
 	case errcode.IsClientError(code):

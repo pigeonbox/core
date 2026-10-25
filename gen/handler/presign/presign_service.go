@@ -274,7 +274,9 @@ func Complete(ctx context.Context, c *app.RequestContext) {
 		case errors.Is(err, presignapp.ErrUploadExpired):
 			resp.NewErrorByCode(c, errcode.CodePresignExpired)
 		case errors.Is(err, presignapp.ErrAlreadyComplete):
-			resp.NewErrorByCode(c, errcode.CodePresignFailed)
+			// 409 冲突（会话已完成 ⇒ 拒绝重放）；**不**复用 CodePresignFailed
+			// （那是「预签名生成失败」= 500 语义，且消息对已完成场景是错的）。
+			resp.NewErrorByCode(c, errcode.CodePresignCompleted)
 		default:
 			resp.NewErrorWithMessage(c, errcode.CodeInternal, err.Error())
 		}
@@ -397,7 +399,8 @@ func UploadDirect(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "upload expired")
 		case errors.Is(err, presignapp.ErrAlreadyComplete):
 			// 已完成会话拒绝重放直传（防已发布分享对象被静默替换，2026-10-08 加固）
-			resp.NewErrorByCode(c, errcode.CodePresignFailed)
+			// ⇒ 409 冲突（独立业务码 30014，勿与「预签名生成失败」30008 混用）
+			resp.NewErrorByCode(c, errcode.CodePresignCompleted)
 		default:
 			resp.NewTypedError(c, err) // 配额/审核等 typed error 按业务码透传
 		}

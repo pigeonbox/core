@@ -39,7 +39,11 @@ func requireUserID(c *app.RequestContext) (uint, bool) {
 			return id, true
 		}
 	}
-	resp.NewErrorWithMessage(c, 401, "请先登录")
+	// 用 contracts 的业务码（10002）而不是**裸 HTTP 状态 401**：
+	// 裸 401 在 `pkg/resp.httpStatusForCode` 里未枚举 ⇒ 落到 default ⇒
+	// **HTTP 状态变成 200**（业务码 401 只在响应体里）⇒ 代理/监控看不出
+	// 这是认证失败。10002 ⇒ 映射到 HTTP 401（语义正确：会话确实无效）。
+	resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "请先登录")
 	return 0, false
 }
 

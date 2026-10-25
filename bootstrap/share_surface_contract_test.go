@@ -90,7 +90,17 @@ var shareSurfaceContracts = []shareSurfaceContract{
 	{"GET /anonymous/download/:code", "下载直链（302）", "20007", "TestAnonymousDownload_CountExhausted_ReturnsExhausted", errcode.CodePickupCodeExhausted, 403},
 	{"GET /anonymous/search/:code", "分享元信息（文件名/大小）", "20007", "TestSearchByCode_CountExhausted", errcode.CodePickupCodeExhausted, 403},
 
+	// ===== 创建分享的面（产出**带次数上限**的分享 ⇒ 与取件配额同一语义）=====
+	// 它们的产物（落成的分享）受取件次数约束 ⇒ 归入契约表，让「新建面」也必须
+	// 显式声明「创建出来的分享算不算取件额度」。
+	{"POST /api/v1/presign/complete", "创建分享（直传完成）", "N/A", "", 0, 0},
+	{"POST /api/v1/request/:token/upload", "创建分享（访客投递）", "N/A", "", 0, 0},
+
 	// ===== MCP 工具（读已有分享）=====
+	// 豁免理由：管理面只回**元信息**（展示名/大小/计数），不交付内容 ⇒
+	// 客观判据（出参含内容字段）也不判它是内容面；且管理面本就可见全站分享的
+	// 文件名（/admin/files 同规格）⇒ 守闸不带来额外约束，只会让管理面查不了
+	// 自己站点的分享。
 	{"MCP get_share", "分享元信息（管理面）", "豁免", "", 0, 0},
 	{"MCP preview_share", "预览摘要（文本内容派生）", "20004", "TestPreview_CountExhausted_ReturnsReachLimit", errcode.CodeShareReachLimit, 403},
 	{"MCP get_share_content", "文本正文 / 文件清单（管理面）", "取件次数已用完", "TestToolsCall_CountExhaustedShareDenied", 0, 0},
@@ -117,7 +127,12 @@ func TestShareSurfaceContractCoverage(t *testing.T) {
 	router.GeneratedRegister(h)
 	customizedRegister(h)
 
-	// 真实注册表里「分享面向外」的面
+	// 全部已注册路由（用于「契约表条目必须真实存在」的校验）
+	allRoutes := map[string]bool{}
+	for _, r := range h.Routes() {
+		allRoutes[r.Method+" "+r.Path] = true
+	}
+	// 真实注册表里「分享面向外」的面（自动发现集：命中前缀 ⇒ 必须登记）
 	real := map[string]bool{}
 	for _, r := range h.Routes() {
 		key := r.Method + " " + r.Path
@@ -168,7 +183,10 @@ func TestShareSurfaceContractCoverage(t *testing.T) {
 			}
 			continue
 		}
-		if !real[c.Surface] {
+		// ⚠️ 用**全量**路由表校验存在性（不是过滤后的自动发现集）——
+		// 否则表里「过滤集之外」的条目（如创建分享的面）永远查不到 ⇒
+		// 契约表能写任何路径而不被发现（结构缺口）。
+		if !allRoutes[c.Surface] {
 			t.Errorf("契约表登记的面 %q 在真实路由表里不存在（陈旧条目）", c.Surface)
 		}
 	}

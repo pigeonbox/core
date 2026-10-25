@@ -24,7 +24,9 @@ func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 	}
 	uid, ok := userIDFromCtx(c)
 	if !ok {
-		resp.NewErrorWithMessage(c, 401, "请先登录")
+		// 业务码（10002）而非裸 401：裸 401 未在 httpStatusForCode 枚举 ⇒
+		// 落 default ⇒ HTTP 200 ⇒ 认证失败在状态码上不可见。
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "请先登录")
 		return
 	}
 	var body struct {
