@@ -1,6 +1,9 @@
 package errors
 
-import "github.com/pigeonbox/contracts/errcode"
+import (
+	oekiterrors "github.com/oekit/pkg/errors"
+	"github.com/pigeonbox/contracts/errcode"
+)
 
 // 统一错误码（2026-10-15）：legacy 1001-1008 退役，常量名保留为 errcode
 // 别名重钉到 contracts/errcode 对应值——全部经由常量的发射点一次性迁移，
@@ -43,29 +46,27 @@ var codeMessages = map[int]string{
 	CodeTooManyRequests:    "too many requests",
 }
 
-type AppError struct {
-	Code    int
-	Message string
-	Cause   error
-}
+// AppError 是上游 oekit/pkg/errors.BizError 的别名——自研的
+// AppError{Code,Message,Cause} 与上游 BizError{BizCode,HTTPCode,Message,Cause}
+// 语义同构（业务码 + 描述 + 可选 cause），收编后仓内只留一份实现。
+//
+// 差异（上游形态为准）：
+//   - 字段名 Code → BizCode（上游命名），并新增 HTTPCode（HTTP 状态码，0=由
+//     调用方映射；本包构造器不设置，与迁移前一致）；
+//   - Error() 文案多出 "biz_code:%d " 前缀（原为纯 message）。
+//
+// 本仓无任何调用点（AppError 及其构造器全仓仅本文件自身引用，qnap/server/
+// openwrt/fnos 四个消费仓均未引用 pkg/errors），故上述差异无对外可观测影响。
+type AppError = oekiterrors.BizError
 
-func (e *AppError) Error() string {
-	if e.Cause != nil {
-		return e.Message + ": " + e.Cause.Error()
-	}
-	return e.Message
-}
-
-func (e *AppError) Unwrap() error {
-	return e.Cause
-}
-
+// New 构造一个业务错误（业务码 + 描述）。
 func New(code int, message string) *AppError {
-	return &AppError{Code: code, Message: message}
+	return oekiterrors.NewBizError(code, message)
 }
 
+// Wrap 构造一个带原始错误的业务错误。
 func Wrap(code int, message string, cause error) *AppError {
-	return &AppError{Code: code, Message: message, Cause: cause}
+	return oekiterrors.WrapBizError(code, message, cause)
 }
 
 func GetMessage(code int) string {
@@ -117,14 +118,21 @@ func InternalError(message string) *AppError {
 	return New(CodeInternalError, message)
 }
 
+// IsAppError 判断错误是否为 AppError。
+//
+// 口径与迁移前逐字一致：仅匹配**直接**的 *AppError（不做 errors.As 链式匹配），
+// 故刻意不用上游 IsBizError（后者走 errors.As，命中面更宽）。
 func IsAppError(err error) bool {
 	_, ok := err.(*AppError)
 	return ok
 }
 
+// GetErrorCode 取错误的业务码；非 AppError 一律回退 CodeInternalError。
+//
+// 口径与迁移前逐字一致：仅识别**直接**的 *AppError，故刻意不用上游 AsBizError。
 func GetErrorCode(err error) int {
 	if appErr, ok := err.(*AppError); ok {
-		return appErr.Code
+		return appErr.BizCode
 	}
 	return CodeInternalError
 }
