@@ -162,9 +162,13 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 	// 从上下文获取用户ID
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusOK, map[string]interface{}{
-			"code":    0,
-			"message": "获取成功",
+		// ⚠️ 与本文件其余登录专属面（UpdateProfile / UserStats / UserFiles /
+		// ListAPIKeys …）**同口径**：未登录 ⇒ 401。
+		// 此前此处返回 **200 + code 0 + 无 data 字段** ⇒ 客户端把「没登录」
+		// 读成「登录了但没有用户信息」⇒ 静默降级、且状态码上看不出认证失败。
+		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
+			"code":    errcode.CodeUnauthorized,
+			"message": "用户未登录",
 		})
 		return
 	}
@@ -209,18 +213,8 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 // UpdateProfile .
 // @router /user/profile [PUT]
 func UpdateProfile(ctx context.Context, c *app.RequestContext) {
-	var err error
-	var req usermodel.UpdateProfileReq
-	err = c.BindAndValidate(&req)
-	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	// 从上下文获取用户ID（此前为 TODO 假实现，直接返回成功）
+	// ⚠️ 登录校验**先于**参数校验（与本文件其余登录专属面同口径）：
+	// 未登录 ⇒ 401；否则匿名访客能靠 400 的字段报错反推契约结构。
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
@@ -234,6 +228,17 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
+		})
+		return
+	}
+
+	var err error
+	var req usermodel.UpdateProfileReq
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{
+			"code":    errcode.CodeInvalidParam,
+			"message": err.Error(),
 		})
 		return
 	}
@@ -260,18 +265,8 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 // ChangePassword .
 // @router /user/change-password [POST]
 func ChangePassword(ctx context.Context, c *app.RequestContext) {
-	var err error
-	var req usermodel.ChangePasswordReq
-	err = c.BindAndValidate(&req)
-	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	// 从上下文获取用户ID（此前为 TODO 假实现——不校验旧密码直接返回成功）
+	// ⚠️ 登录校验**先于**参数校验（与本文件其余登录专属面同口径）：
+	// 未登录 ⇒ 401（此前先校验 body ⇒ 匿名拿到 400 字段报错）。
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
@@ -285,6 +280,17 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    errcode.CodeInternal,
 			"message": "用户ID类型错误",
+		})
+		return
+	}
+
+	var err error
+	var req usermodel.ChangePasswordReq
+	err = c.BindAndValidate(&req)
+	if err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{
+			"code":    errcode.CodeInvalidParam,
+			"message": err.Error(),
 		})
 		return
 	}

@@ -44,8 +44,13 @@ func List(ctx context.Context, c *app.RequestContext) {
 		statusPtr = &v
 	}
 	data, err := getService().List(ctx, notifyapp.ListReq{
-		Page:     int(*req.Page),
-		PageSize: int(*req.PageSize),
+		// ⚠️ 用契约生成的 Get*() 访问器，**不要**直接 `*req.Page`：
+		// thrift optional 字段是 `*int32`，客户端不带 page/page_size 时为 nil
+		// ⇒ 直解引用 = nil pointer dereference panic ⇒ 整个「公告管理」页 500。
+		// （2026-10-25 实录：gen/handler/notify 零测试面 ⇒ 无人发现。）
+		// Get*() 在未设置时返回契约默认值（0）⇒ 交由 app 层 clampPage 归一。
+		Page:     int(req.GetPage()),
+		PageSize: int(req.GetPageSize()),
 		Type:     strDeref(req.Type),
 		Level:    strDeref(req.Level),
 		Status:   statusPtr,
