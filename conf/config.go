@@ -323,13 +323,10 @@ type DownloadConfig struct {
 	// 预签名 GET URL（下载流量不经过服务器）。env: PB_DOWNLOAD_S3_DIRECT
 	S3DirectDownload bool `mapstructure:"s3_direct_download" json:"s3_direct_download"`
 	// PresignPolicy 直传策略：everyone=所有人可直传 / authenticated=仅登录用户 /
-	// disabled=完全关闭直传（全部走服务器中转）。空串=未设置，按
-	// PresignAnonymousEnabled 旧开关推导（兼容存量库），都没有则 everyone。
+	// disabled=完全关闭直传（全部走服务器中转）。空串=未设置，按 everyone 处理。
+	// 旧开关 presign_anonymous_enabled 已退役（2026-10-26）：存量库该键的语义
+	// （false⇒仅登录用户）已并入本字段，迁移由启动期数据迁移完成。
 	PresignPolicy string `mapstructure:"presign_policy" json:"presign_policy"`
-	// PresignAnonymousEnabled 旧版匿名直传开关（被 PresignPolicy 取代，仍读取兼容）。
-	// 指针三态：nil=未设置（默认开启，兼容存量 download 段无此键的库）。
-	// env: PB_DOWNLOAD_PRESIGN_ANONYMOUS
-	PresignAnonymousEnabled *bool `mapstructure:"presign_anonymous_enabled" json:"presign_anonymous_enabled"`
 	// PresignExpireSeconds 直传签名时效（秒）。0=默认 600；钳位 60..3600。
 	PresignExpireSeconds int `mapstructure:"presign_expire_seconds" json:"presign_expire_seconds"`
 	// PresignThresholdMB 前端直传阈值（MB）。0=默认 100；经 /api/config 下发。
@@ -362,16 +359,14 @@ const (
 )
 
 // PresignPolicyOrDefault 解析生效的直传策略：
-// 显式 presign_policy 优先；空串回退旧开关 presign_anonymous_enabled
-// （false→authenticated，nil/true→everyone）；都无→everyone。
+// 显式 presign_policy 优先；空串=未设置 ⇒ everyone。
+// 旧开关 presign_anonymous_enabled 已退役（2026-10-26）——存量库该键的语义
+// （false⇒authenticated）由启动期数据迁移写入 presign_policy，本处不再回退读取。
 func (c DownloadConfig) PresignPolicyOrDefault() string {
 	switch c.PresignPolicy {
 	case PresignPolicyEveryone, PresignPolicyAuthenticated, PresignPolicyDisabled:
 		return c.PresignPolicy
 	case "":
-		if c.PresignAnonymousEnabled != nil && !*c.PresignAnonymousEnabled {
-			return PresignPolicyAuthenticated
-		}
 		return PresignPolicyEveryone
 	default:
 		return PresignPolicyEveryone // 未知值按开放处理（前端仍有 10015 兜底）

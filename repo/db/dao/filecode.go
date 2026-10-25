@@ -2,7 +2,6 @@ package dao
 
 import (
 	"context"
-	"path/filepath"
 	"time"
 
 	"github.com/pigeonbox/core/repo/db/model"
@@ -122,17 +121,16 @@ func (r *FileCodeRepository) FindQuickUploadSource(ctx context.Context, userID u
 // 秒传去重后多个分享共享同一物理文件，物理删除前必须确认无其他引用
 // （2026-10-12 秒传/去重）；查不清时调用方应跳过删除（宁泄漏勿误删）。
 //
-// 路径比对在 Go 侧按 GetFilePath() 解析后进行：file_codes 有新旧两种落库布局
-// （整路径 / 目录+uuid 文件名），SQL 精确比对会漏后者——按 file_path 相等或
-// uuid_file_name=basename 宽取候选，再解析归一比对。
+// 路径比对在 SQL 侧按 file_path 精确比对：2026-10-26 起 file_codes 的 file_path
+// 口径已统一为「含唯一文件名的完整相对路径」，不再有「目录+uuid 文件名」的第二种
+// 落库布局，无需宽取候选再解析归一。
 func (r *FileCodeRepository) CountFilePathReferences(ctx context.Context, filePath string, excludeFileCodeID uint) (int64, error) {
 	if filePath == "" {
 		return 0, nil
 	}
 	var rows []model.FileCode
 	if err := r.db().WithContext(ctx).Unscoped().
-		Where("(file_path = ? OR uuid_file_name = ?) AND id <> ?",
-			filePath, filepath.Base(filePath), excludeFileCodeID).
+		Where("file_path = ? AND id <> ?", filePath, excludeFileCodeID).
 		Find(&rows).Error; err != nil {
 		return 0, err
 	}
@@ -208,7 +206,8 @@ func (r *FileCodeRepository) List(ctx context.Context, page, pageSize int, searc
 	// 2026-10-09 遗留缺口：管理面老 List 搜 6 位取件码不命中；NULL 列 LIKE 恒不匹配，无副作用）
 	if search != "" {
 		pattern, esc := LikeContains(search)
-		query = query.Where("code LIKE ? OR prefix LIKE ? OR suffix LIKE ? OR pickup_code LIKE ?"+esc,
+		// prefix/suffix 死列已退役（2026-10-26，库中恒空且无写入方）
+		query = query.Where("code LIKE ? OR pickup_code LIKE ? OR uuid_file_name LIKE ? OR file_path LIKE ?"+esc,
 			pattern, pattern, pattern, pattern)
 	}
 

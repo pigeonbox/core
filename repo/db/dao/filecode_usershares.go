@@ -95,8 +95,8 @@ func (r *FileCodeRepository) GetUserSharesWithFilter(ctx context.Context, userID
 		like, esc := LikeContains(filter.Search)
 		// 文件分享的原始文件名存 text（uuid_file_name 常为空），搜索需覆盖 text；
 		// pickup_code 落库后列表主码即 6 位取件码，按码搜索必须覆盖（2026-10-08）
-		q = q.Where("code LIKE ? OR prefix LIKE ? OR suffix LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? "+esc,
-			like, like, like, like, like, like)
+		q = q.Where("code LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? OR file_path LIKE ? "+esc,
+			like, like, like, like, like)
 	}
 
 	return paginate[model.FileCode](q.Order("created_at DESC"), page, pageSize)

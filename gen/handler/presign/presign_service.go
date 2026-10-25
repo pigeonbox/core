@@ -122,8 +122,8 @@ func Init(ctx context.Context, c *app.RequestContext) {
 		resp.NewTypedError(c, err)
 		return
 	}
-	// 匿名直传开关（download.presign_anonymous_enabled）：关闭时匿名用户不走
-	// 预签名直传——前端感知 10015 后自动回退分片中转（大文件仍可传，只是过服务器）。
+	// 匿名直传开关（download.presign_policy=disabled/authenticated）：关闭时匿名
+	// 用户不走预签名直传——前端感知 10015 后自动回退分片中转（大文件仍可传，只是过服务器）。
 	// 关闭动机：匿名可无限签发 1h PUT 直传 URL，桶会沦为免费匿名网盘（孤儿对象
 	// 只增不减、存储费/内容责任在站点），2026-10-06 实测确认。
 	if err := gate.CheckPresignPolicy(gateUserID); err != nil {

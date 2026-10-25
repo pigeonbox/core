@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/oekit/concurrency/syncx"
 	"github.com/pigeonbox/core/conf"
@@ -203,27 +204,30 @@ func (s *Service) generatePreview(ctx context.Context, fileCode *model.FileCode)
 	return s.generatePreviewFromPath(ctx, fileCode, tmpPath)
 }
 
-func (s *Service) generatePreviewFromPath(ctx context.Context, fileCode *model.FileCode, filePath string) (*model.FilePreview, error) {
-	// 判断文件类型
-	ext := fileCode.Suffix
-	if ext == "" {
-		// 从UUID文件名提取扩展名
-		if fileCode.UUIDFileName != "" {
-			for i := len(fileCode.UUIDFileName) - 1; i >= 0; i-- {
-				if fileCode.UUIDFileName[i] == '.' {
-					ext = fileCode.UUIDFileName[i:]
-					break
-				}
-			}
+// storedFileName 存储文件名（file_path 末段；无路径时回退 uuid_file_name）。
+func storedFileName(fileCode *model.FileCode) string {
+	if p := fileCode.GetFilePath(); p != "" {
+		if i := strings.LastIndex(p, "/"); i >= 0 {
+			return p[i+1:]
 		}
-		// 如果还是没有，从Text字段（原始文件名）提取
-		if ext == "" && fileCode.Text != "" {
-			for i := len(fileCode.Text) - 1; i >= 0; i-- {
-				if fileCode.Text[i] == '.' {
-					ext = fileCode.Text[i:]
-					break
-				}
-			}
+		return p
+	}
+	return fileCode.UUIDFileName
+}
+
+// generatePreviewFromPath 生成预览产物。
+func (s *Service) generatePreviewFromPath(ctx context.Context, fileCode *model.FileCode, filePath string) (*model.FilePreview, error) {
+	// 判断文件类型（扩展名）
+	// 口径统一（2026-10-26）：suffix 死列退役 ⇒ 扩展名取自「存储文件名（file_path
+	// 末段）」，再回退「原始文件名（Text）」。
+	ext := ""
+	for _, candidate := range []string{storedFileName(fileCode), fileCode.Text} {
+		if candidate == "" {
+			continue
+		}
+		if i := strings.LastIndex(candidate, "."); i >= 0 {
+			ext = candidate[i:]
+			break
 		}
 	}
 

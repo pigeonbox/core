@@ -608,21 +608,12 @@ func (s *Service) GetUserFiles(ctx context.Context, userID uint, page, pageSize 
 	// 转换为响应格式
 	fileItems := make([]*usermodel.UserFileItem, len(files))
 	for i, file := range files {
-		// 提取文件名（DisplayName 收口:UUID 名/旧布局/直传 Text 契约）
+		// 提取文件名（统一走 DisplayName：原始文件名 Text → 存储名 UUIDFileName → 路径末段）
 		fileName := file.DisplayName()
-		if fileName == "" && file.FilePath != "" {
-			// 从路径中提取文件名
-			parts := strings.Split(file.FilePath, "/")
-			if len(parts) > 0 {
-				fileName = parts[len(parts)-1]
-			}
-		}
 
 		fileItems[i] = &usermodel.UserFileItem{
 			ID:           int64(file.ID),
 			Code:         file.Code,
-			Prefix:       file.Prefix,
-			Suffix:       file.Suffix,
 			FileName:     fileName,
 			FilePath:     file.FilePath,
 			Size:         file.Size,

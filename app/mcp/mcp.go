@@ -358,18 +358,21 @@ func displayFileName(fc *model.FileCode) string {
 	if fc == nil {
 		return ""
 	}
-	if fc.Text != "" {
-		name := fc.Text
-		runes := []rune(name)
-		if len(runes) > 20 {
-			name = string(runes[:20]) + "…"
-		}
-		return name
+	// 文件分享：统一走 DisplayName（原始文件名优先）；
+	// 文本分享：DisplayName 按约定返回空（正文不是文件名），此处回退正文前 20 字
+	// （MCP 结果里的 markdown 链接文案取自此处，历史行为不变）。
+	name := fc.DisplayName()
+	if name == "" {
+		name = fc.Text
 	}
-	if fc.UUIDFileName != "" {
-		return fc.UUIDFileName
+	if name == "" {
+		return fc.FilePath
 	}
-	return fc.FilePath
+	runes := []rune(name)
+	if len(runes) > 20 {
+		name = string(runes[:20]) + "…"
+	}
+	return name
 }
 
 // ============ 作用域/结果格式辅助（2026-10-12 访客快速分享）============

@@ -209,15 +209,17 @@ func readZipEntry(f *zip.File) (string, error) {
 	return b.String(), nil
 }
 
-// ===== 旧数据兼容：单文件 legacy（无子表行）合成单文件项 =====
+// ===== 子表是文件清单的唯一真相源（2026-10-26 虚拟行退役）=====
 
-func TestListShareFiles_LegacySingleFile(t *testing.T) {
+// TestListShareFiles_NoChildRow_NoVirtualItem 回归：主表有文件路径但没有子表行
+// （存量未迁移形态）时，**不再合成「虚拟行（id=0）」**——存量数据由启动期数据
+// 迁移补齐为真实子行（见 bootstrap/datamigrate.go）。
+func TestListShareFiles_NoChildRow_NoVirtualItem(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	ctx := context.Background()
 
-	// 直接造旧格式记录：FilePath 完整路径 + UUIDFileName，无子表行
 	fc := &model.FileCode{
-		Code:         "legacy01",
+		Code:         "nolegacy01",
 		FilePath:     "uploads/2025/01/01/old-uuid.pdf",
 		UUIDFileName: "old-uuid.pdf",
 		Text:         "报告.pdf",
@@ -226,9 +228,37 @@ func TestListShareFiles_LegacySingleFile(t *testing.T) {
 	}
 	require.NoError(t, svc.fileCodeRepo.Create(ctx, fc))
 
-	items, err := svc.ListShareFiles(ctx, "legacy01")
+	items, err := svc.ListShareFiles(ctx, "nolegacy01")
+	require.NoError(t, err)
+	assert.Empty(t, items, "虚拟行已退役：无子表行即无文件项")
+}
+
+// TestListShareFiles_ChildRowIsSource 回归：文件清单来自子表（文件名取原始名）。
+func TestListShareFiles_ChildRowIsSource(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	ctx := context.Background()
+
+	fc := &model.FileCode{
+		Code:         "withchild01",
+		FilePath:     "uploads/2025/01/01/uuid-name.pdf",
+		UUIDFileName: "uuid-name.pdf",
+		Text:         "报告.pdf",
+		Size:         1234,
+		ExpiredCount: -1,
+	}
+	require.NoError(t, svc.fileCodeRepo.Create(ctx, fc))
+	require.NoError(t, svc.fileFileRepo.CreateBatch(ctx, []*model.FileCodeFile{{
+		FileCodeID:   fc.ID,
+		FileName:     "报告.pdf",
+		UUIDFileName: "uuid-name.pdf",
+		FilePath:     "uploads/2025/01/01/uuid-name.pdf",
+		Size:         1234,
+	}}))
+
+	items, err := svc.ListShareFiles(ctx, "withchild01")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	assert.Equal(t, "old-uuid.pdf", items[0].Name)
+	assert.NotZero(t, items[0].ID, "子表行才有真实 id（虚拟行 id=0 已退役）")
+	assert.Equal(t, "报告.pdf", items[0].Name, "展示名取原始文件名")
 	assert.Equal(t, int64(1234), items[0].Size)
 }

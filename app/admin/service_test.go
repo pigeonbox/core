@@ -68,14 +68,16 @@ func TestCleanExpiredFiles_DeletesPhysicalFile(t *testing.T) {
 
 	ctx := context.Background()
 	// 过期文件（时间过期）
+	// file_path 口径：完整相对路径（含唯一文件名）——2026-10-26 起列语义统一，
+	// 不再是「目录 + uuid_file_name 另存文件名」。
 	past := time.Now().Add(-time.Hour)
 	require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{
-		Code: "EXP1", FilePath: "data/2024", UUIDFileName: "abc.txt",
+		Code: "EXP1", FilePath: "data/2024/abc.txt", UUIDFileName: "abc.txt",
 		Size: 100, ExpiredAt: &past, ExpiredCount: -1,
 	}))
 	// 未过期文件（不应被删）
 	require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{
-		Code: "OK1", FilePath: "data/2024", UUIDFileName: "ok.txt",
+		Code: "OK1", FilePath: "data/2024/ok.txt", UUIDFileName: "ok.txt",
 		Size: 50, ExpiredCount: -1,
 	}))
 

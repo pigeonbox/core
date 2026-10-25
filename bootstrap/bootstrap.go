@@ -111,6 +111,10 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 		return nil, fmt.Errorf("failed to init database: %w", err)
 	}
 
+	// 3.05 启动期数据迁移（幂等；必须在对外服务前完成——子表是文件清单的唯一
+	// 真相源，存量分享缺子行时取件页会显示空列表）
+	RunDataMigrations(database)
+
 	// pkg 层持久化能力注入（pkg/middleware、pkg/transfer 不依赖 repo 层，
 	// 由 composition root 以 dao 桥接；须先于任何服务流量）
 	middleware.SetAPIKeyStore(daoAPIKeyStore{})

@@ -65,8 +65,6 @@ type ShareFileReq struct {
 type ShareResp struct {
 	ID           uint       `json:"id"`
 	Code         string     `json:"code"`
-	Prefix       string     `json:"prefix"`
-	Suffix       string     `json:"suffix"`
 	UUIDFileName string     `json:"uuid_file_name"`
 	FilePath     string     `json:"file_path"`
 	Size         int64      `json:"size"`
@@ -832,11 +830,11 @@ func (s *Service) DeleteFileByCode(ctx context.Context, code string, userID uint
 	}
 
 	// 4. 事务提交成功后，删除物理文件（不可回滚，放事务外，失败记日志不阻断）
-	//    多文件分享：子表各文件一并删除（legacy 单文件走主表路径）；
-	//    秒传共享对象保护（2026-10-12）：删前查引用，被其他分享共享时保留
+	//    多文件分享：子表各文件一并删除；秒传共享对象保护（2026-10-12）：删前查引用，
+	//    被其他分享共享时保留
 	if s.storage != nil {
 		s.deletePhysicalChildren(ctx, file.ID)
-		if file.FilePath != "" && file.UUIDFileName != "" {
+		if file.GetFilePath() != "" {
 			s.deletePhysicalIfUnreferenced(ctx, file.GetFilePath(), file.ID)
 		}
 	}
@@ -1040,8 +1038,6 @@ func (s *Service) modelToResp(ctx context.Context, fileCode *model.FileCode) *Sh
 		ID:           fileCode.ID,
 		Code:         fileCode.Code,
 		Status:       status,
-		Prefix:       fileCode.Prefix,
-		Suffix:       fileCode.Suffix,
 		UUIDFileName: fileCode.UUIDFileName,
 		FilePath:     fileCode.FilePath,
 		Size:         fileCode.Size,
@@ -1210,8 +1206,6 @@ func toUserShareItemData(f *model.FileCode) *sharemodel.UserShareItemData {
 	item := &sharemodel.UserShareItemData{
 		ID:           int64(f.ID),
 		Code:         f.Code,
-		Prefix:       f.Prefix,
-		Suffix:       f.Suffix,
 		FilePath:     f.FilePath,
 		Size:         f.Size,
 		Text:         f.Text,
@@ -1239,22 +1233,9 @@ func toUserShareItemData(f *model.FileCode) *sharemodel.UserShareItemData {
 	if f.Note != "" {
 		item.Note = &f.Note
 	}
-	// 文件名提取：文件分享依次取原始文件名（Text）、UUID 名、路径尾段；
-	// 纯文本分享的 Text 是内容，不留文件名
-	fileName := ""
-	if !isTextShare {
-		fileName = f.Text
-		if fileName == "" {
-			fileName = f.UUIDFileName
-		}
-		if fileName == "" && f.FilePath != "" {
-			parts := strings.Split(f.FilePath, "/")
-			if len(parts) > 0 {
-				fileName = parts[len(parts)-1]
-			}
-		}
-	}
-	item.FileName = fileName
+	// 文件名提取：统一走 DisplayName()（原始文件名 Text → 存储名 UUIDFileName →
+	// 路径末段）；纯文本分享的 Text 是内容，不留文件名
+	item.FileName = f.DisplayName()
 	return item
 }
 

@@ -37,27 +37,20 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 		return nil, fmt.Errorf("分享内没有可下载的文件")
 	}
 	if len(items) == 1 {
-		// 单文件（含 legacy 主表行）：直接回流原始文件，不打 zip 壳
+		// 单文件：直接回流原始文件，不打 zip 壳
 		return s.singleFileStream(ctx, fc, items[0])
 	}
 
-	// 解析子表行（需要存储相对路径；legacy 虚拟行走主表路径）
+	// 解析子表行（存储相对路径；子表是文件清单的唯一真相源）
 	children, cerr := s.fileFileRepo.ListByFileCodeID(ctx, fc.ID)
 	if cerr != nil {
 		return nil, cerr
 	}
 	entries := make([]zipItem, 0, len(children))
-	if len(children) > 0 {
-		for _, c := range children {
-			entries = append(entries, zipItem{
-				name: zipSafeName(c.DisplayName(), usedNames(entries)),
-				rel:  c.FilePath,
-			})
-		}
-	} else if rel := fc.GetFilePath(); rel != "" {
+	for _, c := range children {
 		entries = append(entries, zipItem{
-			name: zipSafeName(legacyFileNameOf(fc), usedNames(entries)),
-			rel:  rel,
+			name: zipSafeName(c.DisplayName(), usedNames(entries)),
+			rel:  c.FilePath,
 		})
 	}
 
@@ -120,7 +113,7 @@ func (s *Service) assembleZip(logCtx, buildCtx context.Context, pw *io.PipeWrite
 	_ = pw.Close()
 }
 
-// singleFileStream 单文件流（legacy 虚拟行走主表路径）
+// singleFileStream 单文件流（按子表行读取；单文件分享同样有子表行）
 func (s *Service) singleFileStream(ctx context.Context, fc *model.FileCode, item *ShareFileItem) (io.ReadCloser, error) {
 	rel := fc.GetFilePath()
 	if item.ID != 0 {

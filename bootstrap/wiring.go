@@ -450,6 +450,17 @@ func getBootstrapStorageService() *storage.StorageService {
 		} else if t := svc.EffectiveType(); t != storage.StorageTypeLocal {
 			logger.Info("remote storage backend enabled", zap.String("type", string(t)))
 		}
+		// 历史双层布局上提（2026-10-26 兼容层退役）：storage_path 曾带 uploads 段，
+		// 而存储相对路径本身又以 uploads/ 开头 ⇒ 物理路径多一层。读路径的回退分支
+		// 已删 ⇒ 迁移必须先于任何文件读取完成，故在存储单例构造处就地执行。
+		if svc.EffectiveType() == storage.StorageTypeLocal {
+			if moved, skipped, merr := storage.MigrateLegacyLayout(cfg.DataPath); merr != nil {
+				logger.Error("legacy storage layout migration failed", zap.Error(merr))
+			} else if moved > 0 || skipped > 0 {
+				logger.Info("legacy storage layout migration done",
+					zap.Int("moved", moved), zap.Int("skipped", skipped))
+			}
+		}
 		bootstrapStorageSvc = svc
 	})
 	return bootstrapStorageSvc

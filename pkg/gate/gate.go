@@ -37,7 +37,7 @@ var ErrUploadDisabled = newGateErr(errcode.CodeUploadDisabled, "管理员已关�
 // ErrLoginRequired 需要登录才能执行该操作。
 var ErrLoginRequired = newGateErr(errcode.CodeUnauthorized, "该操作需要登录后使用")
 
-// ErrPresignDisabled 匿名直传已被管理员关闭（download.presign_anonymous_enabled=false）。
+// ErrPresignDisabled 匿名直传已被管理员关闭（download.presign_policy=disabled/authenticated）。
 var ErrPresignDisabled = newGateErr(errcode.CodePresignDisabled, "匿名直传未开放，文件将改用普通通道上传")
 
 // CheckPresignPolicy 直传策略闸门（download.presign_policy 三档）：

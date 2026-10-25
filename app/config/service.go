@@ -187,6 +187,9 @@ func (s *Service) loadPersistedConfig(ctx context.Context) (*SystemConfig, error
 			zap.Strings("stale_keys", stale.qualifiedKeys()),
 			zap.String("stale_registry_url", stale.RegistryURL))
 	}
+	// 旧直传开关 presign_anonymous_enabled 退役（2026-10-26）：② 未设置时按 ①
+	// 推导策略（false→authenticated），避免「曾关闭匿名直传」的站点静默变开放。
+	applyLegacyPresignPolicy(cfg, rec.Data)
 	// 历史记录没有 user 段：unmarshal 后是 nil/零值，回退 yaml，
 	// 否则升级后会意外把注册当成"关闭"（2026-10-03 假开关接线时补）
 	if cfg.User == nil {

@@ -59,11 +59,12 @@ func (s *Service) GetShareMetadata(ctx context.Context, code string) (*ShareMeta
 		Encrypted:    fc.Encrypted,
 		CreatedAt:    fc.CreatedAt,
 	}
-	if fc.FilePath == "" && fc.UUIDFileName == "" {
+	if fc.GetFilePath() == "" {
+		// 无文件路径 = 纯文本分享（或匿名直传尚未绑定的占位记录）
 		meta.Type = "text"
 	} else {
 		meta.Type = "file"
-		meta.Name = fc.Text // 约定：文件分享的 Text 字段存展示文件名（CreateShare 链路如此）
+		meta.Name = fc.DisplayName() // 原始文件名（Text）优先，与取件页展示一致
 		if n, cerr := s.fileFileRepo.CountByFileCodeID(ctx, fc.ID); cerr == nil {
 			meta.FileCount = n
 		}

@@ -135,8 +135,9 @@ func (r *FileCodeRepository) ListWithFilter(ctx context.Context, q model.FileCod
 	if q.Keyword != "" {
 		like, esc := LikeContains(q.Keyword)
 		// pickup_code 同码搜索（管理端按对方口述的 6 位码定位分享）
-		query = query.Where("code LIKE ? OR prefix LIKE ? OR suffix LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? "+esc,
-			like, like, like, like, like, like)
+		// prefix/suffix 死列已退役（2026-10-26，库中恒空且无写入方）
+		query = query.Where("code LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? OR file_path LIKE ? "+esc,
+			like, like, like, like, like)
 	}
 	if q.UserID != nil {
 		query = query.Where("user_id = ?", *q.UserID)

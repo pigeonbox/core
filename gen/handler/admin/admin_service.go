@@ -182,8 +182,8 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 			if f.ExpiredAt != nil {
 				expireStr = f.ExpiredAt.Format("2006-01-02 15:04:05")
 			}
-			fileName := f.Prefix + f.Suffix
-			if f.Text != "" && fileName == "" {
+			fileName := f.DisplayName()
+			if fileName == "" && f.Text != "" {
 				fileName = "[文本分享]"
 			}
 			items = append(items, &admin.FileItem{

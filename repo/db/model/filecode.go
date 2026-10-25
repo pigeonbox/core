@@ -1,7 +1,6 @@
 package model
 
 import (
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,8 +30,6 @@ func ValidShareStatus(s string) bool {
 type FileCode struct {
 	gorm.Model
 	Code         string `gorm:"uniqueIndex;size:255" json:"code"`
-	Prefix       string `gorm:"size:255" json:"prefix"`
-	Suffix       string `gorm:"size:255" json:"suffix"`
 	UUIDFileName string `gorm:"size:255" json:"uuid_file_name"`
 	FilePath     string `gorm:"size:255" json:"file_path"`
 	Size         int64  `gorm:"default:0" json:"size"`
@@ -115,25 +112,16 @@ func (f *FileCode) IsPickupAvailable() bool {
 	return !f.IsExpired() && !f.IsCountExhausted()
 }
 
-// GetFilePath 获取文件路径
+// GetFilePath 获取文件路径（存储相对路径，相对存储根）。
+//
+// 口径统一（2026-10-26 兼容层退役）：file_path 恒为「含唯一文件名的完整相对路径」，
+// 所有写入通道（直传/分片/预签名/匿名取件/多文件/本地导入）一致。此前本方法并存
+// 两种形态——「目录 + UUIDFileName」与「file_path 直含完整路径」——靠 strings.Contains
+// 猜走哪条分支；同一列两种语义导致「双重路径」拼装（见 anonymous.BindFilePath 的
+// 清空兜底注释），且匿名占位记录（file_path 空、uuid_file_name 为展示名）会拼出
+// 不存在的路径。列语义既已统一，本方法退化为单一取值。
 func (f *FileCode) GetFilePath() string {
-	// 新格式：FilePath（目录）+ UUIDFileName（文件名）
-	if f.FilePath != "" && f.UUIDFileName != "" {
-		// 检查FilePath是否已经包含了文件名（兼容性处理）
-		// 如果FilePath已经是完整路径（包含文件扩展名），直接返回
-		if strings.Contains(f.FilePath, f.UUIDFileName) {
-			return f.FilePath // 旧格式：FilePath包含完整路径
-		}
-		// 新格式：组合目录和文件名
-		return filepath.Join(f.FilePath, f.UUIDFileName)
-	}
-
-	// 兼容旧格式：file_path 字段直接包含完整的相对路径
-	if f.FilePath != "" {
-		return f.FilePath
-	}
-
-	return ""
+	return strings.TrimSpace(f.FilePath)
 }
 
 // IsBlockedShare 分享是否处于管控拒绝态（blocked / pending_review）
@@ -155,31 +143,45 @@ func (f *FileCode) IsTextShare() bool {
 // DisplayName 返回分享条目的展示文件名（下载 Content-Disposition、管理/用户
 // 列表、取件元信息等所有呈现位统一从本方法取名）。
 //
-// 解析顺序：UUIDFileName(chunk 等通道落库名) → Prefix+Suffix(旧直传布局的原始
-// 名拆分) → Text(直传/E2E 通道契约:原始文件名存 Text)。2026-10-07 修复:直传
-// 分享三处名字段全空,DownloadFile 曾给出 Content-Disposition filename=""
-// (浏览器无法命名下载文件),管理端文件名回退显示成分享码。
-// 纯文本分享(Text=正文且无文件路径)返回空串——文本没有文件名语义,兜底由调用方定。
+// 口径统一（2026-10-26 兼容层退役）：Text（原始文件名）→ UUIDFileName（存储名）
+// → 路径末段。此前本方法以 UUIDFileName 优先，而子表 FileCodeFile.DisplayName
+// 以 FileName 优先——同一份文件在管理端列表与取件页显示两个名字（前者显示
+// "56781532-….txt"，后者显示 "m1.txt"）。Prefix+Suffix 分支是旧直传布局的
+// 原始名拆分，库中已无任何行使用，随死列一并退役。
+// 纯文本分享（Text=正文且无文件路径）返回空串——文本没有文件名语义,兜底由调用方定。
 func (f *FileCode) DisplayName() string {
 	if f == nil {
 		return ""
 	}
+	if f.IsTextShare() {
+		return ""
+	}
+	if f.Text != "" {
+		return f.Text
+	}
 	if f.UUIDFileName != "" {
 		return f.UUIDFileName
 	}
-	if name := f.Prefix + f.Suffix; name != "" {
-		return name
+	return baseNameOf(f.FilePath)
+}
+
+// baseNameOf 取相对路径末段（展示名兜底）。rel 恒用 "/" 分隔，不走
+// filepath.Base（Windows 下不认 "/"）。
+func baseNameOf(rel string) string {
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return ""
 	}
-	if !f.IsTextShare() && f.Text != "" {
-		return f.Text
+	if i := strings.LastIndex(rel, "/"); i >= 0 {
+		return rel[i+1:]
 	}
-	return ""
+	return rel
 }
 
 // FileCodeQuery 管理端文件列表过滤条件（DAO ListWithFilter 消费）。
 // 全字段可选，零值 = 不过滤。
 type FileCodeQuery struct {
-	Keyword       string // 模糊匹配 code/prefix/suffix/uuid_file_name/text
+	Keyword       string // 模糊匹配 code/pickup_code/uuid_file_name/text/file_path
 	UserID        *uint  // 上传者
 	UploadType    string // anonymous/authenticated/presign_*
 	OwnerIP       string // 上传者 IP（滥用定位）

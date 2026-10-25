@@ -50,8 +50,8 @@ const maxMultiFiles = 100
 // CreateMultiFileShare 创建多文件分享（1 个取件码 ↔ N 个文件）。
 //
 // 与单文件 CreateShare 的差异：
-//   - 主表 Size = 各文件之和；legacy 字段（FilePath/UUIDFileName/FileHash）与首个文件同步，
-//     保证旧读取方（管理端列表/秒传/统计）零改动可用
+//   - 主表 Size = 各文件之和；主表 FilePath/UUIDFileName/FileHash 与首个文件同步
+//     （管理端列表/秒传/统计读主表，零改动可用）
 //   - 子表每文件一行，取件端经 ListShareFiles 拉取
 //   - 配额按总大小一次扣检；审核逐文件判定（任一 reject 整单拒绝，pending 整单待审）
 //
@@ -178,7 +178,7 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 }
 
 // ListShareFiles 取分享的文件列表（取件端展示/下载入口）。
-// 旧单文件分享无子表行：合成一条虚拟行（主表字段），保证前端统一渲染。
+// 子表为唯一真相源：每个文件分享都有对应子表行（启动期数据迁移已补齐存量）。
 func (s *Service) ListShareFiles(ctx context.Context, code string) ([]*ShareFileItem, error) {
 	fc, err := s.fileCodeRepo.ResolveByCode(ctx, code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
@@ -187,7 +187,11 @@ func (s *Service) ListShareFiles(ctx context.Context, code string) ([]*ShareFile
 	return s.shareFileItems(ctx, fc)
 }
 
-// shareFileItems 内部：FileCode → 文件项列表（子表优先，旧数据回退主表）
+// shareFileItems 内部：FileCode → 文件项列表（子表为唯一真相源）
+//
+// 2026-10-26 兼容层退役：旧单文件分享无子表行时曾在主表合成「虚拟行」（id=0），
+// 取件端/打包下载各自再判一次「id==0 ⇒ 走主表路径」。该形态已被启动期数据迁移
+// 补齐为真实子表行（见 bootstrap/datamigrate.go），虚拟行不再存在。
 func (s *Service) shareFileItems(ctx context.Context, fc *model.FileCode) ([]*ShareFileItem, error) {
 	children, err := s.fileFileRepo.ListByFileCodeID(ctx, fc.ID)
 	if err != nil {
@@ -202,27 +206,18 @@ func (s *Service) shareFileItems(ctx context.Context, fc *model.FileCode) ([]*Sh
 			FileHash: c.FileHash,
 		})
 	}
-	if len(items) == 0 && fc.GetFilePath() != "" {
-		// 旧单文件分享：无子表行，用主表合成
-		items = append(items, &ShareFileItem{
-			ID:       0,
-			Name:     legacyFileNameOf(fc),
-			Size:     fc.Size,
-			FileHash: fc.FileHash,
-		})
-	}
 	return items, nil
 }
 
 // GetShareChild 取分享内的单个子文件（校验归属，防跨分享枚举文件 ID）。
-// legacy 虚拟行（id=0）返回主表合成的子项。
 func (s *Service) GetShareChild(ctx context.Context, code string, fileID uint) (*model.FileCode, *model.FileCodeFile, error) {
 	fc, err := s.fileCodeRepo.ResolveByCode(ctx, code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
 		return nil, nil, err
 	}
 	if fileID == 0 {
-		return fc, nil, nil // legacy：走主表字段下载
+		// id=0 是旧「虚拟行」编号，已随兼容层退役（前端单文件分享不传 file 参数）
+		return nil, nil, errors.New("文件不存在")
 	}
 	child, err := s.fileFileRepo.GetByID(ctx, fileID)
 	if err != nil {
@@ -258,17 +253,6 @@ func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
 	if err := s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{fileCodeID}); err != nil {
 		logger.CtxWarn(ctx, "soft delete child rows failed", "file_code_id", fileCodeID, "err", err)
 	}
-}
-
-// legacyFileNameOf 旧分享展示名（UUIDFileName → Text 存的原始名 → 路径末段）
-func legacyFileNameOf(fc *model.FileCode) string {
-	if fc.UUIDFileName != "" {
-		return fc.UUIDFileName
-	}
-	if fc.Text != "" {
-		return fc.Text
-	}
-	return uniqueNameOf(fc.GetFilePath())
 }
 
 // uniqueNameOf 相对路径末段（唯一文件名）

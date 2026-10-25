@@ -1,4 +1,5 @@
-// local.go 本地后端路径语义：逃逸收口（localContain）与历史双层布局解析（resolveLocal/LocalAbsPath）。
+// local.go 本地后端路径语义：逃逸收口（localContain）与历史双层布局迁移
+// （MigrateLegacyLayout）。
 package storage
 
 import (
@@ -6,6 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.uber.org/zap"
+
+	"github.com/pigeonbox/core/pkg/logger"
 )
 
 // localContain 本地后端路径收口：rel 清洗后必须仍落在 DataPath 根内，返回绝对路径。
@@ -22,10 +27,12 @@ func (s *StorageService) localContain(rel string) (string, error) {
 	return full, nil
 }
 
-// resolveLocal 定位本地文件：优先 DataPath+rel，失败回退 DataPath+/uploads/+rel。
-// 兼容统一存储实例前的历史双层布局（chunk/share 懒加载单例的 DataPath 分别为
-// ./data 与 ./data/uploads，直传历史文件落在 data/uploads/uploads/<rel>）。
-// 两条候选路径均经 localContain 收口，逃逸（../）一律视为不存在。
+// resolveLocal 定位本地文件：DataPath+rel 单一候选。
+//
+// 2026-10-26 兼容层退役：此前此处有第二条候选路径 DataPath+/uploads/+rel，用于
+// 兜住「统一存储实例建立前」写入的历史双层布局（config 的 storage_path 带了
+// uploads 段，而存储相对路径本身又以 uploads/ 开头 ⇒ 物理路径多了一层）。
+// 该布局已由 MigrateLegacyLayout 在启动期一次性上提归位，此处不再回退。
 func (s *StorageService) resolveLocal(rel string) (string, bool) {
 	p, err := s.localContain(rel)
 	if err != nil {
@@ -33,13 +40,6 @@ func (s *StorageService) resolveLocal(rel string) (string, bool) {
 	}
 	if _, err := os.Stat(p); err == nil {
 		return p, true
-	}
-	alt, err := s.localContain(filepath.Join("uploads", rel))
-	if err != nil {
-		return p, false
-	}
-	if _, err := os.Stat(alt); err == nil {
-		return alt, true
 	}
 	return p, false
 }
@@ -58,6 +58,73 @@ func (s *StorageService) LocalAbsPath(rel string) string {
 		return ""
 	}
 	return p
+}
+
+// MigrateLegacyLayout 迁移历史双层布局（幂等，可重复调用）。
+//
+// 历史形态：config 的 storage.storage_path 写成 "./data/uploads"（带了 uploads 段），
+// 而存储相对路径本身又以 "uploads/" 开头 ⇒ 物理路径变成 <DataPath>/uploads/uploads/…
+// 多了一层。当前形态：DataPath 是存储根，相对路径 "uploads/2026/…" 解析为
+// <DataPath>/uploads/2026/…（单层）。
+//
+// 迁移动作：若 <DataPath>/uploads/uploads 存在且非空，把它的子项上提到
+// <DataPath>/uploads/（同盘 rename，瞬时完成，不复制文件内容）。上提后旧布局目录
+// 变空即删除。冲突（目标同名已存在）时跳过该项并告警，绝不覆盖已有文件。
+//
+// 返回 (上提的条目数, 跳过的条目数, error)。无可迁移内容时返回 (0,0,nil)。
+//
+// 调用时机：bootstrap 拿到存储实例后、对外服务前（读路径必须先于迁移完成）。
+func MigrateLegacyLayout(dataPath string) (int, int, error) {
+	if dataPath == "" {
+		return 0, 0, nil
+	}
+	root := filepath.Clean(dataPath)
+	legacy := filepath.Join(root, "uploads", "uploads")
+	target := filepath.Join(root, "uploads")
+
+	entries, err := os.ReadDir(legacy)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil // 无历史布局
+		}
+		return 0, 0, fmt.Errorf("read legacy layout dir: %w", err)
+	}
+	if len(entries) == 0 {
+		// 空目录：直接清掉（残留的空壳目录本身也是历史布局的一部分）
+		if err := os.Remove(legacy); err != nil {
+			logger.Warn("remove empty legacy layout dir failed", zap.String("dir", legacy), zap.Error(err))
+		}
+		return 0, 0, nil
+	}
+
+	moved, skipped := 0, 0
+	for _, e := range entries {
+		from := filepath.Join(legacy, e.Name())
+		to := filepath.Join(target, e.Name())
+		if _, err := os.Lstat(to); err == nil {
+			skipped++
+			logger.Warn("legacy layout item skipped: target already exists",
+				zap.String("from", from), zap.String("to", to))
+			continue
+		}
+		if err := os.Rename(from, to); err != nil {
+			skipped++
+			logger.Warn("legacy layout item move failed", zap.String("from", from), zap.String("to", to), zap.Error(err))
+			continue
+		}
+		moved++
+	}
+	if moved > 0 {
+		logger.Info("legacy storage layout migrated", zap.String("root", root),
+			zap.Int("moved", moved), zap.Int("skipped", skipped))
+	}
+	// 旧目录空了就清掉（非空说明有跳过项，保留以便人工处理）
+	if entriesLeft, err := os.ReadDir(legacy); err == nil && len(entriesLeft) == 0 {
+		if err := os.Remove(legacy); err != nil {
+			logger.Warn("remove legacy layout dir failed", zap.String("dir", legacy), zap.Error(err))
+		}
+	}
+	return moved, skipped, nil
 }
 
 // NewLocalFallback 构造本地后端兜底实例（未注入统一存储时的测试/降级路径；

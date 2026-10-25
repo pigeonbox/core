@@ -621,7 +621,7 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	data := &sharemodel.ShareDetail{
 		Code:        fileCode.Code,
 		Text:        fileCode.Text,
-		FileName:    fileCode.UUIDFileName,
+		FileName:    fileCode.DisplayName(),
 		FileSize:    fmt.Sprintf("%d", fileCode.Size),
 		URL:         downloadURL,
 		DownloadURL: &downloadURL,
@@ -968,10 +968,9 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 	// 传输日志（异步，fire-and-forget）：此前 transfer_log 表无任何写入方，
 	// 传输日志页与趋势下载序列一直空数据。文本分享按查看计，文件按下载计。
 	logTransfer := func() {
-		logName := fileCode.UUIDFileName
-		if logName == "" {
-			logName = fileCode.Text // 直传分享未落 UUIDFileName，Text 存的是原始文件名
-		}
+		// 传输日志文件名：统一走 DisplayName（原始文件名优先；直传分享未落
+		// UUIDFileName 时 Text 存原始文件名）
+		logName := fileCode.DisplayName()
 		if shareService.IsTextShare(fileCode) {
 			logName = "text.txt"
 		}
