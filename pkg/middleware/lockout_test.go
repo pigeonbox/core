@@ -12,18 +12,21 @@ import (
 func TestSetTrustedProxies(t *testing.T) {
 	require.NoError(t, SetTrustedProxies([]string{"10.0.0.0/8", "172.16.5.4"}))
 	// 可信网段内的对端 ⇒ 采信 XFF 里的客户端地址
-	assert.Equal(t, "1.2.3.4", ResolveClientIP("10.1.2.3:5678", "1.2.3.4", ""))
-	// 裸 IP 形态的可信代理同样生效（SetTrustedProxies 归一为 /32）
-	assert.Equal(t, "1.2.3.4", ResolveClientIP("172.16.5.4:5678", "1.2.3.4", ""))
+	assert.Equal(t, "1.2.3.4", ResolveClientIP("10.1.2.3:5678", "1.2.3.4"))
+	// 裸 IP 形态的可信代理同样生效（上游 TrustedProxySet 归一为单主机网段）
+	assert.Equal(t, "1.2.3.4", ResolveClientIP("172.16.5.4:5678", "1.2.3.4"))
 	// 可信网段外的对端 ⇒ 忽略代理头
-	assert.Equal(t, "203.0.113.9", ResolveClientIP("203.0.113.9:443", "1.2.3.4", ""))
+	assert.Equal(t, "203.0.113.9", ResolveClientIP("203.0.113.9:443", "1.2.3.4"))
 	// 对端不是合法 IP ⇒ 不信任代理头
-	assert.Equal(t, "not-an-ip", ResolveClientIP("not-an-ip:443", "1.2.3.4", ""))
+	assert.Equal(t, "not-an-ip", ResolveClientIP("not-an-ip:443", "1.2.3.4"))
 	// 空列表 = 不信任任何代理 ⇒ 忽略代理头，按直连地址
 	require.NoError(t, SetTrustedProxies(nil))
-	assert.Equal(t, "10.1.2.3", ResolveClientIP("10.1.2.3:5678", "1.2.3.4", ""))
+	assert.Equal(t, "10.1.2.3", ResolveClientIP("10.1.2.3:5678", "1.2.3.4"))
 	// 非法 CIDR 报错
 	assert.Error(t, SetTrustedProxies([]string{"300.1.2.3/24"}))
+	// 裸 IP 形态的 IPv6 也生效（归一为 /128，此前本地实现错归一为 /32）
+	require.NoError(t, SetTrustedProxies([]string{"2001:db8::1"}))
+	assert.Equal(t, "1.2.3.4", ResolveClientIP("[2001:db8::1]:5678", "1.2.3.4"))
 	// 还原为空，避免影响其他用例
 	_ = SetTrustedProxies(nil)
 }

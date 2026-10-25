@@ -225,19 +225,24 @@ func TestRateLimiter_Stop(t *testing.T) {
 	rl.Stop()
 }
 
-// TestRateLimiter_ClientIP X-Forwarded-For
+// TestClientIP_XForwardedFor X-Forwarded-For 的采信口径。
+//
+// 直连可信时，从右向左取第一个非可信跳（XFF 左端是客户端可伪造的部分，
+// 伪造值必须不被采信，否则换个头就换一个干净的限流桶）；直连不可信时，
+// 代理头一律忽略（直连方伪造 XFF 即可绕过 IP 维度限流）。
+//
+// ⚠️ 本用例此前是**空测**：没有调用任何生产代码，只在测试里手工切字符串断言
+// 首段是 "1.2.3.4"——测的是测试自己的字符串切分，与生产解析口径无关，且
+// 注释里写的「第一个 IP 是客户端」正是被收编掉的不安全口径（左端可伪造）。
+// 现改为直接打生产解析面。
 func TestClientIP_XForwardedFor(t *testing.T) {
-	// X-Forwarded-For 解析逻辑（直接测解析函数）
-	xff := "1.2.3.4, 5.6.7.8, 9.10.11.12"
-	// 第一个 IP 是真实客户端
-	var ip string
-	for i := 0; i < len(xff); i++ {
-		if xff[i] == ',' {
-			ip = xff[:i]
-			break
-		}
-	}
-	assert.Equal(t, "1.2.3.4", ip, "X-Forwarded-For 第一个 IP 是客户端")
+	require.NoError(t, SetTrustedProxies([]string{"10.0.0.0/8"}))
+	t.Cleanup(func() { _ = SetTrustedProxies(nil) })
+
+	// 直连可信 → 最右的非可信跳 1.2.3.4 是真实客户端，最左端 9.9.9.9 是伪造值
+	assert.Equal(t, "1.2.3.4", ResolveClientIP("10.0.0.2:443", "9.9.9.9, 1.2.3.4, 10.0.0.1"))
+	// 直连不可信 → 代理头一律忽略，按直连地址
+	assert.Equal(t, "203.0.113.9", ResolveClientIP("203.0.113.9:443", "9.9.9.9, 1.2.3.4, 10.0.0.1"))
 }
 
 // TestRateLimiter_GC_NoError GC 不会 panic
