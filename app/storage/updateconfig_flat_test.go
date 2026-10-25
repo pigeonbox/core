@@ -3,8 +3,6 @@ package storage
 import (
 	"encoding/json"
 	"testing"
-
-	"github.com/pigeonbox/core/conf"
 )
 
 func TestFlatUnmarshal(t *testing.T) {
@@ -19,8 +17,9 @@ func TestFlatUnmarshal(t *testing.T) {
 	if req.SFTP == nil || req.SFTP.Host != "127.0.0.1:2222" {
 		t.Fatalf("SFTP 未填充: %+v", req.SFTP)
 	}
-	_ = conf.StorageConfig{}
-	if !hasFlatStorageFields(req.StorageConfig) {
-		t.Fatal("hasFlatStorageFields 应为 true")
+	// 扁平形态只有一个来源（旧的「有没有顶层实质字段」探测已删：
+	// 请求体恒为完整候选配置）⇒ 这里只断言扁平字段被正确填充。
+	if req.StorageConfig.Type != "sftp" && req.Type != "sftp" {
+		t.Fatalf("扁平形态的 type 未绑定: %+v", req.StorageConfig)
 	}
 }

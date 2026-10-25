@@ -96,14 +96,17 @@ func TestUpdateStorageConfigWebDAVValidation(t *testing.T) {
 	s, _, p := newFlowTestService(t)
 
 	// 非法 scheme：activate 的 SSRF 校验拦截
+	// （扁平形态：请求体即 conf.StorageConfig 同构——旧嵌套形态已删）
 	req := &UpdateConfigRequest{Type: "webdav"}
-	req.Config.WebDAV = &WebDAVConfig{URL: "ftp://example.com/dav", Username: "u", Password: "p"}
+	req.WebDAV = &conf.WebDAVConfig{
+		Endpoint: "ftp://example.com/dav", Username: "u", Password: "p",
+	}
 	require.Error(t, s.UpdateStorageConfig(ctx, req))
 	require.Len(t, p.saved, 0)
 
 	// 合法 URL（公网形态，不实际连接会被 Probe 拦）——这里仅验证校验通过后
 	// Probe 失败同样不落配置（沙箱无外网，Probe 必败，恰好覆盖回滚路径）
-	req.Config.WebDAV.URL = "https://webdav.invalid-host-pb-test.example/dav"
+	req.WebDAV.Endpoint = "https://webdav.invalid-host-pb-test.example/dav"
 	require.Error(t, s.UpdateStorageConfig(ctx, req))
 	require.Equal(t, "local", conf.GetGlobalConfig().Storage.Type)
 	require.Len(t, p.saved, 0)

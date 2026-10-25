@@ -96,83 +96,29 @@ func TestStorageConnection(ctx context.Context, c *app.RequestContext) {
 
 // UpdateStorageConfig .
 // @router /admin/storage/config [PUT]
-// 支持两种请求形态：
-//   - 旧嵌套（IDL）：{type, config:{storage_path/webdav/s3}}
-//   - 扁平（新契约，v0.7.x）：请求体即 conf.StorageConfig 同构 JSON
-//     （type/storage_path/quota/s3/webdav/ftp/sftp/azureblob/hdfs/onedrive/oss..obs），
-//     服务端整体校验 → Probe → 热切换 → 持久化。IDL thrift 模型将 config 标为
-//     required 会先拒扁平体，故此处先按顶层字段探测分派。
+//
+// 形态：**只有**扁平一种——请求体即 conf.StorageConfig 同构 JSON
+// （type/storage_path/quota/s3/webdav/ftp/sftp/azureblob/hdfs/onedrive/oss..obs），
+// 服务端整体校验 → Probe → 热切换 → 持久化。
+//
+// 旧嵌套形态 {type, config:{storage_path/webdav/s3}} **已删**（2026-10-25 删除旧版本
+// 兼容）：它只能切 local/webdav/s3 三种、且字段名与实际配置模型对不上（旧契约遗留），
+// 保留它等于让两种写入口径并存。
 func UpdateStorageConfig(ctx context.Context, c *app.RequestContext) {
-	// 扁平形态探测：body 为 JSON 对象、无 config 字段、有 type 字段
-	bodyBytes := string(c.Request.Body())
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(bodyBytes), &raw); err == nil {
-		_, hasCfg := raw["config"]
-		_, hasType := raw["type"]
-		if hasType && !hasCfg {
-			flat := &storageapp.UpdateConfigRequest{}
-			if err := json.Unmarshal([]byte(bodyBytes), flat); err == nil && flat.Type != "" {
-				if err := getService().UpdateStorageConfig(ctx, flat); err != nil {
-					resp.NewTypedError(c, err)
-					return
-				}
-				resp.SuccessWithMessage(c, "存储已切换并持久化", nil)
-				return
-			}
-		}
-	}
-
-	var req storage.UpdateStorageConfigReq
-	if err := c.BindAndValidate(&req); err != nil {
-		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+	var req storageapp.UpdateConfigRequest
+	if err := json.Unmarshal(c.Request.Body(), &req); err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "解析请求体失败: "+err.Error())
 		return
 	}
-
-	// thrift 模型 → 领域请求（全字段映射；此前静默丢弃 S3.hostname/proxy、
-	// WebDAV.hostname/root_path 与整个 NFS——IDL 与领域模型本就齐备，纯映射缺失）
-	appReq := &storageapp.UpdateConfigRequest{Type: req.Type}
-	if req.Config != nil {
-		appReq.Config.StoragePath = req.Config.StoragePath
-		if req.Config.Webdav != nil {
-			appReq.Config.WebDAV = &storageapp.WebDAVConfig{
-				Hostname: req.Config.Webdav.Hostname,
-				Username: req.Config.Webdav.Username,
-				Password: req.Config.Webdav.Password,
-				RootPath: req.Config.Webdav.RootPath,
-				URL:      req.Config.Webdav.URL,
-			}
-		}
-		if req.Config.S3 != nil {
-			appReq.Config.S3 = &storageapp.S3Config{
-				EndpointURL:     req.Config.S3.EndpointURL,
-				AccessKeyID:     req.Config.S3.AccessKeyID,
-				SecretAccessKey: req.Config.S3.SecretAccessKey,
-				BucketName:      req.Config.S3.BucketName,
-				RegionName:      req.Config.S3.RegionName,
-				Hostname:        req.Config.S3.Hostname,
-				Proxy:           req.Config.S3.Proxy,
-			}
-		}
-		if req.Config.Nfs != nil {
-			appReq.Config.NFS = &storageapp.NFSConfig{
-				Server:     req.Config.Nfs.Server,
-				Path:       req.Config.Nfs.Path,
-				MountPoint: req.Config.Nfs.MountPoint,
-				Version:    req.Config.Nfs.Version,
-				Options:    req.Config.Nfs.Options,
-				Timeout:    req.Config.Nfs.Timeout,
-				AutoMount:  req.Config.Nfs.AutoMount,
-				RetryCount: req.Config.Nfs.RetryCount,
-				SubPath:    req.Config.Nfs.SubPath,
-			}
-		}
-	}
-
-	if err := getService().UpdateStorageConfig(ctx, appReq); err != nil {
-		resp.NewErrorWithMessage(c, errcode.CodeEndpointDenied, err.Error())
+	if req.Type == "" {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "缺少 type")
 		return
 	}
-	resp.SuccessWithMessage(c, "存储配置已更新", nil)
+	if err := getService().UpdateStorageConfig(ctx, &req); err != nil {
+		resp.NewTypedError(c, err)
+		return
+	}
+	resp.SuccessWithMessage(c, "存储已切换并持久化", nil)
 }
 
 // ==================== 存储洞察 + 孤儿清理 ====================

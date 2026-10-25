@@ -323,88 +323,24 @@ func probeWebDAV(ctx context.Context, endpoint, username, password string) error
 	return nil
 }
 
-// hasFlatStorageFields 是否携带扁平形态的顶层存储字段（内嵌字段除去 Type 本身）
-func hasFlatStorageFields(sc conf.StorageConfig) bool {
-	return sc.Quota > 0 || sc.WebDAV != nil || sc.FTP != nil || sc.SFTP != nil ||
-		sc.AzureBlob != nil || sc.HDFS != nil || sc.OneDrive != nil || sc.S3 != nil ||
-		sc.OSS != nil || sc.COS != nil || sc.BOS != nil || sc.KS3 != nil || sc.OBS != nil
-}
-
 // UpdateStorageConfig 更新存储配置。
 // 流程与 SwitchStorage 一致：SSRF 校验 → 认证级 Probe → 热重载 → 更新内存
 // → 持久化到 system_configs（管理端配置记录，重启后由 bootstrap 恢复）。
 // 注：use_ssl/path_style 未随请求传入时保留现值（use_ssl 缺省 true，与管理端历史行为一致）。
 func (s *Service) UpdateStorageConfig(ctx context.Context, req *UpdateConfigRequest) error {
-	// 扁平形态（新）：请求体即完整候选配置——校验 → Probe → 热切换 → 持久化。
-	// 判定须看「顶层实质字段」而非 Type（内嵌提升使 Type 与旧形态同名，
-	// 旧调用 {type, config:{...}} 不带任何顶层字段，须走原分支保持兼容语义）。
-	// JSON 冲突注意：顶层 legacy Type（深度 0，tag "type" 精确匹配）会赢过内嵌
-	// StorageConfig.Type（深度 1）——扁平分支的类型以 req.Type 兜底为准。
-	if hasFlatStorageFields(req.StorageConfig) && req.Type != "" {
-		req.StorageConfig.Type = req.Type
-		candidate := req.StorageConfig
-		if candidate.StoragePath == "" {
-			candidate.StoragePath = s.config.Storage.StoragePath
-		}
-		if err := validateEndpoints(&candidate); err != nil {
-			return err
-		}
-		return s.activate(ctx, &candidate)
+	// 请求体即完整候选配置——校验 → Probe → 热切换 → 持久化。
+	// 旧嵌套形态 {type, config:{...}} 已删（2026-10-25 删除旧版本兼容）。
+	// JSON 冲突注意：顶层 Type（深度 0，tag "type"）会赢过内嵌 StorageConfig.Type
+	// （深度 1）——类型以 req.Type 兜底为准。
+	req.StorageConfig.Type = req.Type
+	candidate := req.StorageConfig
+	if candidate.StoragePath == "" {
+		candidate.StoragePath = s.config.Storage.StoragePath
 	}
-	switch req.Type {
-	case "local":
-		if req.Config.StoragePath != "" {
-			candidate := s.candidateFor("local")
-			candidate.StoragePath = req.Config.StoragePath
-			return s.activate(ctx, candidate)
-		}
-		return nil
-
-	case "webdav":
-		if req.Config.WebDAV == nil {
-			return nil
-		}
-		candidate := s.candidateFor("webdav")
-		if req.Config.WebDAV.URL != "" {
-			if err := security.ValidateEndpointURL(req.Config.WebDAV.URL); err != nil {
-				return fmt.Errorf("端点校验失败: %w", err)
-			}
-			candidate.WebDAV = &conf.WebDAVConfig{
-				Endpoint: req.Config.WebDAV.URL,
-				Username: req.Config.WebDAV.Username,
-				Password: req.Config.WebDAV.Password,
-			}
-		}
-		return s.activate(ctx, candidate)
-
-	case "s3":
-		if req.Config.S3 == nil {
-			return nil
-		}
-		candidate := s.candidateFor("s3")
-		if req.Config.S3.EndpointURL != "" {
-			if err := security.ValidateEndpointURL(req.Config.S3.EndpointURL); err != nil {
-				return fmt.Errorf("端点校验失败: %w", err)
-			}
-			useSSL, pathStyle := true, false
-			if candidate.S3 != nil {
-				useSSL, pathStyle = candidate.S3.UseSSL, candidate.S3.PathStyle
-			}
-			candidate.S3 = &conf.S3Config{
-				Endpoint:  req.Config.S3.EndpointURL,
-				Region:    req.Config.S3.RegionName,
-				Bucket:    req.Config.S3.BucketName,
-				AccessKey: req.Config.S3.AccessKeyID,
-				SecretKey: req.Config.S3.SecretAccessKey,
-				UseSSL:    useSSL,
-				PathStyle: pathStyle,
-			}
-		}
-		return s.activate(ctx, candidate)
-
-	default:
-		return fmt.Errorf("不支持的存储类型: %s", req.Type)
+	if err := validateEndpoints(&candidate); err != nil {
+		return err
 	}
+	return s.activate(ctx, &candidate)
 }
 
 // getStoragePath 获取存储路径
@@ -552,18 +488,16 @@ type NFSConfig struct {
 
 // UpdateConfigRequest 更新配置请求
 // UpdateConfigRequest 存储配置更新请求。
-// 新形态（扁平）：直接给 conf.StorageConfig 同构 JSON（type/storage_path/quota/
-// s3/webdav/ftp/sftp/azureblob/hdfs/onedrive/oss..obs），后端整体校验+Probe+切换；
-// 旧嵌套形态 {type, config:{storage_path/webdav/s3}} 仍兼容（走既有局部更新逻辑）。
+//
+// 形态：**只有**扁平一种——请求体即 conf.StorageConfig 同构 JSON
+// （type/storage_path/quota/s3/webdav/ftp/sftp/azureblob/hdfs/onedrive/oss..obs），
+// 后端整体校验 → Probe → 热切换 → 持久化。
+//
+// 旧的嵌套形态 {type, config:{storage_path/webdav/s3}} 已删（2026-10-25 删除旧版本
+// 兼容）：它只能切 local/webdav/s3 三种、且字段名与实际配置模型对不上（旧契约遗留），
+// 保留它等于让**两种写入口径**并存。
 type UpdateConfigRequest struct {
-	Type   string `json:"type"`
-	Config struct {
-		StoragePath string        `json:"storage_path"`
-		WebDAV      *WebDAVConfig `json:"webdav"`
-		S3          *S3Config     `json:"s3"`
-		NFS         *NFSConfig    `json:"nfs"`
-	} `json:"config"`
-
-	// 扁平形态（新）：内嵌 conf.StorageConfig，JSON 字段同名绑定
+	Type string `json:"type"`
+	// 扁平形态：内嵌 conf.StorageConfig，JSON 字段同名绑定
 	conf.StorageConfig
 }

@@ -76,17 +76,20 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	}
 	lock.Reset(ctx, lockKey)
 
-	// HttpOnly 会话 Cookie（浏览器端令牌移出 localStorage；Token 体保留兼容）
+	// HttpOnly 会话 Cookie（浏览器端令牌移出 localStorage）
 	middleware.SetSessionCookie(c, token, int(auth.SessionExpiry().Seconds()))
 
-	// 返回成功响应
+	// 返回成功响应：**不回传 token**（2026-10-25 删除旧版本兼容）——
+	// 浏览器端只用 Cookie；响应体带 token 是旧前端路径，且多一处泄漏面
+	// （响应体可能被访问日志/反向代理记录）。
+	tokenType := "Bearer"
+	expiresIn := int64(24 * 60 * 60) // 24小时
 	resp := &admin.AdminLoginResp{
 		Code:    0,
 		Message: "登录成功",
 		Data: &admin.AdminLoginData{
-			Token:     token,
-			TokenType: "Bearer",
-			ExpiresIn: 24 * 60 * 60, // 24小时
+			TokenType: &tokenType,
+			ExpiresIn: &expiresIn,
 		},
 	}
 
