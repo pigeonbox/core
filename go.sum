@@ -109,8 +109,8 @@ github.com/pelletier/go-toml/v2 v2.3.1 h1:MYEvvGnQjeNkRF1qUuGolNtNExTDwct51yp7ol
 github.com/pelletier/go-toml/v2 v2.3.1/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/philhofer/fwd v1.2.0 h1:e6DnBTl7vGY+Gz322/ASL4Gyp1FspeMvx1RNDoToZuM=
 github.com/philhofer/fwd v1.2.0/go.mod h1:RqIHx9QI14HlwKwm98g9Re5prTQ6LdeRQn+gXJFxsJM=
-github.com/pigeonbox/contracts v0.18.8 h1:ori2MvXA5bBPrLEZWZkZi1R1TiA/5l3WqN/XteWkyVk=
-github.com/pigeonbox/contracts v0.18.8/go.mod h1:eOx/xn4PV9AUykmLATWK9q6wGhfhhG1iXqWvfIYtGac=
+github.com/pigeonbox/contracts v0.18.9 h1:KoNiIEv5ICEFNJaHEROAqiSL6Rl6+ktlLFWI9A0W7+M=
+github.com/pigeonbox/contracts v0.18.9/go.mod h1:eOx/xn4PV9AUykmLATWK9q6wGhfhhG1iXqWvfIYtGac=
 github.com/pkg/sftp v1.13.11 h1:0N92SLTB8JqASJB14ZLHHzFnBV8mG9zw4K7jghEFWuE=
 github.com/pkg/sftp v1.13.11/go.mod h1:uNkH9roSXglNJqM+glJJi+TQXQUm0fXFWqCFmT8hsN0=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
