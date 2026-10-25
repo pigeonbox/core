@@ -268,8 +268,8 @@ func scanHandlerDir(dir, coreRoot string, optional optionalFields) ([]derefSite,
 func scanFunc(fset *token.FileSet, rel string, fd *ast.FuncDecl,
 	aliasDomain map[string]string, optional optionalFields) ([]derefSite, int) {
 
-	varStruct := map[string]string{}  // 局部变量名 → 契约结构体名
-	guarded := map[string]bool{}      // "var.Field" → 有保护
+	varStruct := map[string]string{} // 局部变量名 → 契约结构体名
+	guarded := map[string]bool{}     // "var.Field" → 有保护
 
 	// ① 变量绑定 + 保护证据（先跑一遍收集，再跑一遍判定，避免顺序依赖）
 	collect := func(n ast.Node) bool {
