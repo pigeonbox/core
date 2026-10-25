@@ -7,15 +7,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSetTrustedProxiesAndIsTrusted(t *testing.T) {
+// TestSetTrustedProxies 可信代理清单的生效与降级（经公开的客户端 IP 解析面验证
+// ——采信判定收编上游 oekit/pkg/convert.ResolveClientIP 后，本仓不再自持判定器）。
+func TestSetTrustedProxies(t *testing.T) {
 	require.NoError(t, SetTrustedProxies([]string{"10.0.0.0/8", "172.16.5.4"}))
-	assert.True(t, isTrustedProxy("10.1.2.3:5678"))
-	assert.True(t, isTrustedProxy("172.16.5.4"))
-	assert.False(t, isTrustedProxy("203.0.113.9:443"))
-	assert.False(t, isTrustedProxy("not-an-ip"))
-	// 空列表 = 不信任任何代理
+	// 可信网段内的对端 ⇒ 采信 XFF 里的客户端地址
+	assert.Equal(t, "1.2.3.4", ResolveClientIP("10.1.2.3:5678", "1.2.3.4", ""))
+	// 裸 IP 形态的可信代理同样生效（SetTrustedProxies 归一为 /32）
+	assert.Equal(t, "1.2.3.4", ResolveClientIP("172.16.5.4:5678", "1.2.3.4", ""))
+	// 可信网段外的对端 ⇒ 忽略代理头
+	assert.Equal(t, "203.0.113.9", ResolveClientIP("203.0.113.9:443", "1.2.3.4", ""))
+	// 对端不是合法 IP ⇒ 不信任代理头
+	assert.Equal(t, "not-an-ip", ResolveClientIP("not-an-ip:443", "1.2.3.4", ""))
+	// 空列表 = 不信任任何代理 ⇒ 忽略代理头，按直连地址
 	require.NoError(t, SetTrustedProxies(nil))
-	assert.False(t, isTrustedProxy("10.1.2.3:5678"))
+	assert.Equal(t, "10.1.2.3", ResolveClientIP("10.1.2.3:5678", "1.2.3.4", ""))
 	// 非法 CIDR 报错
 	assert.Error(t, SetTrustedProxies([]string{"300.1.2.3/24"}))
 	// 还原为空，避免影响其他用例
