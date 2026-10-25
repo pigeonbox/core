@@ -30,10 +30,10 @@ require (
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/oekit/concurrency v0.20.4
+	github.com/oekit/concurrency v0.21.0
 	github.com/oekit/core v0.12.0
 	github.com/oekit/kitx v0.3.1
-	github.com/oekit/pkg v0.25.0
+	github.com/oekit/pkg v0.25.2
 	github.com/pkg/sftp v1.13.11
 	github.com/studio-b12/gowebdav v0.13.0
 	golang.org/x/net v0.60.0
