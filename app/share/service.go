@@ -393,7 +393,7 @@ func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp,
 	// 非致命——铸造失败仅少一个快捷码，8 位分享码链路不受影响。
 	if s.pickupMinter != nil && !req.Encrypted {
 		if pickup, err := s.pickupMinter.MintForShare(ctx, fileCode.Code,
-			textPreview(req.Text), int64(len(req.Text)), req.RequireAuth, req.ExpiredAt); err != nil {
+			utils.TextPreview(req.Text), int64(len(req.Text)), req.RequireAuth, req.ExpiredAt); err != nil {
 			logger.CtxWarn(ctx, "mint pickup code failed (non-fatal)",
 				"code", fileCode.Code, "err", err)
 		} else {
@@ -405,19 +405,6 @@ func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp,
 
 // textPreview 文本分享的取件码展示名：首行截断 32 rune。取件码 meta 按 '|' 分隔
 // 存储（parseMeta），换行与竖线会破坏解析，一律折叠成空格。
-func textPreview(text string) string {
-	preview := strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r == '|' {
-			return ' '
-		}
-		return r
-	}, text)
-	runes := []rune(strings.TrimSpace(preview))
-	if len(runes) > 32 {
-		runes = append(runes[:32], []rune("…")...)
-	}
-	return string(runes)
-}
 
 // ShareTextWithAuth 带认证的文本分享（用于 Handler）。
 // requireAuth=true 时必须提供非空 passwordHash(handler 侧负责哈希),

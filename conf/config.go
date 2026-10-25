@@ -361,12 +361,6 @@ const (
 	PresignPolicyDisabled      = "disabled"      // 完全关闭直传
 )
 
-// PresignAnonymousOn 匿名直传是否可用（nil 视为开启，兼容存量配置）。
-// Deprecated: 改用 PresignPolicyOrDefault。
-func (c DownloadConfig) PresignAnonymousOn() bool {
-	return c.PresignAnonymousEnabled == nil || *c.PresignAnonymousEnabled
-}
-
 // PresignPolicyOrDefault 解析生效的直传策略：
 // 显式 presign_policy 优先；空串回退旧开关 presign_anonymous_enabled
 // （false→authenticated，nil/true→everyone）；都无→everyone。

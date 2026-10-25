@@ -58,3 +58,25 @@ func TestBindEnvironment_EnableHSTS_TriState(t *testing.T) {
 		assert.Nil(t, cfg.Security.CORS.EnableHSTS, "未配置必须保持 nil（三态语义的前提）")
 	})
 }
+
+// TestBindEnvironment_CORSAllowOriginsCSV CORS 白名单的 env 绑定（列表值按 CSV 拆）。
+//
+// 背景（2026-10-25 删除旧版本兼容）：bootstrap/middleware.go 曾**再读一次**
+// PB_CORS_ALLOW_ORIGINS 手工拼白名单（注释写「兼容 slice 字段在 env 下的传递」），
+// 而 config 层（bindEnvironment + listValuedKeys）**早已**把同一个 env 按 CSV 拆进
+// security.cors.allow_origins ⇒ 那段 env 读取是**完全冗余**，已删。
+//
+// ⇒ 删掉后，CORS 白名单的唯一来源是配置层 ⇒ 必须有回归网钉住这条链路，
+// 否则将来「env 传多值」会静默失效（CORS 退化为反射 Origin ⇒ 安全语义放宽）。
+func TestBindEnvironment_CORSAllowOriginsCSV(t *testing.T) {
+	t.Setenv("PB_CORS_ALLOW_ORIGINS", "https://a.example.com, https://b.example.com ,")
+
+	v := viper.New()
+	v.SetDefault("security.cors.allow_origins", []string{})
+	bindEnvironment(v)
+
+	var cfg conf.AppConfiguration
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.Equal(t, []string{"https://a.example.com", "https://b.example.com"}, cfg.Security.CORS.AllowOrigins,
+		"PB_CORS_ALLOW_ORIGINS 必须按 CSV 拆进配置（middleware 不再自己读 env）")
+}

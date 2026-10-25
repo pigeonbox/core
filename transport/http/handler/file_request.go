@@ -53,9 +53,6 @@ func GuestSubmitFiles(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	files := form.File["files"]
-	if len(files) == 0 {
-		files = form.File["file"]
-	}
 	if len(files) == 0 || len(files) > 100 {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "files 需为 1-100 项"})
 		return

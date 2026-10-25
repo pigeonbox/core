@@ -44,7 +44,6 @@ const shareCodeLength = 8
 // Redis key 模板（仅存映射 + 展示信息，真实状态查 DB）
 const (
 	keyPickupCodeMapping = "anon:code:%s" // pickup_code -> share_code
-	keyPickupCodeMeta    = "anon:meta:%s" // pickup_code -> 展示信息(share_code|file_name|file_size|content_type|require_auth)
 	keyPickupCodeNeg     = "anon:neg:%s"  // 负缓存标记：KV 未命中且 DB 也无此码（防枚举穿透打库）
 )
 
@@ -113,7 +112,6 @@ type CodeMeta struct {
 	ShareCode   string // 真实 file_code
 	FileName    string
 	FileSize    int64
-	ContentType string
 	RequireAuth bool // 仅展示"是否需要密码"
 	// ExpireAt 分享过期时间（Unix 秒；0=未设/长期）。Retrieve 成功回填，
 	// 供取件结果页展示（此前 handler 恒发 0，页面"过期时间 -"）。
@@ -165,8 +163,6 @@ func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time
 		if s.rdb == nil || ttl <= 0 {
 			return code, nil
 		}
-		metaStr := fmt.Sprintf("%s|%s|%d|%s|%t",
-			meta.ShareCode, meta.FileName, meta.FileSize, meta.ContentType, meta.RequireAuth)
 		// SetNX 已废弃（SA1019），改用 Set + NX 选项；NX 且键已存在时返回 redis.Nil
 		key := fmt.Sprintf(keyPickupCodeMapping, code)
 		_, err = s.rdb.SetArgs(ctx, key, meta.ShareCode, redis.SetArgs{TTL: ttl, Mode: "NX"}).Result()
@@ -177,11 +173,6 @@ func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time
 			if errors.Is(err, redis.Nil) {
 				continue
 			}
-			return "", err
-		}
-		if err := s.rdb.Set(ctx, fmt.Sprintf(keyPickupCodeMeta, code), metaStr, ttl).Err(); err != nil {
-			s.rdb.Del(ctx, key)
-			_ = s.fileCodeRepo.ClearPickupCode(ctx, code)
 			return "", err
 		}
 		return code, nil
@@ -241,13 +232,27 @@ func (s *Service) resolveShareCodeFromDB(ctx context.Context, trimmed, mappingKe
 	return fc.Code, nil
 }
 
-// enrichMetaFromDB 分享码直查路径没有 Redis 展示信息，用 DB 记录补齐
+// enrichMetaFromDB 用 DB 记录补齐展示信息（真相源 = DB）。
+//
+// 2026-10-25：Redis 的「展示信息快照」(anon:meta:*) 已删 ⇒ 展示名/大小一律从 DB 现算：
+//
+//	· 文件分享：DisplayName()（UUIDFileName → 原始名(Text) → 路径末段）+ Size；
+//	· 文本分享：没有文件名 ⇒ 展示名取**文本预览**、大小取**文本字节数**
+//	  （与铸造取件码时的口径一致 ⇒ 取件页显示与铸造时相同）。
 func enrichMetaFromDB(meta *CodeMeta, fc *model.FileCode) {
 	if meta.FileName == "" {
-		meta.FileName = fc.DisplayName()
+		if fc.IsTextShare() {
+			meta.FileName = utils.TextPreview(fc.Text)
+		} else {
+			meta.FileName = fc.DisplayName()
+		}
 	}
 	if meta.FileSize == 0 {
-		meta.FileSize = fc.Size
+		if fc.IsTextShare() {
+			meta.FileSize = int64(len(fc.Text))
+		} else {
+			meta.FileSize = fc.Size
+		}
 	}
 	meta.RequireAuth = fc.RequireAuth
 }
@@ -265,9 +270,11 @@ func (s *Service) Retrieve(ctx context.Context, code, password, clientIP string)
 		return nil, err
 	}
 
-	// 2. 展示信息（兼容旧格式：解析失败用空值）
-	metaStr, _ := s.rdb.Get(ctx, fmt.Sprintf(keyPickupCodeMeta, strings.ToUpper(strings.TrimSpace(code)))).Result()
-	meta := parseMeta(metaStr, shareCode)
+	// 2. 展示信息：真相源是 DB（下方 enrichMetaFromDB 回填）——
+	//    此前另有一份 Redis「展示信息快照」(anon:meta:*)，字段与 DB 重复且
+	//    content_type 无 DB 来源（恒为 application/octet-stream）⇒ 已删（2026-10-25
+	//    删除旧版本兼容）；Redis 只留「取件码→分享码」映射（热路径）与负缓存。
+	meta := &CodeMeta{ShareCode: shareCode}
 
 	// 3. 查 DB 真实状态
 	fc, err := s.fileCodeRepo.GetByCode(ctx, shareCode)
@@ -362,8 +369,7 @@ func (s *Service) Peek(ctx context.Context, code string) (*CodeMeta, *model.File
 	if err != nil {
 		return nil, nil, err
 	}
-	metaStr, _ := s.rdb.Get(ctx, fmt.Sprintf(keyPickupCodeMeta, strings.ToUpper(strings.TrimSpace(code)))).Result()
-	meta := parseMeta(metaStr, shareCode)
+	meta := &CodeMeta{ShareCode: shareCode} // 展示信息以 DB 为准（enrichMetaFromDB）
 	fc, err := s.fileCodeRepo.GetByCode(ctx, shareCode)
 	if err != nil {
 		return nil, nil, ErrCodeNotFound
@@ -395,49 +401,8 @@ func randomCode() string {
 	return uidgen.RandomString(codeAlphabet, codeLength)
 }
 
-// parseMeta 解析展示信息（兼容旧格式：字段不足时用空值）
-// 新格式: share_code|file_name|file_size|content_type|require_auth
-func parseMeta(metaStr, shareCode string) *CodeMeta {
-	meta := &CodeMeta{ShareCode: shareCode}
-	if metaStr == "" {
-		return meta
-	}
-	parts := splitBy(metaStr, '|', 5)
-	if len(parts) >= 2 {
-		meta.FileName = parts[1]
-	}
-	if len(parts) >= 3 {
-		_, _ = fmt.Sscanf(parts[2], "%d", &meta.FileSize)
-	}
-	if len(parts) >= 4 {
-		meta.ContentType = parts[3]
-	}
-	if len(parts) >= 5 {
-		meta.RequireAuth = parts[4] == "true"
-	}
-	return meta
-}
-
-// splitBy 简易 split（避免引入 strings.Split 提升可读性）
-func splitBy(s string, sep byte, max int) []string {
-	result := make([]string, 0, max)
-	start, count := 0, 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == sep && count < max-1 {
-			result = append(result, s[start:i])
-			start = i + 1
-			count++
-		}
-	}
-	result = append(result, s[start:])
-	return result
-}
-
 func (s *Service) cleanup(ctx context.Context, code string) error {
-	return s.rdb.Del(ctx,
-		fmt.Sprintf(keyPickupCodeMapping, code),
-		fmt.Sprintf(keyPickupCodeMeta, code),
-	).Err()
+	return s.rdb.Del(ctx, fmt.Sprintf(keyPickupCodeMapping, code)).Err()
 }
 
 // AnonymousShareParams 匿名分享端到端参数
@@ -445,7 +410,6 @@ type AnonymousShareParams struct {
 	FilePath       string
 	FileName       string
 	FileSize       int64
-	ContentType    string
 	ExpireAt       *time.Time // 必填，决定 DB 过期时间 + Redis TTL
 	MaxPickupCount int        // -1=无限, 0=默认无限, >0=限制
 	Password       string     // 空=无密码
@@ -487,7 +451,6 @@ func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousSharePara
 		ShareCode:   fc.Code,
 		FileName:    p.FileName,
 		FileSize:    p.FileSize,
-		ContentType: p.ContentType,
 		RequireAuth: p.Password != "",
 	}, *p.ExpireAt)
 	if err != nil {
@@ -518,7 +481,6 @@ func (s *Service) MintForShare(ctx context.Context, shareCode, fileName string, 
 			ShareCode:   shareCode,
 			FileName:    fileName,
 			FileSize:    fileSize,
-			ContentType: "application/octet-stream",
 			RequireAuth: requireAuth,
 		}, time.Time{})
 	}
@@ -526,7 +488,6 @@ func (s *Service) MintForShare(ctx context.Context, shareCode, fileName string, 
 		ShareCode:   shareCode,
 		FileName:    fileName,
 		FileSize:    fileSize,
-		ContentType: "application/octet-stream",
 		RequireAuth: requireAuth,
 	}, *expireAt)
 }

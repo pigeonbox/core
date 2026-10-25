@@ -5,7 +5,6 @@ package bootstrap
 import (
 	"context"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -89,14 +88,9 @@ func rateLimitGlobalExempt(path string) bool {
 // 环境变量 PB_CORS_ALLOW_ORIGINS（逗号分隔，如 "https://a.com,https://b.com"）。
 func CORS() app.HandlerFunc {
 	allowOrigins := map[string]bool{}
-	// 优先从环境变量读取（逗号分隔），兼容 slice 字段在 env 下的传递
-	if envOrigins := os.Getenv("PB_CORS_ALLOW_ORIGINS"); envOrigins != "" {
-		for _, o := range strings.Split(envOrigins, ",") {
-			if o = strings.TrimSpace(o); o != "" {
-				allowOrigins[o] = true
-			}
-		}
-	}
+	// 白名单来自配置（bootstrap/config.go 已把 PB_CORS_ALLOW_ORIGINS 按 CSV 拆进
+	// security.cors.allow_origins）——此前这里再读一次 env 是**冗余**（同样的值
+	// 已经进配置），已删（2026-10-25 删除旧版本兼容）。
 	// 再合并配置文件中的白名单
 	for _, o := range config.Security.CORS.AllowOrigins {
 		allowOrigins[o] = true

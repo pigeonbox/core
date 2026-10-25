@@ -94,10 +94,15 @@ func TestGenerateCode_Concurrent(t *testing.T) {
 func TestRetrieve_HappyPath(t *testing.T) {
 	svc, _, _ := newTestService(t)
 	ctx := context.Background()
-	require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{Code: "SHARE1", FilePath: "uploads/x/SHARE1.bin", ExpiredCount: 3}))
+	// 展示信息以 **DB** 为准（2026-10-25 删掉 Redis「展示信息快照」后）：
+	// 文件分享的原始名落在 UUIDFileName、大小落在 Size ⇒ fixture 按真实写入形态造。
+	require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{
+		Code: "SHARE1", FilePath: "uploads/x/SHARE1.bin",
+		UUIDFileName: "f.txt", Size: 100, ExpiredCount: 3,
+	}))
 
 	code, err := svc.GenerateCode(ctx, CodeMeta{
-		ShareCode: "SHARE1", FileName: "f.txt", FileSize: 100, ContentType: "text/plain",
+		ShareCode: "SHARE1", FileName: "f.txt", FileSize: 100,
 	}, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	assert.Len(t, code, 6)

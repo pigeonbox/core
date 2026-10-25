@@ -47,15 +47,16 @@ func TestSplitSharePageURL(t *testing.T) {
 	base := SplitSharePageURL("http://h:1/#/share/CODE", "CODE")
 	assert.Equal(t, "http://h:1", base)
 
-	// 旧形态（历史链接/存量数据）仍可拆
+	// 旧形态 {base}/share/{code} **不再识别**（2026-10-25 删除旧版本兼容）：
+	// 服务端自产的分享链接恒为 hash 形态 ⇒ 旧分支不可达 ⇒ 旧链接不再被派生直链。
 	base2 := SplitSharePageURL("http://h:1/share/CODE", "CODE")
-	assert.Equal(t, "http://h:1", base2)
+	assert.Equal(t, "http://h:1/share/CODE", base2, "旧形态应原样返回（不再派生直链）")
 
 	// 相对形态
 	base3 := SplitSharePageURL("/#/share/CODE", "CODE")
 	assert.Equal(t, "", base3)
 	base4 := SplitSharePageURL("/share/CODE", "CODE")
-	assert.Equal(t, "", base4)
+	assert.Equal(t, "/share/CODE", base4, "旧形态应原样返回")
 
 	// 不匹配时原样返回（不吞信息）
 	base5 := SplitSharePageURL("http://h:1/other", "CODE")

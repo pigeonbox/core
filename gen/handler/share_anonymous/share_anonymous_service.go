@@ -145,7 +145,6 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 		FilePath:       "", // 匿名取件文件路径由前端直传后回填；此处先建占位记录
 		FileName:       safeName,
 		FileSize:       req.FileSize,
-		ContentType:    "application/octet-stream",
 		ExpireAt:       &expireAt,
 		MaxPickupCount: maxCount,
 		Password:       password,
@@ -255,7 +254,9 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 	data := &anonmodel.RetrieveData{
 		FileName:    meta.FileName,
 		FileSize:    meta.FileSize,
-		ContentType: meta.ContentType,
+		// content_type：DB 无该列、其值恒为 application/octet-stream ⇒ 直接给常量
+		// （此前经 Redis「展示信息快照」透传，已删该快照，见 app/anonymous）
+		ContentType: "application/octet-stream",
 		DownloadURL: downloadURL,
 		// 剩余可取次数（本次取件后）：此前恒发 0 ⇒ 结果页显示「剩余可取次数 0」
 		// （用户以为文件已失效）。域内已算好，这里如实透传。

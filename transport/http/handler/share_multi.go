@@ -219,9 +219,6 @@ func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 	}
 	files := form.File["files"]
 	if len(files) == 0 {
-		files = form.File["file"] // 兼容单文件字段名
-	}
-	if len(files) == 0 {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "请上传文件"})
 		return
 	}

@@ -50,18 +50,18 @@ func ShareDownloadURL(base, code, token string) string {
 
 // SplitSharePageURL 从页面链接里拆出 base 与分享码。
 //
-// 用途：由服务端下发的分享链接派生直链（base + /share/download?code=…），
-// 兼容两种形态：
-//   - 新形态 {base}/#/share/{code}
-//   - 旧形态 {base}/share/{code}（历史链接、存量数据）
+// 用途：由服务端下发的分享链接派生直链（base + /share/download?code=…）。
+//
+// 形态：**只有** {base}/#/share/{code}（hash 路由）——服务端自产的链接一律是它
+// （SharePageURL 的唯一产物；MCP 与 presign complete 的两个调用方传的都是
+// 服务端自产 URL）⇒ 旧形态 {base}/share/{code} 分支**不可达**，已移除。
 //
 // base 为空（相对形态）时返回空 base，调用方拼出相对直链。
 func SplitSharePageURL(pageURL, code string) (base string) {
-	for _, suffix := range []string{"#/share/" + code, "/share/" + code} {
-		if strings.HasSuffix(pageURL, suffix) {
-			// 相对形态 "/#/share/CODE" 剥完剩 "/" ⇒ 归一成 ""（否则拼直链会出双斜杠）
-			return strings.TrimSuffix(strings.TrimSuffix(pageURL, suffix), "/")
-		}
+	suffix := "#/share/" + code
+	if strings.HasSuffix(pageURL, suffix) {
+		// 相对形态 "/#/share/CODE" 剥完剩 "/" ⇒ 归一成 ""（否则拼直链会出双斜杠）
+		return strings.TrimSuffix(strings.TrimSuffix(pageURL, suffix), "/")
 	}
 	return pageURL
 }

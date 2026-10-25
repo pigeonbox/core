@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pigeonbox/core/pkg/utils"
 )
 
 // =====================================================================
@@ -68,13 +70,13 @@ func TestShareTextE2ESkipsMint(t *testing.T) {
 
 func TestTextPreviewSanitize(t *testing.T) {
 	// 竖线/换行会破坏 KV meta 的 '|' 分隔格式，必须折叠
-	got := textPreview("第一行\n第二行|带竖线")
+	got := utils.TextPreview("第一行\n第二行|带竖线")
 	assert.NotContains(t, got, "\n")
 	assert.NotContains(t, got, "|")
 
 	// 超长截断到 32 rune + 省略号
 	long := strings.Repeat("码", 50)
-	got = textPreview(long)
+	got = utils.TextPreview(long)
 	runes := []rune(got)
 	assert.Len(t, runes, 33)
 	assert.True(t, strings.HasSuffix(got, "…"))

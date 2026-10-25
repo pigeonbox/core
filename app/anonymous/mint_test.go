@@ -18,17 +18,21 @@ func TestMintForShare(t *testing.T) {
 	expireAt := time.Now().Add(time.Hour)
 
 	// Peek/Retrieve 的 DB 回源需要分享记录真实存在（生产语义：分享先于取件码）
-	seed := func(code string, requireAuth bool) {
+	// 展示信息以 **DB** 为准（2026-10-25 删掉 Redis「展示信息快照」后）：
+	// 原始名落 UUIDFileName、大小落 Size ⇒ fixture 按真实写入形态造。
+	seed := func(code, fileName string, size int64, requireAuth bool) {
 		require.NoError(t, svc.fileCodeRepo.Create(ctx, &model.FileCode{
 			Code:         code,
 			FilePath:     "uploads/x/" + code + ".bin",
+			UUIDFileName: fileName,
+			Size:         size,
 			ExpiredCount: -1, // -1=时间式无限次；Go 零值 0 语义是"次数耗尽即过期"
 			RequireAuth:  requireAuth,
 		}))
 	}
-	seed("shareabc", false)
-	seed("sharepwd", true)
-	seed("shareperm", false)
+	seed("shareabc", "demo.txt", 128, false)
+	seed("sharepwd", "demo.txt", 128, true)
+	seed("shareperm", "demo.txt", 128, false)
 
 	t.Run("正常铸造并可解析", func(t *testing.T) {
 		pickup, err := svc.MintForShare(ctx, "shareabc", "demo.txt", 128, false, &expireAt)

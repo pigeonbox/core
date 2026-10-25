@@ -44,11 +44,10 @@ func TestMemoryMode_EndToEnd(t *testing.T) {
 
 	expire := time.Now().Add(time.Hour)
 	code, err := svc.CreateAnonymousShare(ctx, AnonymousShareParams{
-		FilePath:    "uploads/2026/10/06/demo.bin",
-		FileName:    "demo.bin",
-		FileSize:    123,
-		ContentType: "application/octet-stream",
-		ExpireAt:    &expire,
+		FilePath: "uploads/2026/10/06/demo.bin",
+		FileName: "demo.bin",
+		FileSize: 123,
+		ExpireAt: &expire,
 	})
 	require.NoError(t, err)
 	assert.Len(t, code, codeLength)
@@ -180,11 +179,10 @@ func TestMemoryMode_RedisAndMemoryParity(t *testing.T) {
 	runFlow := func(t *testing.T, svc *Service) (pickupCode string, retrieved bool, notFoundErr error) {
 		expire := time.Now().Add(time.Hour)
 		code, err := svc.CreateAnonymousShare(ctx, AnonymousShareParams{
-			FilePath:    "uploads/2026/10/06/parity.bin",
-			FileName:    "parity.bin",
-			FileSize:    7,
-			ContentType: "application/octet-stream",
-			ExpireAt:    &expire,
+			FilePath: "uploads/2026/10/06/parity.bin",
+			FileName: "parity.bin",
+			FileSize: 7,
+			ExpireAt: &expire,
 		})
 		if err != nil {
 			return "", false, err

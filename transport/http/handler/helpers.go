@@ -65,22 +65,6 @@ func parsePage(c *app.RequestContext) (page, pageSize int) {
 	return
 }
 
-// respondLegacyPage 管理端分页的历史约定包络：前端判 code===200 且读
-// data.items/total（与 resp.Success 的 code=0 体系不同）——形状是既有前端
-// 契约，只收敛调用点、不改线上响应体。
-func respondLegacyPage(c *app.RequestContext, items any, total int64, page, pageSize int) {
-	c.JSON(consts.StatusOK, map[string]interface{}{
-		"code":    0,
-		"message": "success",
-		"data": map[string]interface{}{
-			"items":     items,
-			"total":     total,
-			"page":      page,
-			"page_size": pageSize,
-		},
-	})
-}
-
 // saveUploadEntries 校验并落盘 multipart 文件列表（多文件直传/访客投递共用）。
 // 逐文件：文件名消毒 → 扩展名白名单 → 单文件大小上限 → 魔数一致性
 // （encrypted=true 跳过：E2E 密文头为随机字节，必然不过魔数表）→ 唯一相对

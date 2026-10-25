@@ -86,18 +86,6 @@ type Node struct {
 	tickOK atomic.Bool // 最近一次心跳结果(退避调度依据)
 }
 
-// Service 是 Node 的旧名（保留兼容）。
-//
-// Deprecated: 用 Node。
-type Service = Node
-
-// NewService 是 NewNode 的旧名（保留兼容）。
-//
-// Deprecated: 用 NewNode。
-func NewService(cfg conf.FederationConfig, nodeName string) (*Node, error) {
-	return NewNode(cfg, nodeName)
-}
-
 // NewNode 构造并加载/生成节点身份密钥。仅在 federation.enabled 时调用；
 // 配置不合法返回错误，由 bootstrap 降级为非联邦模式（不影响单站功能）。
 func NewNode(cfg conf.FederationConfig, nodeName string) (*Node, error) {

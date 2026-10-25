@@ -138,9 +138,9 @@ func newFakeRegistry(t *testing.T) (*fakeRegistry, *httptest.Server) {
 	return f, srv
 }
 
-// ---- Service 测试 ----
+// ---- Node 测试 ----
 
-func newTestService(t *testing.T, regURL string) *Service {
+func newTestService(t *testing.T, regURL string) *Node {
 	t.Helper()
 	cfg := conf.FederationConfig{
 		Enabled:                true,
@@ -149,7 +149,7 @@ func newTestService(t *testing.T, regURL string) *Service {
 		NodeKeyPath:            filepath.Join(t.TempDir(), "federation.key"),
 		AnnounceMinEntropyBits: 40,
 	}
-	s, err := NewService(cfg, "测试站")
+	s, err := NewNode(cfg, "测试站")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,17 +157,17 @@ func newTestService(t *testing.T, regURL string) *Service {
 	return s
 }
 
-func TestNewServiceValidation(t *testing.T) {
-	if _, err := NewService(conf.FederationConfig{Enabled: false}, ""); err == nil {
+func TestNewNodeValidation(t *testing.T) {
+	if _, err := NewNode(conf.FederationConfig{Enabled: false}, ""); err == nil {
 		t.Fatal("disabled 应拒绝构造")
 	}
-	if _, err := NewService(conf.FederationConfig{Enabled: true}, ""); err == nil {
+	if _, err := NewNode(conf.FederationConfig{Enabled: true}, ""); err == nil {
 		t.Fatal("缺 registry_url 应报错")
 	}
-	if _, err := NewService(conf.FederationConfig{Enabled: true, RegistryURL: "http://r"}, ""); err == nil {
+	if _, err := NewNode(conf.FederationConfig{Enabled: true, RegistryURL: "http://r"}, ""); err == nil {
 		t.Fatal("缺 public_url 应报错")
 	}
-	if _, err := NewService(conf.FederationConfig{Enabled: true, RegistryURL: "ftp://r", PublicURL: "https://a"}, ""); err == nil {
+	if _, err := NewNode(conf.FederationConfig{Enabled: true, RegistryURL: "ftp://r", PublicURL: "https://a"}, ""); err == nil {
 		t.Fatal("非法 scheme 应报错")
 	}
 }
@@ -294,7 +294,7 @@ func TestTickRegistersAndReannounces(t *testing.T) {
 
 func TestRegistryDownDoesNotBlock(t *testing.T) {
 	// 指向必然失败的地址:构造/钩子/Stop 均不得 panic 或长时间阻塞
-	s, err := NewService(conf.FederationConfig{
+	s, err := NewNode(conf.FederationConfig{
 		Enabled: true, RegistryURL: "http://127.0.0.1:1", PublicURL: "https://x",
 		NodeKeyPath: filepath.Join(t.TempDir(), "k"), AnnounceMinEntropyBits: 40,
 	}, "x")
@@ -397,7 +397,7 @@ func TestTickBackoffFlag(t *testing.T) {
 func TestMultiRegistryFailover(t *testing.T) {
 	primary, srvP := newFakeRegistry(t)
 	secondary, srvS := newFakeRegistry(t)
-	s, err := NewService(conf.FederationConfig{
+	s, err := NewNode(conf.FederationConfig{
 		Enabled:                true,
 		RegistryURL:            srvP.URL + "," + srvS.URL,
 		PublicURL:              "https://node-a.example.com",
@@ -451,7 +451,7 @@ func TestMultiRegistryFailover(t *testing.T) {
 func TestMultiRegistryResolveOrder(t *testing.T) {
 	_, srvP := newFakeRegistry(t)
 	secondary, srvS := newFakeRegistry(t)
-	s, err := NewService(conf.FederationConfig{
+	s, err := NewNode(conf.FederationConfig{
 		Enabled:                true,
 		RegistryURL:            srvP.URL + "," + srvS.URL,
 		PublicURL:              "https://node-a.example.com",

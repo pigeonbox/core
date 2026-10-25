@@ -156,11 +156,9 @@ func Init(ctx context.Context, c *app.RequestContext) {
 	// (修复:此前密码未传,导致大文件分享的密码保护形同虚设)
 	passwordHash := ""
 	if boolDeref(req.RequireAuth) {
-		// 契约字段(contracts v0.5.0 起);form 提交兼容保留
+		// 契约字段(contracts v0.5.0 起)——只认 JSON body（契约 api.body），
+		// 旧的 form 提交通道已删（2026-10-25 删除旧版本兼容）
 		password := strDeref(req.Password)
-		if password == "" {
-			password = c.DefaultPostForm("password", "")
-		}
 		if password == "" {
 			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "开启密码保护时必须提供密码")
 			return

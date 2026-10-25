@@ -740,16 +740,14 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// E2E 客户端加密（P1）：客户端上传的已是密文，跳过魔数复检（密文头为随机字节）。
-	// encrypted 经 form 或 JSON body 传递（与 password 同模式）
-	encrypted := c.DefaultPostForm("encrypted", "false") == "true"
-	if !encrypted {
-		var encBody struct {
-			Encrypted bool `json:"encrypted"`
-		}
-		if b := c.Request.Body(); len(b) > 0 {
-			_ = json.Unmarshal(b, &encBody)
-			encrypted = encBody.Encrypted
-		}
+	// encrypted 走 JSON body（契约 api.body）——旧的 form 通道已删（2026-10-25 删除旧版本兼容）
+	encrypted := false
+	var encBody struct {
+		Encrypted bool `json:"encrypted"`
+	}
+	if b := c.Request.Body(); len(b) > 0 {
+		_ = json.Unmarshal(b, &encBody)
+		encrypted = encBody.Encrypted
 	}
 
 	// 魔数+扩展名复检（首分片可能绕过 init 校验；E2E 密文跳过）
