@@ -19,3 +19,18 @@ regexes = [
 [[allowlists]]
 description = "apikey 测试夹具"
 paths = ['''^pkg/middleware/apikey_test\.go$''']
+
+# presign/chunk 测试夹具里**明文写死**的签名密钥。
+#
+# 为什么需要（2026-10-25 实录）：`generic-api-key` 规则按「像密钥的高熵串」判定
+# ⇒ 2026-10-24 引入的 chunk 幂等测试里的 `test-presign-signing-key-0123456789`
+# 被判成泄露 ⇒ core 的 Secret Scan **从 bd9875f 起一直红**（早于本轮改动）。
+#
+# 为什么用**值正则**而不是文件路径：路径豁免会放过该文件里的**任何**密钥
+# （包括未来误粘贴的真凭据）⇒ 值正则只豁免这一个**确认是测试夹具**的字面量。
+[[allowlists]]
+description = "presign/chunk 测试夹具的写死签名密钥（非真实凭据）"
+regexes = [
+  '''test-presign-signing-key-0123456789''',
+  '''test-signing-key-0123456789''',
+]
