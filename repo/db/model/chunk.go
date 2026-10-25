@@ -10,12 +10,18 @@ import (
 type UploadChunk struct {
 	gorm.Model
 
-	UploadID string `gorm:"index;size:36" json:"upload_id"`
-	// ChunkIndex 与 UploadID 组成**唯一键**（2026-10-25 审计 A3）：
+	// UploadID 与 ChunkIndex 组成**复合唯一键**（2026-10-25 审计 A3）：
 	// 无此约束时，分片失败后重传同索引会**再建一行**（dao.GetChunkByIndex 只查
 	// completed=true 的行 ⇒ 看不到未完成的旧行）⇒ CountCompletedChunks 按行数计
 	// ⇒ 「分片齐全」判定可虚高（声明 5 片只传 4 片也可能计成 5）。
-	// 生产走版本化迁移 000006 建索引；此处标签让**新建库**（AutoMigrate）也有。
+	//
+	// ⚠️ **两个字段必须挂同一个索引名**才是复合索引：只给 ChunkIndex 挂
+	// `uniqueIndex:` ⇒ gorm 建的是 **chunk_index 单列**唯一索引 ⇒ **不同上传
+	// 会话的同索引分片互相冲突**（CI 真机冒烟实测：S13e 同用户秒传
+	// 「UNIQUE constraint failed: upload_chunks.chunk_index」⇒ 整条秒传链路挂）。
+	//
+	// 生产走版本化迁移 000006（复合）；此处标签让**新建库**（AutoMigrate）也有。
+	UploadID    string `gorm:"index;size:36;uniqueIndex:idx_upload_chunks_upload_id_chunk_index" json:"upload_id"`
 	ChunkIndex  int    `gorm:"uniqueIndex:idx_upload_chunks_upload_id_chunk_index" json:"chunk_index"`
 	ChunkHash   string `gorm:"size:64" json:"chunk_hash"`
 	TotalChunks int    `json:"total_chunks"`

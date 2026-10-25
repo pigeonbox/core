@@ -62,3 +62,40 @@ func TestUploadChunk_RetryAfterFailure_NoDuplicateRow(t *testing.T) {
 		Where("upload_id = ? AND chunk_index = ?", "u-retry", 0).Count(&rows).Error)
 	assert.Equal(t, int64(1), rows, "重传同索引不得新建第二行（修前会 ⇒ 计数虚高）")
 }
+
+// TestUploadChunk_TwoSessionsSameIndexCoexist 回归（2026-10-25 CI 真机冒烟实测）：
+//
+// 唯一索引若只挂在 `ChunkIndex` 单列上（gorm 的 `uniqueIndex:` 标签只加在一个
+// 字段 ⇒ 建的是**单列**索引），则**不同上传会话的同索引分片互相冲突**
+// ⇒ 「UNIQUE constraint failed: upload_chunks.chunk_index」
+// ⇒ 秒传/多会话上传链路整条挂掉（CI 冒烟 S13e 抓到）。
+//
+// ⇒ 断言：两个不同 upload_id 的同索引分片**必须共存**（复合索引的正确语义）。
+func TestUploadChunk_TwoSessionsSameIndexCoexist(t *testing.T) {
+	gormDB := newTestDB(t)
+	svc := NewService(gormDB)
+	ctx := context.Background()
+
+	for _, uid := range []string{"u-a", "u-b"} {
+		_, err := svc.InitiateUpload(ctx, &InitiateUploadReq{
+			UploadID: uid, TotalChunks: 2, FileName: "f.bin",
+		})
+		require.NoError(t, err)
+
+		// 两个会话都传 index 0
+		_, err = svc.UploadChunk(ctx, &UploadChunkReq{
+			UploadID:   uid,
+			ChunkIndex: 0,
+			ChunkHash:  "hash-" + uid,
+			ChunkSize:  10,
+		})
+		require.NoError(t, err, "会话 %s 的 index 0 上传应成功", uid)
+	}
+
+	// 两行都在（各自的会话内 index 0）
+	var rows int64
+	require.NoError(t, gormDB.Model(&model.UploadChunk{}).
+		Where("chunk_index = ? AND chunk_index >= 0", 0).Count(&rows).Error)
+	assert.Equal(t, int64(2), rows,
+		"不同上传会话的同索引分片必须共存（单列唯一索引会误杀 ⇒ CI 冒烟 S13e 抓过）")
+}
