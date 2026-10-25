@@ -95,8 +95,11 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		"adminPath": config.UI.AdminPathOrDefault(),
 		// 直传设置下发（前端通道决策）：匿名 presign 直传开关 + 直传阈值(MB)。
 		// 管理后台持久化段优先，无记录回退全局 conf（缺省=开启/100MB）
-		"presignPolicy":      effectiveDownload.PresignPolicyOrDefault(),
-		"presignEnabled":     effectiveDownload.PresignPolicyOrDefault() != conf.PresignPolicyDisabled,
+		"presignPolicy": effectiveDownload.PresignPolicyOrDefault(),
+		// ⚠️ 不再下发 presignEnabled（2026-10-25 删除旧版本兼容）：它是 presignPolicy
+		// 的**派生布尔**，只为还不认识 presignPolicy 的旧前端存在 ⇒ 同一事实两个字段
+		// 迟早会漂移（前端拿旧的派生值、后端按新策略放行）。前端已改为只读
+		// presignPolicy（缺字段即 fail-closed）。
 		"presignThresholdMb": effectiveDownload.PresignThresholdMBOrDefault(),
 		// 分享码/口令查询大小写折叠（download.code_case_insensitive，缺省=开）：
 		// 前端首页提示联动（"大小写不限"/"区分大小写"）
