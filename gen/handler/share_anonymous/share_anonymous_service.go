@@ -252,8 +252,8 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 		downloadURL += "&token=" + tk
 	}
 	data := &anonmodel.RetrieveData{
-		FileName:    meta.FileName,
-		FileSize:    meta.FileSize,
+		FileName: meta.FileName,
+		FileSize: meta.FileSize,
 		// content_type：DB 无该列、其值恒为 application/octet-stream ⇒ 直接给常量
 		// （此前经 Redis「展示信息快照」透传，已删该快照，见 app/anonymous）
 		ContentType: "application/octet-stream",

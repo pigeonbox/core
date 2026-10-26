@@ -236,7 +236,8 @@ func (s *Service) resolveShareCodeFromDB(ctx context.Context, trimmed, mappingKe
 //
 // 2026-10-25：Redis 的「展示信息快照」(anon:meta:*) 已删 ⇒ 展示名/大小一律从 DB 现算：
 //
-//	· 文件分享：DisplayName()（UUIDFileName → 原始名(Text) → 路径末段）+ Size；
+//	· 文件分享：DisplayName()（原始名(Text) → 存储名(UUIDFileName) → 路径末段）+ Size；
+//	  （2026-10-26 订正：旧注释写的顺序与实现**相反**）
 //	· 文本分享：没有文件名 ⇒ 展示名取**文本预览**、大小取**文本字节数**
 //	  （与铸造取件码时的口径一致 ⇒ 取件页显示与铸造时相同）。
 func enrichMetaFromDB(meta *CodeMeta, fc *model.FileCode) {
@@ -520,8 +521,15 @@ func (s *Service) ResolvePlaceholder(ctx context.Context, pickupCode string) (st
 // BindFilePath 把直传完成的对象回填到占位分享（匿名取件码直传通道的最后一公里）。
 // 以实际落盘对象为准更新 file_path 与 size；完成标记由调用方（presign Complete）保证。
 // note 非空时一并写入（先出码会话随 init 携带的文件备注）。
-// 占位记录自带 UUIDFileName（generate 的展示名），不清掉会被 GetFilePath()
-// 拼成 objectKey/文件名 的双重路径——直传对象 key 本身就是完整相对路径。
+//
+// ⚠️ 2026-10-26 审计修复：**原始文件名曾被永久丢弃**。
+// 占位记录把 generate 时的**原始名**寄存在 `uuid_file_name`（因为占位期
+// file_path 为空 ⇒ 不能写 text：text 非空会让 IsTextShare() 把「待上传的
+// 文件分享」误判成**文本分享**）；而绑定时又把 uuid_file_name 清空 ⇒
+// 原始名彻底消失 ⇒ 展示名退化成存储名（up_<uuid>.pdf）——取件页/管理台/
+// 用户列表/MCP/传输日志**全部**显示 UUID。
+// ⇒ 绑定时把原始名**转写进 text**（此时 file_path 已非空 ⇒ 不再误判文本分享），
+// `uuid_file_name` 回归本义（存储名 = 路径末段），一列只担一种语义。
 func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, size int64, note string) error {
 	fc, err := s.fileCodeRepo.GetByCode(ctx, shareCode)
 	if err != nil || fc == nil {
@@ -529,13 +537,31 @@ func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, 
 	}
 	cols := map[string]interface{}{
 		"file_path":      filePath,
-		"uuid_file_name": "",
+		"uuid_file_name": storageBaseName(filePath),
 		"size":           size,
+	}
+	// 原始名转写进 text（占位期寄存在 uuid_file_name；text 为空才写，避免覆盖）
+	if strings.TrimSpace(fc.Text) == "" {
+		if original := strings.TrimSpace(fc.UUIDFileName); original != "" {
+			cols["text"] = original
+		}
 	}
 	if note != "" {
 		cols["note"] = note
 	}
 	return s.fileCodeRepo.UpdateColumns(ctx, fc.ID, cols)
+}
+
+// storageBaseName 取存储相对路径的末段（存储名；无路径时返回空串）。
+func storageBaseName(rel string) string {
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return ""
+	}
+	if i := strings.LastIndex(rel, "/"); i >= 0 {
+		return rel[i+1:]
+	}
+	return rel
 }
 
 // randomShareCode 8 位 file_code（crypto/rand，小写字母+数字）

@@ -65,7 +65,11 @@ func (r *FileCodeRepository) ResolveByCode(ctx context.Context, code string, fol
 		return fc, nil
 	}
 	if foldEnabled {
-		if fc2, err2 := r.GetByCodeFolded(ctx, code); err2 == nil && fc2 != nil {
+		// ⚠️ 2026-10-26 审计修复：原实现这里传的是**未 trim** 的 `code`
+		// ⇒ 带首尾空白的输入（" abc12345 "）在精确分支能命中（用 trimmed）、
+		// 在折叠分支却永远匹配不上 ⇒ 同一输入两条路径结论相反，与本函数注释
+		// 自述的「用 trim 后的串（与取件码分支同口径）」相反。
+		if fc2, err2 := r.GetByCodeFolded(ctx, trimmed); err2 == nil && fc2 != nil {
 			return fc2, nil
 		}
 	}

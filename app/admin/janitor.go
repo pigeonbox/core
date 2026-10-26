@@ -254,6 +254,17 @@ func (j *Janitor) CleanupStaleUploads(ctx context.Context, maxAge time.Duration)
 	if _, err := repo.DeleteStaleSessions(ctx, 7*24*time.Hour, true); err != nil {
 		return dirsRemoved, err
 	}
+	// 软删的会话行**硬清理**（30 天）——否则 upload_chunks 表只增不减：
+	// DeleteStaleSessions 是软删（会话复活语义需要，见 dao/chunk.go 的
+	// GetByUploadIDUnscoped/ReviveSession）⇒ 长期累积的软删行会把表撑大。
+	// ⚠️ 窗口取 30 天：软删行在窗口内**仍占用 (upload_id, chunk_index) 唯一键**
+	// ⇒ 复活路径正是靠这一点把「同文件重传」接回来；硬清理后该键释放，
+	// 新建路径也能走通（两条路径互补）。
+	if purged, err := repo.PurgeSoftDeletedChunks(ctx, 30*24*time.Hour); err != nil {
+		logger.Warn("purged soft-deleted chunk rows failed", zap.Error(err))
+	} else if purged > 0 {
+		logger.Info("purged soft-deleted chunk rows", zap.Int64("rows", purged))
+	}
 	if len(stale) > 0 {
 		logger.Info("stale chunk sessions cleaned",
 			zap.Int("sessions", len(stale)), zap.Int("dirs_removed", dirsRemoved))
@@ -318,7 +329,10 @@ func (j *Janitor) ScanRemotePresignOrphans(ctx context.Context, olderThan time.D
 		return nil, err
 	}
 
-	// 引用集：file_codes.file_path（含软删行——与 ReconcileOrphans 同口径）。
+	// 引用集：file_codes.file_path + **file_code_files.file_path**（均含软删行
+	// ——与 ReconcileOrphans 同口径）。
+	// ⚠️ 2026-10-26 审计修复：原实现**只**收主表 ⇒ 多文件分享中「非首个文件」
+	// （只存在于子表）被当孤儿**删掉** ⇒ 仍在被引用的活对象数据丢失。
 	// presign 孤儿 key 的 basename 恒为 up_<uuid>.<ext>，不可能出现在合法引用里
 	//（uuid v4 字符集不含 u/p），故 up_ 前缀+无引用 即可判定孤儿。
 	referenced := make(map[string]bool)
@@ -328,6 +342,16 @@ func (j *Janitor) ScanRemotePresignOrphans(ctx context.Context, olderThan time.D
 	}
 	for _, r := range rows {
 		if p := r.GetFilePath(); p != "" {
+			referenced[filepath.ToSlash(filepath.Clean(p))] = true
+		}
+	}
+	// 子表路径（多文件分享的非首文件只在这里）
+	childPaths, cerr := j.fileFileRepo.ListAllPathsIncludingDeleted(ctx)
+	if cerr != nil {
+		return nil, cerr
+	}
+	for _, p := range childPaths {
+		if p != "" {
 			referenced[filepath.ToSlash(filepath.Clean(p))] = true
 		}
 	}

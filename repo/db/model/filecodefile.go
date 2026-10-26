@@ -9,10 +9,13 @@ import (
 
 // FileCodeFile 多文件分享的子文件行（P0 多文件：1 个 FileCode 分享 ↔ N 个文件）。
 //
-// 兼容策略：FileCode 主表保留首个文件的 legacy 字段（FilePath/UUIDFileName/Size/
-// FileHash），旧单文件分享零迁移可用；新分享（含单文件）每文件写一行，
-// 主表 Size 为各文件之和。子行 FilePath 存储相对路径（已含唯一文件名），
-// 与 FileCode.GetFilePath() 的"目录+UUID 文件名"新格式不同——子行不做旧格式兼容。
+// 与主表的分工（2026-10-26 订正：旧注释说的是已退役的「目录+UUID 文件名」
+// 双形态——该形态已统一为「完整相对路径」）：
+//
+//	· 主表保留首个文件的字段（FilePath/UUIDFileName/Size/FileHash），
+//	  供管理端列表/秒传/统计读取；主表 Size = 各文件之和。
+//	· **子表是文件清单的唯一真相源**（取件页展示/逐个下载/zip 打包都读它），
+//	  每文件一行，FilePath 同样是「含唯一文件名的完整相对路径」。
 type FileCodeFile struct {
 	gorm.Model
 	FileCodeID   uint   `gorm:"index;not null" json:"file_code_id"`

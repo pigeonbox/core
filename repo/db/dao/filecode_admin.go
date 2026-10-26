@@ -4,6 +4,7 @@ package dao
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/pigeonbox/core/repo/db/model"
@@ -54,19 +55,75 @@ type SuffixStat struct {
 }
 
 // TopSuffixes 上传文件后缀 TOP N（Dashboard 文件类型分布）
+//
+// ⚠️ 2026-10-26 修复：原实现是 `SELECT suffix, COUNT(*) … GROUP BY suffix`
+// ——查的是**已退役的 suffix 列** ⇒ ①该列本就恒空（widget 早就是死的）
+// ②退役后变成「SQL 报错被上层 `_` 吞掉」⇒ 恒空**且零日志**。
+// ⇒ 改为从**现役列**现算扩展名：原始文件名在 `text`（直传/分片/预签名/本地导入
+// 四个通道都写），缺原始名时回退 `file_path` 的末段。
+//
+// 为什么在 Go 侧聚合扩展名：扩展名是「最后一个点之后」——SQLite 无 reverse()，
+// MySQL/Postgres 各有各的写法（SUBSTRING_INDEX / SPLIT_PART+REVERSE）
+// ⇒ 跨方言写 SQL 会带来「只在某个后端炸」的隐性风险（而 CI 只跑 SQLite）。
+// 这里用两条**分组查询**（GROUP BY 名字/路径）把传输量压到「不同名」量级，
+// 再在 Go 侧按扩展名合并。
 func (r *FileCodeRepository) TopSuffixes(ctx context.Context, limit int) ([]*SuffixStat, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 10
 	}
-	var rows []*SuffixStat
-	err := r.db().WithContext(ctx).Model(&model.FileCode{}).
-		Select("suffix, COUNT(*) AS count").
-		Where("suffix <> ''").
-		Group("suffix").
-		Order("count DESC").
-		Limit(limit).
-		Scan(&rows).Error
-	return rows, err
+	agg := map[string]int64{}
+
+	// ① 有原始名的文件分享：按原始名分组
+	var named []struct {
+		Name  string
+		Count int64
+	}
+	if err := r.db().WithContext(ctx).Model(&model.FileCode{}).
+		Select("text AS name, COUNT(*) AS count").
+		Where("file_path <> '' AND text <> ''").
+		Group("text").
+		Scan(&named).Error; err != nil {
+		return nil, err
+	}
+	for _, n := range named {
+		if ext := model.FileExtension(n.Name); ext != "" {
+			agg[ext] += n.Count
+		}
+	}
+
+	// ② 无原始名的（部分通道不写 text）：按存储路径分组，再取末段
+	var pathed []struct {
+		Path  string
+		Count int64
+	}
+	if err := r.db().WithContext(ctx).Model(&model.FileCode{}).
+		Select("file_path AS path, COUNT(*) AS count").
+		Where("file_path <> '' AND (text IS NULL OR text = '')").
+		Group("file_path").
+		Scan(&pathed).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range pathed {
+		if ext := model.FileExtension(p.Path); ext != "" {
+			agg[ext] += p.Count
+		}
+	}
+
+	rows := make([]*SuffixStat, 0, len(agg))
+	for ext, c := range agg {
+		rows = append(rows, &SuffixStat{Suffix: ext, Count: c})
+	}
+	// 计数降序；同数按扩展名字典序 ⇒ 结果稳定（可测）
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Count != rows[j].Count {
+			return rows[i].Count > rows[j].Count
+		}
+		return rows[i].Suffix < rows[j].Suffix
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows, nil
 }
 
 // CountCreatedBetween 统计 [from, to) 创建数（昨日对比等）

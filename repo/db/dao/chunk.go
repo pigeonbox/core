@@ -196,7 +196,13 @@ func (r *ChunkRepository) DeleteStaleSessions(ctx context.Context, maxAge time.D
 	for _, c := range controls {
 		ids = append(ids, c.UploadID)
 	}
-	res := r.db().WithContext(ctx).Where("upload_id IN ?", ids).Delete(&model.UploadChunk{})
+	// 空 ids 直接返回：GORM 对「空 IN 列表 + Delete」的组合会抛
+	// 「unsupported data type: Table not set」⇒ 清理器把错误当失败上抛。
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	res := r.db().WithContext(ctx).Model(&model.UploadChunk{}).
+		Where("upload_id IN ?", ids).Delete(&model.UploadChunk{})
 	return res.RowsAffected, res.Error
 }
 
@@ -229,6 +235,27 @@ func (r *ChunkRepository) ListChunksUnscoped(ctx context.Context, uploadID strin
 		Where("upload_id = ? AND chunk_index >= 0", uploadID).
 		Order("chunk_index ASC").Find(&rows).Error
 	return rows, err
+}
+
+// PurgeSoftDeletedChunks **硬删除**软删超过 maxAge 的会话行（控制行 + 分片行）。
+//
+// 为什么需要（2026-10-26）：DeleteStaleSessions 对会话行是**软删**（软删语义被
+// 「会话复活」依赖：同 upload_id 重来时要能查到旧行并复活）⇒ upload_chunks 表
+// **只增不减** ⇒ 长期运行后软删行堆积、把表撑大。
+//
+// 窗口取 30 天：软删行在窗口内仍**占用 (upload_id, chunk_index) 唯一键** ⇒ 复活
+// 路径正是靠这一点把「同一文件重传」接回来；硬清理后键释放，新建路径也能走通
+// （复活与新建两条路径互补）。
+func (r *ChunkRepository) PurgeSoftDeletedChunks(ctx context.Context, maxAge time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-maxAge)
+	// 硬删除（Unscoped）：**必须带 Model()** —— 只给 Dest 值时 GORM 解析不到表
+	// ⇒ 抛「unsupported data type: Table not set」；而 janitor 侧只 Warn
+	// ⇒ 硬清理会**静默从未执行**（2026-10-26 由单测逮住）。
+	res := r.db().WithContext(ctx).Unscoped().
+		Model(&model.UploadChunk{}).
+		Where("deleted_at IS NOT NULL AND deleted_at < ?", cutoff).
+		Delete(&model.UploadChunk{})
+	return res.RowsAffected, res.Error
 }
 
 func (r *ChunkRepository) GetUploadedChunkIndexes(ctx context.Context, uploadID string) ([]int, error) {

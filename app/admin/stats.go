@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/timex"
+	"go.uber.org/zap"
+
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -127,7 +130,13 @@ func (s *Service) EnhancedStats(ctx context.Context) (*EnhancedStats, error) {
 	presignFiles, _ := s.fileCodeRepo.CountByUploadType(ctx, "presign_anonymous")
 	presignAuthFiles, _ := s.fileCodeRepo.CountByUploadType(ctx, "presign_authenticated")
 	stats.PresignFiles = presignFiles + presignAuthFiles
-	stats.TopSuffixes, _ = s.fileCodeRepo.TopSuffixes(ctx, 10)
+	// ⚠️ 2026-10-26：此处曾把错误吞掉（`_`）⇒ 「文件类型分布」恒为空且**零日志**
+	// （退役 suffix 列后 SQL 直接报错，没人知道）。⇒ 失败要记日志。
+	topSuffixes, err := s.fileCodeRepo.TopSuffixes(ctx, 10)
+	if err != nil {
+		logger.CtxWarn(ctx, "top suffixes stat failed", zap.Error(err))
+	}
+	stats.TopSuffixes = topSuffixes
 	stats.StorageUsed, _ = s.fileCodeRepo.GetTotalSize(ctx)
 	if cfg := conf.GetGlobalConfig(); cfg != nil {
 		stats.StorageQuota = cfg.Storage.Quota

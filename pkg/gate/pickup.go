@@ -46,7 +46,13 @@ func PickupLockedRemain(ctx context.Context, clientIP, code string) (int, bool) 
 // PickupState 取件目标分享的状态快照（域侧从 model.FileCode 映射；
 // Blocked 由 IsBlockedShare() 判定，BlockedStatus 仅用于错误映射透传）。
 type PickupState struct {
-	Expired       bool   // 时间或次数已耗尽
+	// Expired **只表示时间过期**（次数耗尽在交付面单独判定）。
+	// ⚠️ 2026-10-26 审计订正：旧注释写「时间或次数已耗尽」⇒ 会让人照着把
+	// 次数语义**合流回这个闸门** ⇒ 刚修好的 20004「超过取件次数」/
+	// 20007「取件码已用完」会被压回 404「不存在/已过期」（2026-10-24 那轮
+	// 踩过的坑）。⇒ 次数耗尽由 model.IsCountExhausted() 判定，并在**交付面**
+	// 返回独立错误码，**不在本闸门判**。
+	Expired       bool   // 时间过期（不含次数耗尽）
 	Blocked       bool   // 管控拒绝态（禁用/待审核）
 	BlockedStatus string // 原始状态串（blocked/pending_review），Blocked=true 时有效
 	NotReady      bool   // 登记占位未回填物理文件（匿名取件通道语义）

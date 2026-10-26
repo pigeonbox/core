@@ -46,8 +46,20 @@ func (s *Service) PurgeFiles(ctx context.Context, ids []uint) (int64, error) {
 			continue
 		}
 		// 秒传共享对象保护（2026-10-12）：删前查引用，被其他分享共享时保留物理文件
+		//
+		// ⚠️ 2026-10-26 审计修复：原实现只删**主表那一个**对象 ⇒ 多文件分享的
+		// 非首个文件（只在 file_code_files 子表里）在硬删 DB 行后**彻底失去引用**
+		// ⇒ 本地 24h 后被对账清，远端**永久残留**。⇒ 遍历子行逐个删
+		// （与 BatchDeleteFiles 同口径）。
 		if fp := file.GetFilePath(); fp != "" {
 			s.deletePhysicalIfUnreferenced(ctx, fp, id)
+		}
+		if children, cerr := s.fileFileRepo.ListByFileCodeID(ctx, id); cerr == nil {
+			for _, c := range children {
+				if c.FilePath != "" {
+					s.deletePhysicalIfUnreferenced(ctx, c.FilePath, id)
+				}
+			}
 		}
 		if _, err := s.fileCodeRepo.HardDeleteByIDs(ctx, []uint{id}); err != nil {
 			logger.CtxWarn(ctx, "purge db row failed", "id", id, "err", err)
@@ -144,7 +156,11 @@ func (s *Service) GetFileByID(ctx context.Context, id uint) (*model.FileCode, er
 	return s.fileCodeRepo.GetByID(ctx, id)
 }
 
-// GetFileDetail 文件详情：主记录 + 子文件行（旧单文件分享无子行由调用方回退主表合成）。
+// GetFileDetail 文件详情：主记录 + 子文件行。
+// （2026-10-26 订正：旧注释说「旧单文件分享无子行由调用方回退主表合成」——
+//
+//	虚拟行已退役、**没有**这条回退路径；子表是文件清单的唯一真相源，
+//	存量无子行的分享由启动期数据迁移补齐。）
 func (s *Service) GetFileDetail(ctx context.Context, id uint) (*model.FileCode, []*model.FileCodeFile, error) {
 	fc, err := s.fileCodeRepo.GetByID(ctx, id)
 	if err != nil {

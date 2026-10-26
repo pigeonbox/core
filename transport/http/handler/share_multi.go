@@ -519,15 +519,24 @@ func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.
 	}
 
 	// 哈希 + 魔数 + 大小复核（与 chunk Complete 一致）
+	//
+	// ⚠️ 2026-10-26 审计修复：原实现读失败时**静默继续**（actualSize/head 留 0/nil）
+	// ⇒ ①整块「大小复核」被跳过（max_file_size 上限 + 合并后大小 vs 申报大小）
+	// ②魔数复核被跳过 ③返回的 Size=0 ⇒ 分享以 Size=0 建出 ⇒ **存储统计与配额
+	// 计费为 0**。⇒ 读失败即报错（并清掉合并产物），不要用 0 静默继续。
 	fileHash := ""
 	var actualSize int64
 	var head []byte
-	if rc, fsize, rerr := st.GetFileReader(ctx, rel); rerr == nil {
-		actualSize = fsize
-		head = readHead512(rc)
-		fileHash, _ = utils.HashReader(io.MultiReader(bytes.NewReader(head), rc))
-		_ = rc.Close()
+	rc, fsize, rerr := st.GetFileReader(ctx, rel)
+	if rerr != nil {
+		_ = st.DeleteFile(ctx, rel)
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "读取合并结果失败: " + rerr.Error()})
+		return nil, "", false
 	}
+	actualSize = fsize
+	head = readHead512(rc)
+	fileHash, _ = utils.HashReader(io.MultiReader(bytes.NewReader(head), rc))
+	_ = rc.Close()
 	if !encrypted && head != nil {
 		if err := utils.CheckUploadContent(info.FileName, head); err != nil {
 			_ = st.DeleteFile(ctx, rel)

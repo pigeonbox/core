@@ -18,12 +18,15 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/pkg/convert"
 	"github.com/oekit/pkg/ptrx"
+	"go.uber.org/zap"
+
 	"github.com/pigeonbox/contracts/errcode"
 	sharemodel "github.com/pigeonbox/contracts/gen/share"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
+	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/security"
@@ -845,10 +848,19 @@ func chargePickup(ctx context.Context, c *app.RequestContext, code, fingerprint,
 	}
 	charged, exhausted, err := getShareService().ChargePickup(ctx, code, fingerprint, channel, viewerIP)
 	if err != nil {
-		// 计次失败不阻断交付（与旧口径一致：记录错误但放行）——
-		// DB 抖动不该让整个取件不可用。
-		fmt.Printf("取件计次失败: %v\n", err)
-		return true
+		// ⚠️ 2026-10-26 审计修复：原实现**计次失败也放行**（fmt.Printf 记到 stdout
+		// 就 return true）⇒ 三个后果：① owner 设的「最多取 N 次」在故障期形同虚设
+		// （可无限取）；② 本次取件**不写** pickup_charges ⇒ owner 取件历史漏明细；
+		// ③ 错误只进 stdout、**不进 zap 结构化日志** ⇒ 无告警。
+		// ⇒ 改为 **fail-closed**：计次是「最多 N 次」承诺的兑现点，未计次就不发内容
+		// （与本项目「宁可误禁也不可静默放行」的口径一致），并改用结构化日志。
+		logger.CtxError(ctx, "pickup charge failed, delivery denied",
+			zap.Error(err), zap.String("code", code), zap.String("channel", channel))
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
+			"code":    errcode.CodeInternal,
+			"message": "取件计次失败，请稍后重试",
+		})
+		return false
 	}
 	if exhausted {
 		// 20004「超过取件次数」（保留码位，此前未发射；前端 i18n 已备该文案）

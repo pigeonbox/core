@@ -671,7 +671,11 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 		return nil, err
 	}
 
-	// 子表同步写一行（P0 多文件：新旧分享统一经子表读取；失败仅降级为主表读取，不阻断）
+	// 子表同步写一行（P0 多文件：子表是文件清单的**唯一真相源**）
+	// ⚠️ 2026-10-26 审计修复：原实现写失败只 Warn「降级为主表读取」——但**虚拟行
+	// 已退役**（主表回退路径不存在）⇒ 分享已发布却**没有子行** ⇒ 取件页文件列表
+	// 为空、管理台子文件数 0（下载仍走主表单文件分支 ⇒「看起来能用」⇒ 极难发现）。
+	// ⇒ 子行写失败 ⇒ **回滚分享**（与多文件通道同策略），不留半截状态。
 	if fc := fileCode; fc != nil {
 		if rel := fc.GetFilePath(); rel != "" {
 			child := &model.FileCodeFile{
@@ -683,8 +687,13 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 				FileHash:     req.FileHash,
 			}
 			if err := s.fileFileRepo.CreateBatch(ctx, []*model.FileCodeFile{child}); err != nil {
-				logger.CtxWarn(ctx, "write child file row failed (fallback to legacy fields)",
+				logger.CtxError(ctx, "write child file row failed, rolling back share",
 					"code", fc.Code, "err", err)
+				if derr := s.fileCodeRepo.Delete(ctx, fc.ID); derr != nil {
+					logger.CtxError(ctx, "rollback share after child row failure failed",
+						"code", fc.Code, "err", derr)
+				}
+				return nil, fmt.Errorf("写文件清单失败: %w", err)
 			}
 		}
 	}

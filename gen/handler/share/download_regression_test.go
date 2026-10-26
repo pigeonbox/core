@@ -76,7 +76,11 @@ func newDownloadTestEnv(t *testing.T) *gorm.DB {
 			t.Logf("DB 临时目录删除失败，残留内容: %v", names)
 		}
 	})
-	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.TransferLog{}))
+	// ⚠️ 2026-10-26：计次表必须一并 migrate —— 计次失败已改 **fail-closed**
+	// （未计次不发内容）⇒ 夹具缺 pickup_charges 表时，下载面会正确地拒发
+	// （此前被「计次失败也放行」的 fail-open 掩盖 ⇒ 夹具缺陷一直隐身）。
+	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.FileCodeFile{},
+		&model.TransferLog{}, &model.PickupCharge{}))
 	transfer.SetSink(daoTransferLogSink{gormDB: g})
 
 	dataPath := t.TempDir()

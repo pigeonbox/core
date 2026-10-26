@@ -7,12 +7,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/utils"
 )
 
@@ -81,10 +81,8 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 		fileHash, _ = utils.HashReader(rc)
 		_ = rc.Close()
 	}
-	_ = io.Discard
-
 	channel := "local_import"
-	return s.CreateShare(ctx, &ShareFileReq{
+	share, serr := s.CreateShare(ctx, &ShareFileReq{
 		Channel:      channel,
 		FilePath:     rel,
 		Size:         written,
@@ -99,6 +97,18 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 		FileHash:     fileHash,
 		CustomCode:   opts.CustomCode,
 	})
+	if serr != nil {
+		// ⚠️ 2026-10-26 审计修复：建分享失败（配额满/审核 reject/自定义码冲突）时
+		// **已落盘的副本没有 DB 引用** ⇒ 本地后端 24h 后被对账清掉，但**远端后端
+		// 永不被回收**（ReconcileOrphans 跳过远端，presign 孤儿扫描只认 up_ 前缀
+		// ⇒ 本地导入用的是 UUID 名）⇒ 永久占空间。⇒ 失败即删副本。
+		if derr := s.storage.DeleteFile(ctx, rel); derr != nil {
+			logger.CtxWarn(ctx, "delete orphaned local-import copy failed",
+				"rel", rel, "err", derr)
+		}
+		return nil, serr
+	}
+	return share, nil
 }
 
 // withinRoots 路径是否落在任一白名单目录内（含目录本身；均已 EvalSymlinks 化）
