@@ -163,6 +163,46 @@ func (s *Service) InitiateUpload(ctx context.Context, req *InitiateUploadReq) (*
 		return nil, ErrSessionConflict
 	}
 
+	// 旧会话已被清理（软删）后的同一 upload_id 重来 ⇒ **复活**而不是新建。
+	//
+	// 事故实录（2026-10-26 真机冒烟 S11c/S11d 假红→真缺陷）：upload_id 由
+	// file_hash 派生（客户端不带 upload_id 时服务端拿哈希当会话键）⇒ 同一文件
+	// 重传会复用同一 upload_id；会话清理（DeleteStaleSessions）对控制行是
+	// **软删** ⇒ 上面 GetByUploadID（默认排除软删行）查不到 ⇒ 走「新建」⇒
+	// 撞 (upload_id, chunk_index) 唯一索引（迁移 000006 的索引**不区分软删行**）
+	// ⇒ init 直接 10008「初始化上传失败」⇒ **同一文件在清理窗口过后必然无法
+	// 分片上传**（真机 6 个软删控制行 = 6 个「死」文件）。
+	//
+	// 修法：查到软删的控制行 ⇒ 归属校验同 live 分支 ⇒ 复活它（进度归零 ⇒
+	// 客户端重传分片，避免复用已被回收的分片文件）。
+	if stale, serr := s.chunkRepo.GetByUploadIDUnscoped(ctx, req.UploadID); serr == nil && stale != nil {
+		if !chunkSessionOwnedBy(stale, req.OwnerIP, req.UserID, req.SessionToken) &&
+			s.sessionHasChunks(ctx, stale.UploadID) {
+			return nil, ErrSessionConflict
+		}
+		if err := s.chunkRepo.ReviveSession(ctx, req.UploadID); err != nil {
+			return nil, err
+		}
+		revived, rerr := s.chunkRepo.GetByUploadID(ctx, req.UploadID)
+		if rerr != nil {
+			return nil, rerr
+		}
+		// 归属可能随会话一起被软删重置 ⇒ 复活后按本次请求更新（沿用 live 分支口径）
+		if req.OwnerIP != "" && revived.OwnerIP != req.OwnerIP {
+			updates := map[string]interface{}{"owner_ip": req.OwnerIP}
+			if req.UserID != nil {
+				updates["user_id"] = *req.UserID
+			}
+			if err := s.chunkRepo.UpdateOwner(ctx, revived.UploadID, updates); err == nil {
+				revived.OwnerIP = req.OwnerIP
+				if req.UserID != nil {
+					revived.UserID = req.UserID
+				}
+			}
+		}
+		return controlToResp(revived), nil
+	}
+
 	// 创建控制记录（chunk_index = -1）
 	// ChunkHash 记录客户端提供的整文件哈希（秒传检索用；分片哈希存各分片记录）
 	chunk := &model.UploadChunk{

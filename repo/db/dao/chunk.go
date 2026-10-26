@@ -43,6 +43,65 @@ func (r *ChunkRepository) GetByUploadID(ctx context.Context, uploadID string) (*
 	return &chunk, nil
 }
 
+// GetByUploadIDUnscoped 查**含软删**的控制行（chunk_index=-1）。
+//
+// 用途（2026-10-26 实录修复）：upload_id 由 file_hash 派生（客户端不带
+// upload_id 时服务端用哈希当会话键）⇒ **同一文件重传会复用同一 upload_id**；
+// 而会话清理（DeleteStaleSessions）对控制行做的是**软删** ⇒ 默认作用域的
+// GetByUploadID 查不到 ⇒ init 若走「新建」会撞 (upload_id, chunk_index) 唯一索引
+// （迁移 000006 的索引**不区分软删行**）⇒ 直接 10008「初始化上传失败」。
+// ⇒ 需要能查到软删行并**复活**它（见 ReviveSession）。
+func (r *ChunkRepository) GetByUploadIDUnscoped(ctx context.Context, uploadID string) (*model.UploadChunk, error) {
+	var chunk model.UploadChunk
+	err := r.db().WithContext(ctx).Unscoped().
+		Where("upload_id = ? AND chunk_index = -1", uploadID).
+		Order("deleted_at DESC, id DESC").First(&chunk).Error
+	if err != nil {
+		return nil, err
+	}
+	return &chunk, nil
+}
+
+// ReviveSession 复活被软删的会话：**控制行 + 分片行**一起复活，但
+// 分片行的完成标记**置回未完成**。
+//
+// 为什么要一起复活分片行：分片写入走 UpsertChunk（UPDATE ... WHERE
+// upload_id=? AND chunk_index=?）⇒ 默认作用域**排除软删行** ⇒ 只复活控制行的话，
+// 分片行仍是软删态 ⇒ 上传分片「更新不到任何行」⇒ 分片永远记不上 ⇒
+// Complete 合并失败（分片数不足）。
+//
+// 为什么要把分片行的 completed 置回 false：清理窗口过后磁盘上的分片文件可能已被
+// 回收 ⇒ 若仍按旧进度宣称「已传 N 片」⇒ 客户端跳过重传 ⇒ Complete 时找不到分片
+// 文件 ⇒ 合并失败。置回未完成后客户端会重传，语义与新会话一致。
+//
+// 幂等：行不存在时不影响其它行（UPDATE 命中 0 行不报错）。
+func (r *ChunkRepository) ReviveSession(ctx context.Context, uploadID string) error {
+	// ⚠️ 两条 UPDATE 必须各自**新建语句**：复用同一个 tx 会让 gorm 把前一条的
+	// WHERE 累加进后一条 ⇒ 变成 `(chunk_index = -1) AND (chunk_index >= 0)`
+	// ⇒ 永远命中 0 行（实测踩过：控制行复活了、分片行没复活 ⇒ 分片记不上）。
+	// ⚠️ deleted_at 用 gorm.Expr("NULL") 显式落库：Updates(map) 里的 nil 值
+	// 会被 gorm 跳过（实测：行仍是软删态 ⇒ 复活静默失败）。
+	if err := r.db().WithContext(ctx).Unscoped().
+		Model(&model.UploadChunk{}).
+		Where("upload_id = ? AND chunk_index = -1", uploadID).
+		Updates(map[string]interface{}{
+			"deleted_at":  gorm.Expr("NULL"),
+			"status":      "pending",
+			"completed":   false,
+			"retry_count": 0,
+		}).Error; err != nil {
+		return err
+	}
+	return r.db().WithContext(ctx).Unscoped().
+		Model(&model.UploadChunk{}).
+		Where("upload_id = ? AND chunk_index >= 0", uploadID).
+		Updates(map[string]interface{}{
+			"deleted_at": gorm.Expr("NULL"),
+			"status":     "pending",
+			"completed":  false,
+		}).Error
+}
+
 func (r *ChunkRepository) GetChunkByIndex(ctx context.Context, uploadID string, chunkIndex int) (*model.UploadChunk, error) {
 	var chunk model.UploadChunk
 	err := r.db().WithContext(ctx).Where("upload_id = ? AND chunk_index = ? AND completed = true", uploadID, chunkIndex).First(&chunk).Error
@@ -160,6 +219,16 @@ func (r *ChunkRepository) DeleteChunksByUploadIDs(ctx context.Context, uploadIDs
 		count++
 	}
 	return count, nil
+}
+
+// ListChunksUnscoped 列出某会话的**全部**分片行（含软删）。
+// 运维/诊断用：核对复活后的会话里分片行的真实状态（活/软删/完成标记）。
+func (r *ChunkRepository) ListChunksUnscoped(ctx context.Context, uploadID string) ([]*model.UploadChunk, error) {
+	var rows []*model.UploadChunk
+	err := r.db().WithContext(ctx).Unscoped().
+		Where("upload_id = ? AND chunk_index >= 0", uploadID).
+		Order("chunk_index ASC").Find(&rows).Error
+	return rows, err
 }
 
 func (r *ChunkRepository) GetUploadedChunkIndexes(ctx context.Context, uploadID string) ([]int, error) {
