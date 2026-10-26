@@ -21,13 +21,10 @@ import (
 	mcpApp "github.com/pigeonbox/core/app/mcp"
 	oidcApp "github.com/pigeonbox/core/app/oidc"
 	presignHandler "github.com/pigeonbox/core/gen/handler/presign"
-	userHandler "github.com/pigeonbox/core/gen/handler/user"
-	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/repo/db"
 	customHandler "github.com/pigeonbox/core/transport/http/handler"
-	customMw "github.com/pigeonbox/core/transport/http/middleware"
 )
 
 // customizedRegister 注册自定义路由（不走 thrift IDL 生成）。
@@ -49,41 +46,14 @@ func customizedRegister(r *server.Hertz) {
 		r.PUT("/api/v1/presign/upload-direct/:uploadID", presignHandler.UploadDirect)
 	}
 
-	// ===== token 刷新端点（前端 401 拦截器调用，换发新 token）=====
-	// 令牌来源：Bearer 头或会话 Cookie；轮换同时下发新 Cookie（2026-10-05
-	// 遗留修复：浏览器会话迁 HttpOnly Cookie）。Cookie 认证时须带 CSRF 头。
-	r.POST("/api/v1/user/refresh", func(ctx context.Context, c *app.RequestContext) {
-		oldToken, viaCookie := middleware.SessionToken(c)
-		if oldToken == "" {
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "missing token"})
-			return
-		}
-		if !middleware.CSRFAllowed(c, viaCookie) {
-			c.JSON(consts.StatusForbidden, map[string]interface{}{"code": errcode.CodeForbidden, "message": "缺少 CSRF 头"})
-			return
-		}
-		newToken, err := auth.RefreshToken(ctx, oldToken)
-		if err != nil {
-			middleware.ClearSessionCookie(c)
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "token invalid or expired"})
-			return
-		}
-		middleware.SetSessionCookie(c, newToken, int(auth.SessionExpiry().Seconds()))
-		c.JSON(consts.StatusOK, map[string]interface{}{
-			"code": 0, "message": "ok",
-			"data": map[string]string{"token": newToken},
-		})
-	})
-
 	// ===== 公开配置端点（前端 configStore 启动时拉取）=====
 	// 前端 publicApi.getConfig() 请求 /api/config 获取站点配置（名称、上传限制等），
 	// 此前端点缺失导致前端启动报 "获取配置失败: Network Error"。此处补齐。
 	r.GET("/api/config", publicConfigHandler)
 
-	// ===== P2P 联邦解析代理（M2；未启用时 handler 返回 available:false）=====（公开面）
-	if config.ServesPublicPlane() {
-		r.GET("/api/v1/federation/resolve", customHandler.FederationResolve)
-	}
+	// ===== P2P 联邦解析代理（M2；未启用时 handler 返回 available:false）=====
+	// 2026-10-26 IDL 化收编：路由改由 contracts IDL 生成（idl/publicapi.thrift
+	// ⇒ 只在公开副本注册，可见性与收敛前一致）。
 
 	// ===== robots.txt（对标上游 SEO 可配；输出 ui.robots_text）=====（公开面）
 	if config.ServesPublicPlane() {
@@ -96,10 +66,6 @@ func customizedRegister(r *server.Hertz) {
 			c.String(consts.StatusOK, content)
 		})
 	}
-
-	// ===== 站级公告（匿名公开端点；对标上游首页通知条）=====
-	// notify.Active 已过滤 target_user_id（仅全站公告）；前端 SiteNotice 组件消费
-	r.GET("/api/v1/notifies/public", customHandler.ListPublicNotifies)
 
 	// ===== MCP server（Model Context Protocol；AI 客户端集成，上游没有的差异化能力）=====
 	// Streamable HTTP 传输：POST /api/v1/mcp（协议层=官方 SDK
@@ -142,49 +108,20 @@ func customizedRegister(r *server.Hertz) {
 		r.DELETE("/api/v1/mcp", mcpHandler)
 	}
 
-	// ===== logout 端点（补齐基准 P1 缺口：显式注销 + token 黑名单）=====
-	// 令牌来源：Bearer 头或会话 Cookie；同时清除 Cookie。
-	r.POST("/api/v1/user/logout", func(ctx context.Context, c *app.RequestContext) {
-		token, _ := middleware.SessionToken(c)
-		if token == "" {
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "missing token"})
-			return
-		}
-		// 黑名单 TTL = token 剩余有效期（过期后自然失效，无需清理任务）
-		if claims, err := auth.ParseToken(token); err == nil {
-			remaining := time.Until(claims.ExpiresAt.Time)
-			auth.RevokeToken(ctx, token, remaining)
-		}
-		middleware.ClearSessionCookie(c)
-		c.JSON(consts.StatusOK, map[string]interface{}{"code": 0, "message": "已退出登录"})
-	})
-
-	// ===== 一键吊销全部 API Key（JWT-only：Key 不能管 Key；应急止损，见设计文档 §9.3）=====
-	// 治理规则（§9.1-10）：向 /user/api-keys 或 /api/v1 组新增路由前，必须评估该路由的 API Key 暴露面
-	r.POST("/user/api-keys/revoke-all", middleware.AuthMiddleware(), userHandler.RevokeAllAPIKeys)
-
-	// ===== 多文件分享（P0 多文件，手写路由）：直传 / chunk+presign 绑定 =====
-	// 可选身份（OptionalIdentity）：匿名可用，登录/带 Key 时注入 user_id 走配额与归属（公开面）
-	if config.ServesPublicPlane() {
-		multiShare := r.Group("/api/v1/share", middleware.OptionalIdentity()...)
-		{
-			multiShare.POST("/multi-direct", customHandler.MultiShareDirect)
-			multiShare.POST("/multi-bind", customHandler.MultiShareBind)
-		}
-
-		// ===== 取件元数据（对标上游 /share/metadata：查询不扣次数、不要密码）=====
-		r.GET("/share/metadata/:code", customHandler.ShareMetadata)
-	}
+	// ===== 多文件分享（P0 多文件）：2026-10-26 IDL 化收编 =====
+	// 路由改由 contracts IDL 生成（idl/publicapi.thrift ⇒ genpublicapi 组 ⇒
+	// 只在公开副本注册，可见性与收敛前一致）；可选身份（OptionalIdentity）
+	// 的鉴权接线在 gen/router/publicapi/middleware.go（手工保留区）。
 
 	// ===== 寄件码/反向收件（P2）：2026-10-09 IDL 化（idl/request.thrift）， =====
 	// 由 gen/router/request 注册（public/standalone 面；JWT 组 mw 手工区 +
 	// 访客公开投递），customHandler 手写注册摘除；访客投递重管道桥接保留在
 	// customHandler.GuestSubmitFiles（gen handler 委托），service 双注入见下方。
 
-	// ===== NAS 本地文件免上传导入（P3；upload.local_import.enabled 开关在 service 内校验）=====（公开面）
-	if config.ServesPublicPlane() {
-		r.POST("/api/v1/user/shares/import-local", middleware.UserOrAPIKey(), customHandler.UserImportLocal)
-	}
+	// ===== NAS 本地文件免上传导入（P3；upload.local_import.enabled 开关在 service 内校验）=====
+	// 2026-10-26 IDL 化收编：路由改由 contracts IDL 生成（idl/publicapi.thrift
+	// ⇒ 只在公开副本注册）；UserOrAPIKey 的鉴权接线在
+	// gen/router/publicapi/middleware.go（手工保留区）。
 
 	// ===== OIDC 单点登录（常注册+运行时门控：handler 按 Enabled() 响应，
 	// 管理端在线改 OIDC 段经 ReconfigureHooks 热重建 service，无需重启）=====
@@ -204,22 +141,6 @@ func customizedRegister(r *server.Hertz) {
 		r.GET("/api/v1/user/oidc/login", customHandler.OIDCLogin)
 		r.GET("/api/v1/user/oidc/callback", customHandler.OIDCCallback)
 	}
-
-	// ===== check-auth 端点（前端启动时校验 token 有效性并取回用户信息）=====
-	r.GET("/api/v1/user/check-auth", customMw.UserAuth(), func(ctx context.Context, c *app.RequestContext) {
-		uid, _ := c.Get("user_id")
-		username, _ := c.Get("username")
-		role, _ := c.Get("role")
-		c.JSON(consts.StatusOK, map[string]interface{}{
-			"code":    0,
-			"message": "ok",
-			"data": map[string]interface{}{
-				"id":       uid,
-				"username": username,
-				"role":     role,
-			},
-		})
-	})
 
 	// ===== 管理端增强面（用户 CRUD / 文件管理 / 富统计 / 传输日志 / 分享治理 /
 	// 用户配置 / 本地文件管理 / 设置测试端点 / 审计日志）——

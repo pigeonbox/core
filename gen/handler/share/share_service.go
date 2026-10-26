@@ -1254,3 +1254,9 @@ func UserSharesHardDelete(ctx context.Context, c *app.RequestContext) {
 	}
 	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{Code: 0, Message: "ok"})
 }
+
+// MultiShareDirect .
+// @router /api/v1/share/multi-direct [POST]
+
+// MultiShareBind .
+// @router /api/v1/share/multi-bind [POST]

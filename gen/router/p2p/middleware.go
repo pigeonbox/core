@@ -26,36 +26,6 @@ func _p2pMw() []app.HandlerFunc {
 	return nil
 }
 
-func _adminp2pcancelMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2ppublishMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2precvMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2psendMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2pstatusMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2ptasksMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
 func _adminp2pinvitepushMw() []app.HandlerFunc {
 	// your code...
 	return nil
@@ -97,36 +67,6 @@ func _postp2pinviteMw() []app.HandlerFunc {
 }
 
 func _adminp2pdirectoryMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _sendMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2puploadsendMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _tasksMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _task_idMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2ptasklogMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _adminp2ppairapproveMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }

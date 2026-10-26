@@ -22,6 +22,23 @@ func Register(r *server.Hertz) {
 		{
 			_v1 := _api.Group("/v1", _v1Mw()...)
 			_v1.GET("/ping", append(_pingMw(), common.Ping)...)
+			{
+				_notifies := _v1.Group("/notifies", _notifiesMw()...)
+				_notifies.GET("/public", append(_notifypubliclistMw(), common.NotifyPublicList)...)
+			}
+			{
+				_user := _v1.Group("/user", _userMw()...)
+				_user.GET("/check-auth", append(_usercheckauthMw(), common.UserCheckAuth)...)
+				_user.POST("/logout", append(_userlogoutMw(), common.UserLogout)...)
+				_user.POST("/refresh", append(_userrefreshMw(), common.UserRefresh)...)
+			}
+		}
+	}
+	{
+		_user0 := root.Group("/user", _user0Mw()...)
+		{
+			_api_keys := _user0.Group("/api-keys", _api_keysMw()...)
+			_api_keys.POST("/revoke-all", append(_userapikeysrevokeallMw(), common.UserAPIKeysRevokeAll)...)
 		}
 	}
 }

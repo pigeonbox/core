@@ -4,6 +4,8 @@ package common
 
 import (
 	"context"
+	userHandler "github.com/pigeonbox/core/gen/handler/user"
+	customHandler "github.com/pigeonbox/core/transport/http/handler"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -56,4 +58,62 @@ func Ping(ctx context.Context, c *app.RequestContext) {
 	resp := new(common.PingResp)
 
 	c.JSON(consts.StatusOK, resp)
+}
+
+// ShareMetadata .
+// @router /share/metadata/:code [GET]
+
+// UserSharesImportLocal .
+// @router /api/v1/user/shares/import-local [POST]
+
+// UserRefresh .
+// @router /api/v1/user/refresh [POST]
+func UserRefresh(ctx context.Context, c *app.RequestContext) {
+	// 业务逻辑在 transport/http/handler（2026-10-26 IDL 化收编前的原手写实现，
+	// **逐字保留**：业务码 / 文案 / HTTP 状态码 / Cookie 行为均未改）。
+	// 路由改由 IDL 生成（gen/router）⇒ 这里只做委托。
+	customHandler.RefreshSession(ctx, c)
+}
+
+// UserLogout .
+// @router /api/v1/user/logout [POST]
+func UserLogout(ctx context.Context, c *app.RequestContext) {
+	// 业务逻辑在 transport/http/handler（2026-10-26 IDL 化收编前的原手写实现，
+	// **逐字保留**：业务码 / 文案 / HTTP 状态码 / Cookie 行为均未改）。
+	// 路由改由 IDL 生成（gen/router）⇒ 这里只做委托。
+	customHandler.LogoutSession(ctx, c)
+}
+
+// UserCheckAuth .
+// @router /api/v1/user/check-auth [GET]
+func UserCheckAuth(ctx context.Context, c *app.RequestContext) {
+	// 业务逻辑在 transport/http/handler（2026-10-26 IDL 化收编前的原手写实现，
+	// **逐字保留**：业务码 / 文案 / HTTP 状态码 / Cookie 行为均未改）。
+	// 路由改由 IDL 生成（gen/router）⇒ 这里只做委托。
+	customHandler.CheckAuth(ctx, c)
+}
+
+// UserAPIKeysRevokeAll .
+// @router /user/api-keys/revoke-all [POST]
+func UserAPIKeysRevokeAll(ctx context.Context, c *app.RequestContext) {
+	// 实现原本就在 gen/handler/user（手写代码住在生成文件里）⇒ 直接委托，
+	// 避免把同一份实现复制两份。
+	userHandler.RevokeAllAPIKeys(ctx, c)
+}
+
+// FederationResolve .
+// @router /api/v1/federation/resolve [GET]
+
+// NotifyPublicList .
+// @router /api/v1/notifies/public [GET]
+func NotifyPublicList(ctx context.Context, c *app.RequestContext) {
+	// 业务逻辑在 transport/http/handler（2026-10-26 IDL 化收编前的原手写实现，
+	// **逐字保留**：业务码 / 文案 / HTTP 状态码 / 响应字段均未改）。
+	// 路由改由 IDL 生成（gen/router）⇒ 这里只做委托。
+	//
+	// ⚠️ **该端点必须保持匿名可访问**：收敛前是 routes_custom.go 里无中间件的
+	// `r.GET("/api/v1/notifies/public", ...)`。它从 notify.thrift 挪到
+	// common.thrift 就是为了躲开 notify 域 /api 组的 UserOrAPIKey 守卫
+	// （hz 按路径建组，同前缀路由共用一组中间件）。
+	customHandler.ListPublicNotifies(ctx, c)
 }

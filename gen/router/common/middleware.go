@@ -4,19 +4,11 @@ package common
 
 import (
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/pigeonbox/core/pkg/middleware"
+	customMw "github.com/pigeonbox/core/transport/http/middleware"
 )
 
 func rootMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _indexMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _healthMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
@@ -32,6 +24,54 @@ func _v1Mw() []app.HandlerFunc {
 }
 
 func _pingMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _userMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _usercheckauthMw() []app.HandlerFunc {
+	// 登录态校验（原 customMw.UserAuth()：校验 JWT 并把 user_id/username/role 写入上下文）
+	return []app.HandlerFunc{customMw.UserAuth()}
+
+}
+
+func _userlogoutMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _userrefreshMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _user0Mw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _api_keysMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _userapikeysrevokeallMw() []app.HandlerFunc {
+	// 必须登录（原 customHandler 注册处的 middleware.AuthMiddleware()）——
+	// ⚠️ 生成路由的中间件默认是空的 ⇒ 不补这一条就等于**免鉴权吊销全部 API Key**
+	return []app.HandlerFunc{middleware.AuthMiddleware()}
+
+}
+
+func _notifiesMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _notifypubliclistMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }

@@ -73,41 +73,6 @@ func _adminloginMw() []app.HandlerFunc {
 	return nil
 }
 
-func _maintenanceMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _cleanexpiredfilesMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _cleantempfilesMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _getsystemlogsMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _getsysteminfoMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _monitorMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
-func _getstoragestatusMw() []app.HandlerFunc {
-	// your code...
-	return nil
-}
-
 func _admincreateuserMw() []app.HandlerFunc {
 	// your code...
 	return nil

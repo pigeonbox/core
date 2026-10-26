@@ -30,6 +30,7 @@ import (
 	gennotify "github.com/pigeonbox/core/gen/router/notify"
 	genpresign "github.com/pigeonbox/core/gen/router/presign"
 	genpreview "github.com/pigeonbox/core/gen/router/preview"
+	genpublicapi "github.com/pigeonbox/core/gen/router/publicapi"
 	genqrcode "github.com/pigeonbox/core/gen/router/qrcode"
 	genratelimit "github.com/pigeonbox/core/gen/router/ratelimit"
 	genrequest "github.com/pigeonbox/core/gen/router/request"
@@ -135,6 +136,11 @@ func registerGeneratedRoutes(h *server.Hertz) {
 		genchunk.Register(h)
 		genuser.Register(h)
 		genshare.Register(h)
+		// 公开面专有组（2026-10-26 IDL 化收编）：这批路由收敛前是
+		// customizedRegister 里写在 `if config.ServesPublicPlane(){}` 内的手写注册
+		// ⇒ **只在公开副本注册**；放进本组是为了让「可见性」跟着 IDL 域走
+		// （一个 IDL 域 = 一个生成组 = 整组注册）。admin 副本上照旧没有它们。
+		genpublicapi.Register(h)
 		genpreview.Register(h)
 		// 寄件码域（2026-10-09 IDL 化）：链接管理（JWT）+ 访客公开投递，
 		// 原 customHandler 注册在 public 面条件内，语义保持

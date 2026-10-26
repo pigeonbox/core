@@ -21,27 +21,7 @@ func _maintenanceMw() []app.HandlerFunc {
 	return nil
 }
 
-func _cleanExpiredFilesMw() []app.HandlerFunc {
-	return nil
-}
-
-func _cleanTempFilesMw() []app.HandlerFunc {
-	return nil
-}
-
-func _getSystemLogsMw() []app.HandlerFunc {
-	return nil
-}
-
-func _getSystemInfoMw() []app.HandlerFunc {
-	return nil
-}
-
 func _monitorMw() []app.HandlerFunc {
-	return nil
-}
-
-func _getStorageStatusMw() []app.HandlerFunc {
 	return nil
 }
 

@@ -401,3 +401,7 @@ func userIDFromCtxNotify(c *app.RequestContext) (uint, bool) {
 	id, ok := v.(uint)
 	return id, ok
 }
+
+// ⚠️ 站级公开公告（/api/v1/notifies/public）**不在本文件**：它已挪到 common 域
+// （gen/handler/common 的 NotifyPublicList）——hz 按路径建组，notify 域的 /api 组
+// 挂着 UserOrAPIKey，公开端点落进来会被误加登录门槛（收敛前它是匿名端点）。

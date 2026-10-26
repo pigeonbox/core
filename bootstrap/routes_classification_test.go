@@ -63,47 +63,6 @@ type handwrittenExemption struct {
 // 若该路由是业务 API，正确做法是**收敛进 contracts IDL**（Pending 债务清单
 // 正是为此存在）；只有平台面/协议面/非 JSON 包络才做永久豁免。
 var handwrittenRouteExemptions = map[string]handwrittenExemption{
-	// ===== 业务债务：待收敛进 IDL（wire 形状目前由前端手写）=====
-	"POST /api/v1/share/multi-direct": {
-		Reason:  "P0 多文件分享的直传入口；multipart 流式上传 + 服务端合并，当前 wire 形状由前端手写（frontend-core/src/api/multifile.ts）⇒ 后端改字段名不会编译报错",
-		Pending: true,
-	},
-	"POST /api/v1/share/multi-bind": {
-		Reason:  "P0 多文件分享的绑定入口（分片通道合并）；当前 wire 形状由前端手写（frontend-core/src/api/multifile.ts）",
-		Pending: true,
-	},
-	"GET /share/metadata/:code": {
-		Reason:  "取件元信息（**交付面**：回显文件名/大小）⇒ 交付形状必须受契约保护，否则前端与后端的展示字段会各写各的",
-		Pending: true,
-	},
-	"POST /api/v1/user/refresh": {
-		Reason:  "会话令牌刷新（前端 401 拦截器调用）；返回体含新 token 与轮换 Cookie 语义，契约层尚无对应服务",
-		Pending: true,
-	},
-	"POST /api/v1/user/logout": {
-		Reason:  "会话登出（清 Cookie）；契约层尚无对应服务",
-		Pending: true,
-	},
-	"GET /api/v1/user/check-auth": {
-		Reason:  "前端启动时的登录态探测；契约层尚无对应服务",
-		Pending: true,
-	},
-	"GET /api/v1/notifies/public": {
-		Reason:  "站级公告公开端点（匿名可访问）；契约层尚无对应服务",
-		Pending: true,
-	},
-	"POST /user/api-keys/revoke-all": {
-		Reason:  "一键吊销全部 API Key；契约层只有单条吊销（DELETE /user/api-keys/:id）",
-		Pending: true,
-	},
-	"GET /api/v1/federation/resolve": {
-		Reason:  "联邦实例解析代理（未启用时返回 available:false）；契约层尚无对应服务",
-		Pending: true,
-	},
-	"POST /api/v1/user/shares/import-local": {
-		Reason:  "NAS 本地文件免上传导入（P3）；契约层只有管理台变体（AdminImportLocalFile），用户面尚无",
-		Pending: true,
-	},
 
 	// ===== 永久豁免：平台面 / 协议面 / 非 JSON 包络 =====
 	"GET /openapi.json": {

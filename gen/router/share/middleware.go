@@ -45,18 +45,6 @@ func _sharetextMw() []app.HandlerFunc {
 	return middleware.OptionalIdentity()
 }
 
-func _usersharesMw() []app.HandlerFunc {
-	return []app.HandlerFunc{
-		middleware.AuthMiddleware(),
-	}
-}
-
-func _deleteshareMw() []app.HandlerFunc {
-	return []app.HandlerFunc{
-		middleware.AuthMiddleware(),
-	}
-}
-
 func _downloadfileMw() []app.HandlerFunc {
 	// your code...
 	return nil
