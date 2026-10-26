@@ -95,8 +95,14 @@ func backfillShareFileRows(gormDB *gorm.DB) {
 	}
 
 	// 已有子行（含软删行也算「已存在」：软删子行是回收站语义，不重复补）
+	//
+	// ⚠️ 2026-10-26 审计修复（P2）：实现此前用 GORM **默认作用域**（排除软删行）
+	// ⇒ 与上方注释相反 ⇒ 「主表存活但子行全软删」的分享会被迁移**补出一条活子行**
+	// （只对应第一个文件，物理文件可能已删）⇒ 凭空多一个 404 条目；且会掩盖
+	// 「恢复不恢复子行」的现场。
+	// ⇒ Unscoped()：软删行同样算「已存在」（与注释一致）。
 	var covered []uint
-	if err := gormDB.Model(&model.FileCodeFile{}).
+	if err := gormDB.Unscoped().Model(&model.FileCodeFile{}).
 		Distinct().Pluck("file_code_id", &covered).Error; err != nil {
 		logger.Error("data migration: query existing child rows failed", zap.Error(err))
 		return

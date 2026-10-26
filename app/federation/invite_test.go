@@ -97,6 +97,54 @@ func TestInviteMailboxListOrder(t *testing.T) {
 	}
 }
 
+// TestInviteMailbox_ExpiresIn 已出箱信封的剩余有效期方向回归（2026-10-26 审计 P1）。
+//
+// 缺陷：ExpiresIn 写成「已过时长 - TTL」⇒ 恒为负 ⇒ 被钳零逻辑吞成 0 ⇒
+// 已出箱信封（HTTP POST /admin/p2p/invites/accept、MCP p2p_accept 都用它）
+// 恒返回「剩余 0 秒」⇒ PigeonBeam 侧判定信封已到期（10 分钟窗口形同虚设）。
+// 同文件 ListInvites 用的是相反且正确的方向 ⇒ 两处口径漂移。
+//
+// 断言必须能变红（负对照）：把 remainingSeconds 里的减法顺序改回
+// 「now - (ReceivedAt+TTL)」即失败。
+func TestInviteMailbox_ExpiresIn(t *testing.T) {
+	base := time.Now()
+	now := base
+	m := NewInviteMailbox(func() time.Time { return now })
+
+	inv, err := m.AddInvite("AAAA-BBBB-CCCC", "发送站A", "")
+	if err != nil {
+		t.Fatalf("入箱失败: %v", err)
+	}
+
+	// 刚入箱 ⇒ 剩余 = TTL（不是 0）
+	if got := m.ExpiresIn(inv); got != int64(inviteTTL.Seconds()) {
+		t.Fatalf("刚入箱的剩余有效期不对: got=%d want=%d", got, int64(inviteTTL.Seconds()))
+	}
+
+	// 时钟推进 ⇒ 剩余递减（方向正确的第二证据：反向实现会得到负值→0）
+	now = base.Add(inviteTTL / 2)
+	want := int64((inviteTTL - inviteTTL/2).Seconds())
+	if got := m.ExpiresIn(inv); got != want {
+		t.Fatalf("推进时钟后的剩余有效期不对: got=%d want=%d", got, want)
+	}
+
+	// 拨过 TTL ⇒ 0（钳零仍然生效）
+	now = base.Add(inviteTTL + time.Second)
+	if got := m.ExpiresIn(inv); got != 0 {
+		t.Fatalf("过期后应为 0: got=%d", got)
+	}
+
+	// 与 ListInvites 快照口径一致（两处同源，不再漂移）
+	now = base
+	items := m.ListInvites()
+	if len(items) != 1 {
+		t.Fatalf("列快照数不对: %d", len(items))
+	}
+	if items[0].ExpiresIn != m.ExpiresIn(inv) {
+		t.Fatalf("快照与 ExpiresIn 口径不一致: %d vs %d", items[0].ExpiresIn, m.ExpiresIn(inv))
+	}
+}
+
 // TestPushInvite 推送:目标路径 + 口令归一 + 附言消毒（信封的第四个动作）。
 func TestPushInvite(t *testing.T) {
 	// 私网目标需显式放行（SSRF 守卫与 registry_url 同策略）

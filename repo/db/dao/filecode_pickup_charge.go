@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pigeonbox/core/repo/db/model"
@@ -140,11 +141,21 @@ func (r *FileCodeRepository) ListPickups(ctx context.Context, code string, limit
 // 返回：
 //   - charged=true：本次真正扣了次数（首次用该令牌）；
 //   - exhausted=true：取件次数已用完且本令牌尚未计次 ⇒ 拒绝交付（调用方回 10003）；
+//     ⚠️ 若**撤销登记同时失败** ⇒ exhausted=true **且** err != nil ⇒ 调用方以 err
+//     为准（fail-closed 回 500 + 结构化日志记下「撤销失败」），不按 10003 处理。
 //   - charged=false, exhausted=false：同一令牌已计次 ⇒ 本次不再扣（同一次取件内
 //     的后续下载：多文件逐个下载 / 断点续传 / 重复点击）。
 //
 // 顺序：先登记（唯一索引裁决「首次」），再原子扣减；扣减失败（次数耗尽或 DB 错）
 // ⇒ 撤销登记，让后续重试仍是一次「新取件」（不因一次失败把额度白扔）。
+//
+// ⚠️ 2026-10-26 审计修复（P2）：**撤销登记失败不得静默**。
+// 撤销与触发它的扣减失败**同源**（同一 DB 抖动）⇒ 撤销极可能同样失败 ⇒
+// 计次行留在表里 ⇒ 之后同一令牌重试命中唯一索引被判「本次不重复扣」⇒
+// **该次取件不消耗配额** ⇒「最多取 N 次」被突破一次。
+// ⇒ 撤销失败时把 error **上抛**（合并原始错误与撤销错误）：交付面据此
+// fail-closed（本次不交付内容），上层（gen/handler/share）以结构化日志记下
+// 并回 500（该层是结构化日志的归属地；dao 层只返回错误，不写日志）。
 func (r *FileCodeRepository) ChargePickupOnce(ctx context.Context, code, tokenHash, channel, ip string) (charged bool, exhausted bool, err error) {
 	created, err := r.CreatePickupCharge(ctx, code, tokenHash, channel, ip)
 	if err != nil {
@@ -156,13 +167,26 @@ func (r *FileCodeRepository) ChargePickupOnce(ctx context.Context, code, tokenHa
 	}
 	ok, err := r.DecrementExpiredCount(ctx, code)
 	if err != nil {
-		_ = r.DeletePickupCharge(ctx, code, tokenHash)
-		return false, false, err
+		return false, false, r.rollbackCharge(ctx, code, tokenHash, err)
 	}
 	if !ok {
 		// 次数已耗尽（WHERE expired_count>0 未命中）⇒ 撤销登记。
-		_ = r.DeletePickupCharge(ctx, code, tokenHash)
+		if derr := r.DeletePickupCharge(ctx, code, tokenHash); derr != nil {
+			return false, true, fmt.Errorf("取件次数已用完；且撤销计次登记失败（该令牌可能被误判为已计次，从而绕过取件次数上限）: %w", derr)
+		}
 		return false, true, nil
 	}
 	return true, false, nil
+}
+
+// rollbackCharge 撤销计次登记（扣次失败时用）。
+//
+// 撤销失败 ⇒ 返回**合并**后的错误（原始扣次错误 + 撤销错误）⇒ 绝不静默：
+// 计次行残留会让同一令牌的后续重试被判「已计次」⇒ 免费放行一次。
+// 撤销成功 ⇒ 原样返回原始错误（调用方 fail-closed）。
+func (r *FileCodeRepository) rollbackCharge(ctx context.Context, code, tokenHash string, cause error) error {
+	if derr := r.DeletePickupCharge(ctx, code, tokenHash); derr != nil {
+		return fmt.Errorf("扣次失败: %w；且撤销计次登记失败（该令牌可能被误判为已计次，从而绕过取件次数上限）: %v", cause, derr)
+	}
+	return cause
 }

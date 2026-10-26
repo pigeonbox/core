@@ -89,6 +89,49 @@ func TestRunDataMigrations_NormalizeLegacyPathLayout(t *testing.T) {
 	assert.Equal(t, "uploads/2026/10/25/y.txt", norm2.FilePath)
 }
 
+// TestRunDataMigrations_SoftDeletedChildNotDuplicated 回归：「已有子行」判定必须
+// 含软删行（2026-10-26 审计 P2）。
+//
+// 缺陷：实现用 GORM 默认作用域（**排除**软删行），而注释声明「含软删行也算
+// 已存在」⇒ 两者相反 ⇒ 「主表存活但子行全软删」的分享会被迁移**补出一条活子行**
+// （只对应第一个文件，物理文件可能已删）⇒ 凭空多一个 404 条目；且会掩盖
+// 「恢复不恢复子行」的现场。
+//
+// 断言必须能变红（负对照）：把 Unscoped() 去掉，本用例即失败（活子行数 = 1）。
+func TestRunDataMigrations_SoftDeletedChildNotDuplicated(t *testing.T) {
+	g := newDataMigrateTestDB(t)
+
+	// 主表存活（有路径）
+	require.NoError(t, g.Create(&model.FileCode{
+		Code: "SDCHILD1", FilePath: "uploads/2026/10/26/sd.txt", Text: "sd.txt",
+		Size: 7, ExpiredCount: -1,
+	}).Error)
+	var parent model.FileCode
+	require.NoError(t, g.Where("code = ?", "SDCHILD1").First(&parent).Error)
+
+	// 子行 1 条，但**已软删**（回收站语义：分享被删、子行随之软删）
+	child := model.FileCodeFile{
+		FileCodeID: parent.ID, FileName: "sd.txt", UUIDFileName: "sd.txt",
+		FilePath: "uploads/2026/10/26/sd.txt", Size: 7, SortOrder: 0,
+	}
+	require.NoError(t, g.Create(&child).Error)
+	require.NoError(t, g.Delete(&model.FileCodeFile{}, child.ID).Error) // 软删
+
+	RunDataMigrations(g)
+
+	// Unscoped 计数不变（仍是 1 行）⇒ 迁移没有凭空补行
+	var total int64
+	require.NoError(t, g.Unscoped().Model(&model.FileCodeFile{}).
+		Where("file_code_id = ?", parent.ID).Count(&total).Error)
+	assert.Equal(t, int64(1), total, "迁移不得新增子行（软删子行也算「已存在」）")
+
+	// 活子行数 = 0（软删行不得被迁移复活成活行）
+	var alive int64
+	require.NoError(t, g.Model(&model.FileCodeFile{}).
+		Where("file_code_id = ?", parent.ID).Count(&alive).Error)
+	assert.Equal(t, int64(0), alive, "软删子行不得被迁移补成活行")
+}
+
 // TestRunDataMigrations_DropRetiredColumns 回归：prefix/suffix 死列被删除。
 func TestRunDataMigrations_DropRetiredColumns(t *testing.T) {
 	g := newDataMigrateTestDB(t)

@@ -3,9 +3,12 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/pigeonbox/contracts/errcode"
+	"net/url"
 	"strings"
+
+	"github.com/pigeonbox/contracts/errcode"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol"
@@ -34,10 +37,45 @@ func getOIDCBaseURL() string {
 	return "http://localhost:12345"
 }
 
-// redirectOIDCError 302 回前端登录页并携带错误信息（query 传中文需转义）
-func redirectOIDCError(c *app.RequestContext, msg string) {
+// oidcErrorRedirect OIDC 失败回跳的前端地址（hash 路由；query 另挂）。
+const oidcErrorRedirect = "/#/user/login"
+
+// oidcPublicErrorCode / oidcPublicErrorMsg OIDC 失败 → (短码, 可公开短文案)。
+//
+// ⚠️ **绝不透传 err.Error()**：那会泄露 IdP 内部细节（issuer / 端点 URL /
+// token 响应片段 / 账号标识）⇒ 只回**受限映射**后的短文案 + 稳定短码。
+// 短码是给前端/运维做**可区分**判定的（前端可按码选文案，运维可按码定位）。
+func oidcPublicError(err error) (code, msg string) {
+	switch {
+	case err == nil:
+		return "login_failed", "登录失败，请重试"
+	case errors.Is(err, oidcApp.ErrAccountDisabled):
+		return "account_disabled", "账号已被禁用"
+	case errors.Is(err, oidcApp.ErrStateInvalid):
+		return "state_invalid", "登录请求已过期，请重新登录"
+	default:
+		// 其余（IdP discovery 失败 / token 交换失败 / userinfo 失败 / 建号失败…）
+		// 全部归到通用失败：不透传细节，也不区分（区分需要透传细节）。
+		return "login_failed", "登录失败，请重试"
+	}
+}
+
+// redirectOIDCError 302 回前端登录页并携带**可区分**的错误标识。
+//
+// ⚠️ 2026-10-26 审计修复（P2）：此前 msg 是**死参数**——注释声称「携带错误信息」，
+// 实现却只回裸 `/#/user/login?oidc_error=1` ⇒ 用户与运维无法区分「IdP 挂了」
+// 「state 过期」「账号被禁用」。
+// ⇒ 回跳带上三个参数：
+//   - oidc_error=1：**保持既有前端契约**（前端按该参数存在与否判失败）；
+//   - oidc_code=<短码>：可区分的稳定标识（前端可按码选文案，运维可按码定位）；
+//   - msg=<可公开短文案>：urlencode 后的短文案（供前端直接展示）。
+func redirectOIDCError(c *app.RequestContext, code, msg string) {
 	c.Header("Cache-Control", "no-store")
-	c.Redirect(consts.StatusFound, []byte("/#/user/login?oidc_error=1"))
+	q := url.Values{}
+	q.Set("oidc_error", "1")
+	q.Set("oidc_code", code)
+	q.Set("msg", msg)
+	c.Redirect(consts.StatusFound, []byte(oidcErrorRedirect+"?"+q.Encode()))
 }
 
 // oidcNonceCookie OIDC state 的浏览器绑定 nonce（login CSRF 防线，2026-10-08）：
@@ -89,12 +127,13 @@ func OIDCCallback(ctx context.Context, c *app.RequestContext) {
 	code := c.Query("code")
 	state := c.Query("state")
 	if code == "" {
-		redirectOIDCError(c, "授权失败：缺少 code")
+		redirectOIDCError(c, "missing_code", "授权失败：缺少授权码")
 		return
 	}
 	token, err := svc.ExchangeCallback(ctx, getOIDCBaseURL(), code, state, nonce)
 	if err != nil {
-		redirectOIDCError(c, err.Error())
+		ecode, emsg := oidcPublicError(err)
+		redirectOIDCError(c, ecode, emsg)
 		return
 	}
 	// HttpOnly 会话 Cookie 承载会话；回跳不再携带 token（2026-10-05 遗留修复：

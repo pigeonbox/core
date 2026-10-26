@@ -33,6 +33,13 @@ import (
 // ErrAccountDisabled 匹配命中的本地账号已被禁用（回调不发 JWT，2026-10-08 加固）
 var ErrAccountDisabled = errors.New("OIDC 登录被拒绝：账号已被禁用")
 
+// ErrStateInvalid state 校验失败（过期/伪造/缺少浏览器绑定）。
+//
+// 独立哨兵（2026-10-26 审计 P2）：transport 层要把 OIDC 失败映射成**可公开**
+// 的短文案 + 稳定短码 ⇒ 需要能机器判定「是 state 问题」而不是靠字符串匹配
+// （字符串匹配会被上游改文案悄悄打断）。
+var ErrStateInvalid = errors.New("state 校验失败（过期/伪造/缺少浏览器绑定），请重试登录")
+
 // Config OIDC 配置（conf.SecurityConfig.OIDC）
 type Config struct {
 	Enabled          bool   `mapstructure:"enabled"`
@@ -215,7 +222,7 @@ type idClaims struct {
 // nonce 为登录起点下发的浏览器绑定值（Cookie 回读），state 校验必需。
 func (s *Service) ExchangeCallback(ctx context.Context, baseURL, code, state, nonce string) (string, error) {
 	if nonce == "" || !s.verifyState(state, nonce) {
-		return "", errors.New("state 校验失败（过期/伪造/缺少浏览器绑定），请重试登录")
+		return "", ErrStateInvalid
 	}
 	d, err := s.discover(ctx)
 	if err != nil {

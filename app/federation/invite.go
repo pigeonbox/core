@@ -123,7 +123,7 @@ func (m *InviteMailbox) ListInvites() []InviteSnapshot {
 		out = append(out, InviteSnapshot{
 			ID: it.ID, Code: it.Code, FromName: it.FromName, Note: it.Note,
 			ReceivedAt: it.ReceivedAt,
-			ExpiresIn:  int64((it.ReceivedAt.Add(inviteTTL)).Sub(m.now()).Seconds()),
+			ExpiresIn:  m.remainingSeconds(it),
 		})
 	}
 	return out
@@ -149,7 +149,22 @@ func (m *InviteMailbox) TakeInvite(id string) (Invite, error) {
 // 收件箱只对在箱条目给快照，出箱后条目已不在列表里，无处可查。
 // 时钟同收件箱（构造期注入的时钟优先，测试用假时钟一致）。
 func (m *InviteMailbox) ExpiresIn(inv Invite) int64 {
-	left := int64(m.now().Sub(inv.ReceivedAt.Add(inviteTTL)).Seconds())
+	return m.remainingSeconds(inv)
+}
+
+// remainingSeconds 剩余有效秒数（**唯一口径源**；已过期返回 0）。
+//
+// 方向：剩余 = (收到时刻 + TTL) - 现在。
+//
+// ⚠️ 2026-10-26 审计修复：此前 ExpiresIn 写成「已过时长 - TTL」⇒ 恒为负 ⇒
+// 被钳零逻辑吞成 0 ⇒ 已出箱信封（HTTP POST /admin/p2p/invites/accept 与
+// MCP p2p_accept 都用它）恒返回「剩余 0 秒」⇒ PigeonBeam 侧判定信封已到期。
+// 同文件 ListInvites 用的是相反且正确的方向 ⇒ 两处口径漂移。
+// ⇒ 合并成本函数，两处共用，杜绝再次漂移。
+//
+// 无需持锁：只读入参（Invite 值）与构造期固定的时钟。
+func (m *InviteMailbox) remainingSeconds(inv Invite) int64 {
+	left := int64(inv.ReceivedAt.Add(inviteTTL).Sub(m.now()).Seconds())
 	if left < 0 {
 		return 0
 	}

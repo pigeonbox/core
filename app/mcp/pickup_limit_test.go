@@ -16,6 +16,7 @@ package mcp
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,52 @@ func TestToolsCall_CountExhaustedShareDenied(t *testing.T) {
 	})
 	assert.True(t, toolIsErr(out), "额度用完后 download_share_file 必须拒绝")
 	assert.Contains(t, toolErrText(t, out), "取件次数已用完")
+}
+
+// TestToolsCall_ExpiredShareContentDenied 已过期分享的读内容闸门（2026-10-26 审计 P2）。
+//
+// 缺陷：get_share_content **只判次数、不判时间**（model.FileCode.IsExpired 只判
+// 时间）⇒ 同一条已过期分享，走 download_share_file 被拒、走 get_share_content
+// 却能读走**正文**/文件清单 ⇒ 两个都是交付面（注册表 ReadsShare=true）却口径相左。
+//
+// 断言必须能变红（负对照）：把 app/mcp/tools.go 里 getShareContent 的 IsExpired
+// 分支删掉，本用例即失败（工具不再报错）。
+func TestToolsCall_ExpiredShareContentDenied(t *testing.T) {
+	s, g := newMCPTestServiceWithDB(t)
+
+	const body = "过期后不应被读走的正文"
+	_, out := rpc(t, s, "tools/call", map[string]any{
+		"name": "share_text",
+		"arguments": map[string]any{
+			"text":         body,
+			"expire_style": "day",
+			"expire_value": 1,
+		},
+	})
+	require.False(t, toolIsErr(out), "share_text 应成功: %s", toolErrText(t, out))
+	code, _ := toolOut(t, out)["code"].(string)
+	require.Len(t, code, 8)
+
+	// 正向对照：未过期时读得到（闸门不是「永远拒」）
+	_, out = rpc(t, s, "tools/call", map[string]any{
+		"name": "get_share_content", "arguments": map[string]any{"code": code},
+	})
+	require.False(t, toolIsErr(out), "未过期时 get_share_content 应成功: %s", toolErrText(t, out))
+	assert.Equal(t, body, toolOut(t, out)["text"])
+
+	// 把过期时间拨到过去 ⇒ 分享已过期
+	past := time.Now().Add(-time.Hour)
+	require.NoError(t, g.Model(&model.FileCode{}).
+		Where("code = ?", code).
+		Update("expired_at", past).Error)
+
+	// 负向：必须拒绝，且不得回传正文
+	_, out = rpc(t, s, "tools/call", map[string]any{
+		"name": "get_share_content", "arguments": map[string]any{"code": code},
+	})
+	assert.True(t, toolIsErr(out), "已过期时 get_share_content 必须拒绝")
+	assert.Contains(t, toolErrText(t, out), "已过期")
+	assert.NotContains(t, toolErrText(t, out), body, "拒绝时不得回传正文")
 }
 
 // TestToolsCall_CountExhaustedFileShareDenied 文件分享同样守闸（回传文件内容）。

@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -196,4 +197,68 @@ func TestListPickups(t *testing.T) {
 	rows2, err := repo.ListPickups(ctx, "OTHER", 20)
 	require.NoError(t, err)
 	assert.Len(t, rows2, 0)
+}
+
+// =====================================================================
+// 撤销计次登记失败必须上抛（2026-10-26 审计 P2）
+//
+// 缺陷：ChargePickupOnce 里两处撤销登记写成 `_ = r.DeletePickupCharge(...)`
+// ⇒ 撤销错误被**丢弃**。撤销与触发它的扣减失败**同源**（同一 DB 抖动）⇒
+// 撤销极可能同样失败 ⇒ 计次行留在表里 ⇒ 之后同一令牌重试命中唯一索引被判
+// 「本次不重复扣」⇒ **该次取件不消耗配额** ⇒「最多取 N 次」被突破一次。
+//
+// 断言必须能变红（负对照）：把两处 `_ =` 改回吞错，本用例即失败。
+// =====================================================================
+
+// injectStmtFailure 故障注入：让指定类型的语句失败（gorm 回调层）。
+// update ⇒ 扣次（DecrementExpiredCount 的 UPDATE）失败；
+// delete ⇒ 撤销登记（DeletePickupCharge 的 DELETE）失败。
+func injectStmtFailure(t *testing.T, g *gorm.DB, kind string) {
+	t.Helper()
+	boom := errors.New("injected db failure")
+	switch kind {
+	case "update":
+		require.NoError(t, g.Callback().Update().Before("gorm:update").
+			Register("test:fail_update", func(db *gorm.DB) { _ = db.AddError(boom) }))
+	case "delete":
+		require.NoError(t, g.Callback().Delete().Before("gorm:delete").
+			Register("test:fail_delete", func(db *gorm.DB) { _ = db.AddError(boom) }))
+	default:
+		t.Fatalf("未知注入类型: %s", kind)
+	}
+}
+
+// TestChargePickupOnce_RollbackFailureSurfaced 次数耗尽 + 撤销失败 ⇒ 必须返回 error
+// （不得静默：残留的计次行会让同一令牌的后续重试被判「已计次」⇒ 免费放行）。
+func TestChargePickupOnce_RollbackFailureSurfaced(t *testing.T) {
+	g := newPickupChargeTestDB(t)
+	repo := NewFileCodeRepository(g)
+	ctx := context.Background()
+	// 次数已耗尽（expired_count=0）⇒ 走「扣不动 ⇒ 撤销登记」分支
+	require.NoError(t, repo.Create(ctx, &model.FileCode{Code: "RB1", ExpiredCount: 0}))
+	injectStmtFailure(t, g, "delete") // 撤销登记失败
+
+	charged, exhausted, err := repo.ChargePickupOnce(ctx, "RB1", "tok-rb", "download", "1.2.3.4")
+	require.Error(t, err, "撤销计次登记失败必须上抛（不得静默吞错）")
+	assert.Contains(t, err.Error(), "撤销", "错误必须点明撤销失败")
+	assert.False(t, charged)
+	assert.True(t, exhausted, "次数确实已耗尽（口径仍要如实返回）")
+}
+
+// TestChargePickupOnce_DecrementAndRollbackFailureSurfaced 扣次失败 + 撤销也失败
+// ⇒ 合并后的错误必须上抛（含原始扣次错误）。
+func TestChargePickupOnce_DecrementAndRollbackFailureSurfaced(t *testing.T) {
+	g := newPickupChargeTestDB(t)
+	repo := NewFileCodeRepository(g)
+	ctx := context.Background()
+	require.NoError(t, repo.Create(ctx, &model.FileCode{Code: "RB2", ExpiredCount: 3}))
+	injectStmtFailure(t, g, "update") // 扣次失败
+	injectStmtFailure(t, g, "delete") // 撤销登记也失败
+
+	charged, exhausted, err := repo.ChargePickupOnce(ctx, "RB2", "tok-rb2", "download", "1.2.3.4")
+	require.Error(t, err, "扣次失败必须上抛")
+	assert.Contains(t, err.Error(), "撤销", "撤销失败必须体现在错误里")
+	assert.Contains(t, err.Error(), "扣次失败", "原始扣次错误必须保留")
+	assert.False(t, charged)
+	assert.False(t, exhausted)
 }

@@ -44,15 +44,40 @@ func (r *FileCodeRepository) CountSoftDeleted(ctx context.Context) (int64, error
 }
 
 // RestoreByIDs 从回收站恢复（软删 → 存活）：deleted_at 置空。
-// 仅作用于当前处于软删态的行；返回受影响行数。
+// 仅作用于当前处于软删态的行；返回受影响行数（主表口径）。
+//
+// ⚠️ 2026-10-26 审计修复（P1）：子表 file_code_files 是**文件清单的唯一真相源**
+// （v0.32.14 起虚拟行退役），删除侧（admin.BatchDeleteFiles）会**软删子行**；
+// 此前恢复只 UPDATE 主表 ⇒ 子行仍软删 ⇒ 恢复后取件页清单为空、zip 无内容、
+// 逐文件下载 404（「恢复」只恢复了一半）。
+// ⇒ 同一事务内一并恢复该批分享的软删子行。
+//
+// 只动 `deleted_at IS NOT NULL` 的行：硬删行没有软删标记，不会被误复活。
 func (r *FileCodeRepository) RestoreByIDs(ctx context.Context, ids []uint) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	res := r.db().WithContext(ctx).Unscoped().Model(&model.FileCode{}).
-		Where("id IN ? AND deleted_at IS NOT NULL", ids).
-		Update("deleted_at", nil)
-	return res.RowsAffected, res.Error
+	var restored int64
+	err := r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Unscoped().Model(&model.FileCode{}).
+			Where("id IN ? AND deleted_at IS NOT NULL", ids).
+			Update("deleted_at", nil)
+		if res.Error != nil {
+			return res.Error
+		}
+		restored = res.RowsAffected
+		// 子行同批恢复（子表 = 文件清单唯一真相源 ⇒ 与主表同生共死）
+		if err := tx.Unscoped().Model(&model.FileCodeFile{}).
+			Where("file_code_id IN ? AND deleted_at IS NOT NULL", ids).
+			Update("deleted_at", nil).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return restored, nil
 }
 
 // GetByIDUnscoped 按 id 查（含软删行）——回收站/彻底删除前置校验用。

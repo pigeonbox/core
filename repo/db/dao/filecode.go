@@ -176,13 +176,14 @@ func (r *FileCodeRepository) Count(ctx context.Context) (int64, error) {
 
 // CountToday 已删除：全库无调用方（统计走 CountTodayUploads/CountCreatedBetween）。
 
-func (r *FileCodeRepository) CountActive(ctx context.Context) (int64, error) {
-	var count int64
-	err := r.db().WithContext(ctx).Model(&model.FileCode{}).
-		Where("expired_at IS NULL OR expired_at > ? OR expired_count > 0", time.Now()).
-		Count(&count).Error
-	return count, err
-}
+// CountActive 已删除（2026-10-26 审计 P2）：全仓**无生产调用方**，且口径是错的
+// ——原实现 `expired_at IS NULL OR expired_at > ? OR expired_count > 0` 把两个
+// 独立闸（时间过期 / 次数耗尽）OR 在一起 ⇒ 「时间已过期但次数没用尽」的 count
+// 样式分享被算成**活跃**，与 model.FileCode.IsExpired()（只判时间）结论相反
+// ⇒ 一旦有人接上它，管理台统计虚高。
+// ⇒ 删除（参照同文件 CountToday 的同规格删除）；确有需要时按 IsExpired /
+// IsCountExhausted 的口径重建，并在注释里写清「活跃」的定义。
+// 守卫见 filecode_active_test.go（方法不得复活 + 不得有调用方）。
 
 func (r *FileCodeRepository) GetTotalSize(ctx context.Context) (int64, error) {
 	var totalSize int64

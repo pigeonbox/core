@@ -489,6 +489,15 @@ func (s *Service) getShareContent(ctx context.Context, in getShareContentIn, cal
 	if err != nil {
 		return getShareContentOut{}, fmt.Errorf("分享不存在或已过期")
 	}
+	// 已过期（时间）⇒ 拒绝（2026-10-26 审计 P2）。
+	//
+	// ⚠️ 此前本工具**只判次数、不判时间** ⇒ 同一条已过期分享，走
+	// download_share_file 被拒、走 get_share_content 却能读走正文/文件清单。
+	// 两个工具在注册表里都是交付面（ReadsShare）⇒ 口径必须一致。
+	// （文案与 download_shareFile 逐字对齐，便于运维一眼对上。）
+	if fc.IsExpired() {
+		return getShareContentOut{}, fmt.Errorf("分享已过期（内容待清理任务释放，可先在管理端续期）")
+	}
 	// 次数已用完 ⇒ 拒绝（2026-10-24）：本工具**回传文本正文** = 一次内容交付。
 	// MCP 的 share_text/share_file 支持 count 样式（按取件次数）⇒ 这类分享
 	// 的「最多取 N 次」承诺必须在读回面也成立，否则上限形同虚设。

@@ -43,7 +43,11 @@ type Service struct {
 
 	configMu     sync.RWMutex
 	config       *SystemConfig
-	configLoaded bool // 已尝试过 DB 加载（含无记录的情况），避免每次读都打 DB
+	configLoaded bool // 已加载过 DB 配置（含无记录的情况），避免每次读都打 DB
+	// configLoadFailed 上一次装载是否失败（失败 ⇒ 未置 configLoaded ⇒ 下次读重试）。
+	// 用于识别「重试成功」这一时刻：此时须把持久化配置**热应用**回全局 conf，
+	// 否则「配置中心恢复了、运行时闸门还钉在默认值」（闸门读的是全局 conf）。
+	configLoadFailed bool
 
 	hooksMu       sync.RWMutex
 	reconfigurers *ReconfigureHooks
@@ -199,6 +203,13 @@ func (s *Service) loadPersistedConfig(ctx context.Context) (*SystemConfig, error
 }
 
 // ensureConfigLoaded 懒加载：首次访问时用 DB 持久化配置覆盖默认值。
+//
+// ⚠️ 2026-10-26 审计修复（P2）：**加载成功之后才**置 configLoaded。
+// 此前在加载**之前**就置 configLoaded=true ⇒ 一次 DB 抖动 / 记录 JSON 损坏 ⇒
+// 管理员配的持久化设置**整体失效**并回落默认值（download.require_login 默认关
+// ⇒ 匿名可下载；upload.open_upload、匿名日配额等安全/配额语义被悄悄放开），
+// 且只有一条 Error 日志 ⇒ 本进程内**永不重试**。
+// ⇒ 失败保持 configLoaded=false ⇒ 下次读自动重试（DB 恢复后自动回到正确配置）。
 func (s *Service) ensureConfigLoaded(ctx context.Context) {
 	s.configMu.Lock()
 	defer s.configMu.Unlock()
@@ -208,11 +219,14 @@ func (s *Service) ensureConfigLoaded(ctx context.Context) {
 	if s.configLoaded {
 		return
 	}
-	s.configLoaded = true
 	persisted, err := s.loadPersistedConfig(ctx)
+	loaded := true
 	switch {
 	case err != nil:
+		// 加载失败 ⇒ 本次用默认值服务，但**不**标记已加载 ⇒ 下次读自动重试。
 		logger.Error("failed to load persisted system config, using defaults", zap.Error(err))
+		loaded = false
+		s.configLoadFailed = true
 	case persisted != nil:
 		s.config = persisted
 		siteName := ""
@@ -234,6 +248,18 @@ func (s *Service) ensureConfigLoaded(ctx context.Context) {
 	// 棘轮规则 8：不新增 GetGlobalConfig 直读；语义等价——启动 RestoreAdminSettings
 	// 与每次 UpdateConfig 都会经过 overlay）
 	s.applyUserSideEffects(s.config.User)
+	if loaded {
+		if s.configLoadFailed {
+			// **重试成功**（此前装载失败过）⇒ 把持久化配置热应用回全局 conf：
+			// 运行时闸门（pkg/gate 等）读的是全局 conf，不是本域的 s.config ⇒
+			// 不补这一步就是「配置中心恢复了、闸门还钉在默认值」（失败期间
+			// download.require_login 等被悄悄放开）。
+			s.applySystemConfigOverlayLocked(s.config)
+			s.configLoadFailed = false
+			logger.Info("system config reloaded after failure, overlay re-applied")
+		}
+		s.configLoaded = true
+	}
 }
 
 // applyUserSideEffects 用户设置中需要"生效"而非仅存储的部分：
