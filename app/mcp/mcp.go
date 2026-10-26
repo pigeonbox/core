@@ -497,7 +497,7 @@ func outTypeDeliversContent(t reflect.Type) bool {
 	if t == nil {
 		return false
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {
@@ -509,7 +509,7 @@ func outTypeDeliversContent(t reflect.Type) bool {
 				return true
 			}
 			// 嵌套结构（如 Data *xxx）也一并判定
-			if f.Type.Kind() == reflect.Struct || f.Type.Kind() == reflect.Ptr {
+			if f.Type.Kind() == reflect.Struct || f.Type.Kind() == reflect.Pointer {
 				if outTypeDeliversContent(f.Type) {
 					return true
 				}

@@ -26,10 +26,21 @@ func TestOIDCSubFingerprint_NoPanicOnShortSub(t *testing.T) {
 }
 
 // 指纹必须**稳定**（同 sub 每次一致 ⇒ 重试建号不产生第二个用户）。
+//
+// ⚠️ 原实现写成 `oidcSubFingerprint(sub) != oidcSubFingerprint(sub)`
+// ⇒ **左右是同一个表达式** ⇒ 恒为 false ⇒ 这条断言**永远不会失败**
+// （golangci-lint 的 SA4000 正是为此报的警）。⇒ 改成「两次调用的结果相比」，
+// 并额外**钉住具体取值**：指纹是 sha256 前 8 字节的十六进制，跨版本必须一致，
+// 否则升级后同一个 IdP 账号会被认成新用户（重试建号撞唯一索引）。
 func TestOIDCSubFingerprint_Stable(t *testing.T) {
 	sub := "user-0001-abcdef"
-	if oidcSubFingerprint(sub) != oidcSubFingerprint(sub) {
-		t.Error("同 sub 的指纹必须稳定")
+	first := oidcSubFingerprint(sub)
+	second := oidcSubFingerprint(sub)
+	if first != second {
+		t.Errorf("同 sub 的指纹必须稳定，实际 %q != %q", first, second)
+	}
+	if want := "f66cca5650818d94"; first != want {
+		t.Errorf("指纹取值漂移：实际 %q，期望 %q（算法/宽度变了 ⇒ 存量 IdP 账号会被认成新用户）", first, want)
 	}
 }
 

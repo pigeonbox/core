@@ -119,6 +119,9 @@ func TestOptionalAuthMiddlewareRespectsBlacklist(t *testing.T) {
 
 // 身份复核回归（2026-10-05 审计 P2）：封禁/降权/会话纪元过期即时生效。
 func TestIdentityFreshEnforcement(t *testing.T) {
+	// 身份缓存是包级全局 ⇒ 本用例必须用专属缓存，否则会吃到别的用例的残留
+	// （`go test -count=2` 必红，见 useFreshIdentityCache 的注释）。
+	useFreshIdentityCache(t, nil)
 	auth.SetJWTSecret("test-secret-for-identity-fresh-32ch")
 	t.Cleanup(func() { auth.SetJWTSecret("") })
 
