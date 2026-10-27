@@ -21,6 +21,10 @@ type redisLockCmds interface {
 	Expire(ctx context.Context, key string, expiration time.Duration) *redis.BoolCmd
 	Set(ctx context.Context, key string, value any, expiration time.Duration) *redis.StatusCmd
 	Del(ctx context.Context, keys ...string) *redis.IntCmd
+	// IncrWithTTL 计数 + 首次命中才设 TTL（**原子**，收编到 oekit/redisx 的
+	// Counter.IncrWithTTL）——手写两步 Incr + if n==1 { Expire } 在两步之间
+	// 失败 ⇒ 计数键永不过期 ⇒ 该主体被永久锁定。
+	IncrWithTTL(ctx context.Context, key string, delta int64, ttl time.Duration) (int64, error)
 }
 
 // memLockoutMax 内存兜底表容量护栏（2026-10-05 审计 P2 引入；现由
@@ -68,7 +72,8 @@ const (
 func NewLockout(rdb *redis.Client) *Lockout {
 	var cmds redisLockCmds
 	if rdb != nil {
-		cmds = rdb
+		// 包一层（纯包装：不新建连接、不改连接参数）+ 补上原子的 IncrWithTTL。
+		cmds = newRedisCmds(rdb)
 	}
 	cfg := conf.LockoutConfig{
 		Enabled:       true,
@@ -114,11 +119,11 @@ func (l *Lockout) RecordFailure(ctx context.Context, key string) (bool, int) {
 	lock := time.Duration(l.cfg.LockSeconds) * time.Second
 
 	if l.rdb != nil {
-		count, err := l.rdb.Incr(ctx, failKeyPrefix+key).Result()
+		// 计数 + 首次命中才设失败窗口：**原子**（收编到 oekit/redisx 的
+		// Counter.IncrWithTTL）——此前手写两步，两步之间失败 ⇒ 计数键永不过期
+		// ⇒ 失败计数只增不减 ⇒ 该主体被永久锁定。
+		count, err := l.rdb.IncrWithTTL(ctx, failKeyPrefix+key, 1, window)
 		if err == nil {
-			if count == 1 {
-				l.rdb.Expire(ctx, failKeyPrefix+key, window)
-			}
 			if count >= int64(l.cfg.MaxAttempts) {
 				l.rdb.Set(ctx, lockKeyPrefix+key, "1", lock)
 				l.rdb.Del(ctx, failKeyPrefix+key)

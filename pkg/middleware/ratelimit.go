@@ -120,7 +120,7 @@ type RateLimiter struct {
 	limiters map[scope]*ratelimit.KeyedLimiter
 	blocked  map[string]time.Time // "scope|ip" → 封禁截止
 	cfg      RateLimitConfig
-	rdb      *redis.Client
+	rdb      *redisCmds
 	gcCancel context.CancelFunc // 停封禁表清扫循环（loop.Run 的 ctx 生命周期）
 
 	blockedTotal int64 // 累计封禁次数（观测用）
@@ -170,7 +170,13 @@ func (rl *RateLimiter) rebuildLimiters(cfg RateLimitConfig) {
 func (rl *RateLimiter) SetRedis(rdb *redis.Client) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	rl.rdb = rdb
+	// 包一层（纯包装：不新建连接、不改连接参数）；redis 未装配时保持 nil
+	// ⇒ 内存桶回落路径不被破坏。
+	if rdb == nil {
+		rl.rdb = nil
+		return
+	}
+	rl.rdb = newRedisCmds(rdb)
 }
 
 // UpdateConfig 热更新配置
@@ -256,14 +262,14 @@ func (rl *RateLimiter) allowRedis(ctx context.Context, s scope, ip string) bool 
 		qps = 1
 	}
 	key := fmt.Sprintf("pb:rl:cnt:%s:%s:%d", s, ip, time.Now().Unix())
-	n, err := rl.rdb.Incr(ctx, key).Result()
+	// 计数 + 首次命中才设 TTL：**原子**（收编到 oekit/redisx 的
+	// Counter.IncrWithTTL）——此前是手写两步 Incr + if n==1 { Expire }，
+	// 两步之间失败 ⇒ 计数键永不过期 ⇒ 该 IP 永久被限。
+	n, err := rl.rdb.IncrWithTTL(ctx, key, 1, 2*time.Second)
 	if err != nil {
 		// Redis 故障：回退进程内 bucket
 		limiter := rl.getLimiter(s, ip)
 		return limiter == nil || limiter.Allow()
-	}
-	if n == 1 {
-		rl.rdb.Expire(ctx, key, 2*time.Second)
 	}
 	return n <= int64(qps)
 }
