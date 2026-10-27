@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
 	"go.uber.org/zap"
 
@@ -47,22 +48,26 @@ func stopBackgroundTasks() {
 }
 
 // trackBackgroundLoop 把 loop 挂进排水 WaitGroup（bg-tasks 预算内等收尾）。
+//
+// GoSafe：裸 goroutine 的 panic 无人接 ⇒ 带走整个进程（长驻服务尤其致命）。
+// panic 经全局 async.SetPanicHandler 落结构化日志（bootstrap.go 已装），
+// 且闭包内的 defer bgWg.Done() 在 panic 展开时照样执行 ⇒ 排水不会挂住。
 func trackBackgroundLoop(l *loop.Loop) {
 	bgWg.Add(1)
-	go func() {
+	async.GoSafe(func() {
 		defer bgWg.Done()
 		l.Wait()
-	}()
+	})
 }
 
 // drainBackgroundTasks 等待在飞轮次退出；ctx（lifecycle Manager 侧的超时预算）
 // 先到则报超时——在飞工作被放弃，交给进程退出收尾。
 func drainBackgroundTasks(ctx context.Context) error {
 	done := make(chan struct{})
-	go func() {
+	async.GoSafe(func() {
 		bgWg.Wait()
 		close(done)
-	}()
+	})
 	select {
 	case <-done:
 		return nil

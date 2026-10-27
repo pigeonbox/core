@@ -150,8 +150,12 @@ func (s *Node) Enabled() bool { return true }
 func (s *Node) NodeID() string { return s.nodeID }
 
 // Start 启动注册/心跳循环（daemon；与 core 其他后台任务同约定，随进程退出）。
+//
+// GoSafeLabeled：裸 goroutine 的 panic 无人接 ⇒ 带走整个进程（长驻服务尤其致命）。
+// 轮次内的 panic 已由 loop() 里的 RunSafeLabeled 收编；这里再收编外壳，
+// panic 经全局 async.SetPanicHandler 落结构化日志并带任务标签。
 func (s *Node) Start() {
-	go s.loop()
+	async.GoSafeLabeled("federation-heartbeat-loop", s.loop)
 }
 
 func (s *Node) loop() {

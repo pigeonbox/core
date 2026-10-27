@@ -37,10 +37,12 @@ func SetSink(s Sink) { sink = s }
 // 必须先排水再释放底层资源，否则出现"readonly database/目录非空"竞争。
 func Flush(d time.Duration) {
 	done := make(chan struct{})
-	go func() {
+	// GoSafe：panic 不再带走整个进程（长驻服务）；等待语义不变——若真发生 panic，
+	// close(done) 不会执行，调用方走超时分支（有界等待，不挂死）。
+	async.GoSafe(func() {
 		inFlight.Wait()
 		close(done)
-	}()
+	})
 	select {
 	case <-done:
 	case <-time.After(d):
