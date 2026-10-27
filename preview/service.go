@@ -41,13 +41,26 @@ func InitService(cfg *Config) error {
 	return nil
 }
 
-// GetService 获取预览服务实例
+// GetService 获取预览服务实例。
+//
+// 2026-10-28（真机实证：fnOS 4.0.7，每次启动报 "failed to create preview cache
+// directory: mkdir ./data/previews: permission denied"）：此前 svc==nil 时会
+// **静默**用默认配置（缓存目录 "./data/previews"，按进程 CWD 解析）重试初始化——
+// 重试在 NAS 包/容器/systemd 部署下必然失败（缓存目录不可建），于是调用方拿到
+// nil 却毫无线索；更糟的是 MaxFileSize() 的 nil 接收者分支返回 0（=不限），
+// 把 2026-10-08 加固的「预览大小上限」静默关掉 ⇒ 任意大文件仍会全量落临时盘
+// （磁盘耗尽 DoS 面回归）。
+//
+// 改为：不再自动重试；未注入即返回 nil，由调用方 fail-fast 报明确错误
+// （与仓内 getShareService() 对残废实例的处理同构）。
 func GetService() *Service {
-	if svc == nil {
-		// 使用默认配置初始化
-		_ = InitService(nil)
-	}
 	return svc
+}
+
+// SetService 注入预览服务单例（装配期由 bootstrap.InitService 间接设置，
+// 测试期可注入桩或置 nil 以覆盖「引擎不可用」路径）。
+func SetService(s *Service) {
+	svc = s
 }
 
 // MaxFileSize 返回预览大小上限（字节，0=不限）。调用方应在打开对象前用
