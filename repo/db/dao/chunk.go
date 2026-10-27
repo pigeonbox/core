@@ -303,7 +303,7 @@ func (r *ChunkRepository) UpsertChunk(ctx context.Context, chunk *model.UploadCh
 	}
 	// 未命中 ⇒ 插入；并发下可能撞唯一索引 ⇒ 退回更新
 	if err := r.db().WithContext(ctx).Create(chunk).Error; err != nil {
-		if isUniqueViolation(err) {
+		if IsUniqueViolation(err) {
 			return r.db().WithContext(ctx).Model(&model.UploadChunk{}).
 				Where("upload_id = ? AND chunk_index = ?", chunk.UploadID, chunk.ChunkIndex).
 				Updates(fields).Error

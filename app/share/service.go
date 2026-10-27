@@ -321,8 +321,7 @@ func (s *Service) createWithCode(ctx context.Context, customCode string, build f
 	}
 	fc := build(customCode)
 	if err := s.fileCodeRepo.Create(ctx, fc); err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) ||
-			strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		if dao.IsUniqueViolation(err) {
 			return nil, errors.New("自定义取件码已被占用，请换一个")
 		}
 		return nil, err
@@ -340,8 +339,11 @@ func (s *Service) GenerateCode() string {
 func (s *Service) createWithRetry(ctx context.Context, build func(code string) *model.FileCode) (*model.FileCode, error) {
 	var fc *model.FileCode
 	err := retry.Do(ctx, retry.Config{
-		Attempts:  5,
-		Retryable: func(err error) bool { return errors.Is(err, gorm.ErrDuplicatedKey) },
+		Attempts: 5,
+		// 唯一冲突判据统一走 dao.IsUniqueViolation（覆盖 sqlite/mysql/pg 三家文案）。
+		// ⚠️ 此前只认 gorm.ErrDuplicatedKey ⇒ **sqlite 下唯一冲突不会重试**
+		// （core 默认库就是 sqlite）⇒ 换码重试形同虚设、错误文案漏出裸 SQL 报错。
+		Retryable: func(err error) bool { return dao.IsUniqueViolation(err) },
 	}, func(attempt int) error {
 		rec := build(s.GenerateCode())
 		if err := s.fileCodeRepo.Create(ctx, rec); err != nil {
@@ -351,7 +353,7 @@ func (s *Service) createWithRetry(ctx context.Context, build func(code string) *
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
+		if dao.IsUniqueViolation(err) {
 			return nil, errors.New("生成分享码失败：多次冲突")
 		}
 		return nil, err

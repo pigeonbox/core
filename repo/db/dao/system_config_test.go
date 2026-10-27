@@ -133,6 +133,9 @@ func TestSystemConfigSaveUniqueRetryConverges(t *testing.T) {
 
 // TestIsUniqueViolation 撞唯一键判据表驱动：gorm 映射分支 + 三家驱动裸 SQL
 // 文案（mysql/pg 无需真库，直接喂驱动实际报错文案）+ 反例锁窄匹配。
+//
+// 判据本身已收编为**导出的单源**（repo/db/dao/unique_violation.go，dao 与
+// app/share 共用）⇒ app/share 的 sqlite 路径不再漏判（见该文件注释）。
 func TestIsUniqueViolation(t *testing.T) {
 	cases := []struct {
 		name string
@@ -149,12 +152,13 @@ func TestIsUniqueViolation(t *testing.T) {
 		{"mysql 小写不命中（精确大小写）", errors.New(
 			"duplicate entry '1' for key 'PRIMARY'"), false},
 		{"裸 constraint failed 不命中（窄判据）", errors.New("some constraint failed"), false},
+		{"pg 23505 单独出现（无文案）", errors.New("ERROR: (23505)"), true},
 		{"io 错误不命中", errors.New("disk I/O error"), false},
 		{"ctx 超时不命中", context.DeadlineExceeded, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, isUniqueViolation(tc.err))
+			assert.Equal(t, tc.want, IsUniqueViolation(tc.err))
 		})
 	}
 }
