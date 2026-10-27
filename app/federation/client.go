@@ -8,12 +8,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oekit/pkg/httpjson"
 )
 
 // 与 p2p 仓（github.com/pigeonbox/p2p）v1 API 的通讯客户端。
@@ -65,33 +67,43 @@ func codeHash(code string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (c *registryClient) do(method, path string, body any, wantStatus int, out any) error {
-	var rd io.Reader
+// do 发一次 HTTP+JSON 调用（走 **oekit/pkg/httpjson**：ctx 感知构造请求 →
+// 限容读体 → 状态码检查（错误体 rune 安全截断，不腰斩 UTF-8）→ JSON 解码）。
+//
+// ⚠️ 两处内部行为变化（**均不外泄到 wire**——联邦错误只进日志，handler 侧一律
+// 以 available:false 兜住，见 transport/http/handler/federation.go）：
+//   - **ctx 真正生效**：此前形参是 `_ context.Context` ⇒ 调用点的 5s/15s 预算
+//     只落在 http.Client.Timeout 上，请求 ctx 被丢弃；现在按调用方 ctx 取消。
+//   - 状态码判定从「精确等于期望码」放宽为「2xx 即成功」（httpjson 口径）。
+//     p2p registry 这几个端点恒回 200 ⇒ 无实际差异。
+func (c *registryClient) do(ctx context.Context, method, path string, body any, out any) error {
+	var payload []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		rd = strings.NewReader(string(b))
+		payload = b
 	}
-	req, err := http.NewRequestWithContext(context.Background(), method, c.base+path, rd)
-	if err != nil {
-		return err
+	req := httpjson.Request{
+		Method: method,
+		URL:    c.base + path,
+		Body:   payload,
+		Header: func(h http.Header) {
+			if payload != nil {
+				h.Set("Content-Type", "application/json")
+			}
+		},
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	// out 为 nil 时响应体仍需被消费（httpjson 走 Unmarshal，out=nil 会报
+	// "json: Unmarshal(nil)"）⇒ 用 RawMessage 承接丢弃。
+	target := out
+	if target == nil {
+		var discard json.RawMessage
+		target = &discard
 	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != wantStatus {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("%s %s: 期望 %d 实际 %d: %s", method, path, wantStatus, resp.StatusCode, b)
-	}
-	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+	if err := httpjson.DoJSON(ctx, c.http, req, target); err != nil {
+		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	return nil
 }
@@ -108,16 +120,16 @@ type registerReq struct {
 	Sig        string   `json:"sig"`
 }
 
-func (c *registryClient) register(_ context.Context, nodeID string, priv ed25519.PrivateKey, publicURL, name string, ttl time.Duration) error {
+func (c *registryClient) register(ctx context.Context, nodeID string, priv ed25519.PrivateKey, publicURL, name string, ttl time.Duration) error {
 	ts := time.Now().Unix()
 	ttlSec := int64(ttl / time.Second)
 	nonce := c.nonce()
 	sig := signPayload(priv, buildPayload(nodeID, publicURL, name, nodeVersion, capsDownload,
 		strconv.FormatInt(ttlSec, 10), nonce, strconv.FormatInt(ts, 10)))
-	return c.do(http.MethodPost, "/v1/nodes/register", registerReq{
+	return c.do(ctx, http.MethodPost, "/v1/nodes/register", registerReq{
 		NodeID: nodeID, URL: publicURL, Name: name, Version: nodeVersion,
 		Caps: []string{capsDownload}, TTLSeconds: ttlSec, Nonce: nonce, TS: ts, Sig: sig,
-	}, http.StatusOK, nil)
+	}, nil)
 }
 
 type announceReq struct {
@@ -129,13 +141,13 @@ type announceReq struct {
 	Sig       string `json:"sig"`
 }
 
-func (c *registryClient) announce(_ context.Context, nodeID string, priv ed25519.PrivateKey, hash string, expires time.Time) error {
+func (c *registryClient) announce(ctx context.Context, nodeID string, priv ed25519.PrivateKey, hash string, expires time.Time) error {
 	ts := time.Now().Unix()
 	expiresUnix := expires.Unix()
 	sig := signPayload(priv, buildPayload(nodeID, hash, strconv.FormatInt(expiresUnix, 10), "0", strconv.FormatInt(ts, 10)))
-	return c.do(http.MethodPost, "/v1/announces", announceReq{
+	return c.do(ctx, http.MethodPost, "/v1/announces", announceReq{
 		NodeID: nodeID, CodeHash: hash, ExpiresAt: expiresUnix, SizeHint: 0, TS: ts, Sig: sig,
-	}, http.StatusOK, nil)
+	}, nil)
 }
 
 type revokeReq struct {
@@ -144,42 +156,24 @@ type revokeReq struct {
 	Sig    string `json:"sig"`
 }
 
-func (c *registryClient) revoke(_ context.Context, nodeID string, priv ed25519.PrivateKey, hash string) error {
+func (c *registryClient) revoke(ctx context.Context, nodeID string, priv ed25519.PrivateKey, hash string) error {
 	ts := time.Now().Unix()
 	sig := signPayload(priv, buildPayload(nodeID, hash, strconv.FormatInt(ts, 10)))
-	return c.do(http.MethodDelete, "/v1/announces/"+hash, revokeReq{
+	return c.do(ctx, http.MethodDelete, "/v1/announces/"+hash, revokeReq{
 		NodeID: nodeID, TS: ts, Sig: sig,
-	}, http.StatusOK, nil)
+	}, nil)
 }
 
-func (c *registryClient) deregister(_ context.Context, nodeID string, priv ed25519.PrivateKey) error {
+func (c *registryClient) deregister(ctx context.Context, nodeID string, priv ed25519.PrivateKey) error {
 	ts := time.Now().Unix()
 	sig := signPayload(priv, buildPayload(nodeID, strconv.FormatInt(ts, 10)))
-	return c.do(http.MethodDelete, "/v1/nodes/"+nodeID, revokeReq{
+	return c.do(ctx, http.MethodDelete, "/v1/nodes/"+nodeID, revokeReq{
 		NodeID: nodeID, TS: ts, Sig: sig,
-	}, http.StatusOK, nil)
+	}, nil)
 }
 
 // resolve 转查 registry。未接入（404）返回 (nil, nil)；其余非 200 视为错误。
-func (c *registryClient) resolve(_ context.Context, code string) (*ResolveInfo, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-		c.base+"/v1/resolve/"+codeHash(code), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound:
-		return nil, nil
-	default:
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return nil, fmt.Errorf("resolve: 期望 200/404 实际 %d: %s", resp.StatusCode, b)
-	}
+func (c *registryClient) resolve(ctx context.Context, code string) (*ResolveInfo, error) {
 	var raw struct {
 		NodeID    string `json:"node_id"`
 		URL       string `json:"url"`
@@ -187,8 +181,14 @@ func (c *registryClient) resolve(_ context.Context, code string) (*ResolveInfo, 
 		ExpiresAt int64  `json:"expires_at"`
 		SizeHint  int64  `json:"size_hint"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("resolve 响应解析: %w", err)
+	req := httpjson.Request{Method: http.MethodGet, URL: c.base + "/v1/resolve/" + codeHash(code)}
+	if err := httpjson.DoJSON(ctx, c.http, req, &raw); err != nil {
+		// 404 = 未接入（不是错误）⇒ 调用方按「未命中」处理。
+		var se *httpjson.StatusError
+		if errors.As(err, &se) && se.Code == http.StatusNotFound {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolve: %w", err)
 	}
 	return &ResolveInfo{
 		NodeID:    raw.NodeID,
