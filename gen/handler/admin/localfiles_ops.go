@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	admin "github.com/pigeonbox/contracts/gen/admin"
 	shareService "github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/transfer"
 	"github.com/pigeonbox/core/pkg/utils"
@@ -195,21 +196,18 @@ func AdminTestOIDC(ctx context.Context, c *app.RequestContext) {
 	})
 }
 
+// normalizeActivitiesPage 管理操作审计分页参数归一化（默认 20、上限 200、超限截断）。
+// 口径表见 internal/paging。
+func normalizeActivitiesPage(page, pageSize int) (int, int) {
+	return paging.AdminActivitiesPolicy.Normalize(page, pageSize)
+}
+
 // AdminActivities 管理操作审计日志分页。
 // @router /admin/activities [GET]
 func AdminActivities(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminActivitiesReq
 	_ = c.BindAndValidate(&req)
-	page, pageSize := int(req.GetPage()), int(req.GetPageSize())
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-	if pageSize > 200 {
-		pageSize = 200
-	}
+	page, pageSize := normalizeActivitiesPage(int(req.GetPage()), int(req.GetPageSize()))
 	query := model.AdminOperationLogQuery{
 		Action:   req.GetAction(),
 		Actor:    req.GetActor(),

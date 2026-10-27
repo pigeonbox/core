@@ -176,7 +176,7 @@ func (r *FileCodeRepository) CountExpired(ctx context.Context) (int64, error) {
 // ListWithFilter 管理端文件列表：组合过滤 + 分页（此前仅 keyword 模糊匹配，
 // 无法按上传者/IP/类型/大小/时间/状态定位滥用资源）。
 func (r *FileCodeRepository) ListWithFilter(ctx context.Context, q model.FileCodeQuery) ([]*model.FileCode, int64, error) {
-	page, pageSize := clampPage(q.Page, q.PageSize, MaxPageSize)
+	page, pageSize := normalizePage(q.Page, q.PageSize)
 
 	query := r.db().WithContext(ctx).Model(&model.FileCode{})
 

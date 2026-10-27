@@ -20,6 +20,7 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/httpjson"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -93,26 +94,9 @@ type ListReq struct {
 	Status   *int
 }
 
-// clampPage 分页参数钳制（List 与 ListForUser 同规格：page ≥ 1，
-// pageSize ∈ [1,100] 否则默认 20——此前同域两处手写重复）。
-//
-// 有意不迁 kit/pagination（2026-10-10 评估）：全仓三套分页方言——本域与
-// mcp 超限"回落 20"、dao/page.go 上限 200"截断"、kit 上限 500"截断"。
-// 任何迁移都改变既有 API 的 pageSize 契约（前端/MCP 消费方可见），属有损
-// 变更须随契约版本走；统一留待专项列车，此处维持现状。
-func clampPage(page, pageSize int) (int, int) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-	return page, pageSize
-}
-
 // List 列表
 func (s *Service) List(ctx context.Context, req ListReq) (*ListData, error) {
-	req.Page, req.PageSize = clampPage(req.Page, req.PageSize)
+	req.Page, req.PageSize = paging.NotifyPolicy.Normalize(req.Page, req.PageSize)
 	tx := s.notifyRepo.Query(ctx)
 	if req.Type != "" {
 		tx = tx.Where("type = ?", req.Type)
@@ -335,7 +319,7 @@ type UserNotifyListData struct {
 
 // ListForUser 列出某用户的通知（含广播 + 定向给该用户）
 func (s *Service) ListForUser(ctx context.Context, userID uint, page, pageSize int) (*UserNotifyListData, error) {
-	page, pageSize = clampPage(page, pageSize)
+	page, pageSize = paging.NotifyPolicy.Normalize(page, pageSize)
 	q := s.notifyRepo.Query(ctx).
 		Where("status = 1").
 		Where("target_user_id IS NULL OR target_user_id = ?", userID)

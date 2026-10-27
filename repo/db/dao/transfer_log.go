@@ -46,7 +46,7 @@ func (r *TransferLogRepository) TrendByDay(ctx context.Context, from time.Time, 
 }
 
 func (r *TransferLogRepository) List(ctx context.Context, query model.TransferLogQuery) ([]*model.TransferLog, int64, error) {
-	page, pageSize := clampPage(query.Page, query.PageSize, MaxPageSize)
+	page, pageSize := normalizePage(query.Page, query.PageSize)
 
 	dbQuery := r.db().WithContext(ctx).Model(&model.TransferLog{})
 

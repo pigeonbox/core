@@ -39,7 +39,7 @@ func (r *FileCodeRepository) GetFilesByUserID(ctx context.Context, userID uint) 
 }
 
 func (r *FileCodeRepository) GetFilesByUserIDWithPagination(ctx context.Context, userID uint, page, pageSize int) ([]*model.FileCode, int64, error) {
-	page, pageSize = clampPage(page, pageSize, MaxPageSize)
+	page, pageSize = normalizePage(page, pageSize)
 
 	// 构建查询条件
 	query := r.db().WithContext(ctx).Model(&model.FileCode{}).Where("user_id = ?", userID)
@@ -69,7 +69,7 @@ type UserShareFilter struct {
 //     列表同源——前端曾拉全量再客户端过滤，空表却显示全量分页总数）
 //   - "all" / "": 不过滤状态
 func (r *FileCodeRepository) GetUserSharesWithFilter(ctx context.Context, userID uint, filter UserShareFilter) ([]*model.FileCode, int64, error) {
-	page, pageSize := clampPage(filter.Page, filter.PageSize, 100)
+	page, pageSize := normalizeUserSharePage(filter.Page, filter.PageSize)
 
 	now := time.Now()
 	q := r.db().WithContext(ctx).Model(&model.FileCode{}).Where("user_id = ?", userID)
