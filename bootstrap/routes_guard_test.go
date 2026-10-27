@@ -61,6 +61,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		// 回收站（2026-10-06）：软删恢复 / 彻底删除（DB 硬删+存储对象删除）
 		"POST /admin/files/restore", "POST /admin/files/purge",
 		// 站级公告公开端点（2026-10-07 对标上游站内通知条；匿名可访问）
+		// ⚠️ 2026-10-26 IDL 化：路由改由 common 域生成（gen/router/common），
+		// 原先登记在 notify 域会被 /api 组的 UserOrAPIKey 误加登录门槛。
 		"GET /api/v1/notifies/public",
 		// 分享治理（组合过滤 + 状态机）
 		"GET /admin/files/filter",
@@ -93,13 +95,13 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /notifies/active",
 		// ===== user（IDL）=====
 		"GET /user/api-keys", "DELETE /user/api-keys/:id", "POST /user/api-keys",
-		// 一键吊销全部 API Key（手写，JWT-only）
+		// 一键吊销全部 API Key（2026-10-26 IDL 化：common 域生成路由；JWT-only）
 		"POST /user/api-keys/revoke-all",
 		"POST /user/change-password", "GET /user/files", "GET /user/info",
 		"POST /user/login", "PUT /user/profile", "POST /user/register", "GET /user/stats",
 		// ===== share（IDL）=====
 		"GET /share/download", "POST /share/file/", "GET /share/select/", "POST /share/text/",
-		// 取件元数据（手写：查询不扣次数、不要密码）
+		// 取件元数据（2026-10-26 IDL 化：publicapi 域生成路由；查询不扣次数、不要密码）
 		"GET /share/metadata/:code",
 		// ===== anonymous（IDL）=====
 		"POST /anonymous/generate", "POST /anonymous/retrieve",
@@ -123,6 +125,7 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /openapi.json", "GET /api/config", "GET /robots.txt",
 		// MCP（Streamable HTTP；无会话模式：GET/DELETE 按规范回 405，由 SDK 应答）
 		"POST /api/v1/mcp", "GET /api/v1/mcp", "DELETE /api/v1/mcp",
+		// ===== 会话自省（2026-10-26 IDL 化：common 域生成路由；令牌在 handler 内校验）=====
 		"POST /api/v1/user/refresh", "POST /api/v1/user/logout", "GET /api/v1/user/check-auth",
 		"GET /readyz",
 		"GET /api/v1/user/shares", "POST /api/v1/user/shares/batch-delete",
@@ -130,9 +133,9 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"DELETE /api/v1/user/shares/:code/hard",
 		"GET /api/v1/notifies/mine", "GET /api/v1/notifies/unread-count",
 		"POST /api/v1/notifies/mark-read",
-		// ===== 多文件分享（P0 多文件，手写；OptionalIdentity 可选身份）=====
+		// ===== 多文件分享（P0 多文件，2026-10-26 IDL 化：publicapi 域生成路由；OptionalIdentity 可选身份）=====
 		"POST /api/v1/share/multi-direct", "POST /api/v1/share/multi-bind",
-		// ===== P2P 联邦解析代理（M2 手写；未启用时 available:false）=====
+		// ===== P2P 联邦解析代理（M2，2026-10-26 IDL 化：publicapi 域生成路由；未启用时 available:false）=====
 		"GET /api/v1/federation/resolve",
 		// ===== 寄件码/反向收件（P2 手写）=====
 		"POST /api/v1/user/requests", "GET /api/v1/user/requests",
@@ -140,7 +143,7 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /request/:token", "POST /api/v1/request/:token/upload",
 		// ===== OIDC SSO（P2 手写；security.oidc.enabled 时注册）=====
 		"GET /api/v1/user/oidc/login", "GET /api/v1/user/oidc/callback",
-		// ===== NAS 本地文件导入（P3 手写）=====
+		// ===== NAS 本地文件导入（P3，2026-10-26 IDL 化：publicapi 域生成路由）=====
 		"POST /api/v1/user/shares/import-local",
 	}
 
