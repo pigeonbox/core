@@ -191,8 +191,8 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 		}
 	}
 
-	// 4.5 初始化预览服务
-	if err := initPreviewService(); err != nil {
+	// 4.5 初始化预览服务（缓存目录落在已解析的数据目录下，见 initPreviewService 注释）
+	if err := initPreviewService(config.App.DataPath); err != nil {
 		logger.Error("Failed to init preview service", zap.Error(err))
 	}
 

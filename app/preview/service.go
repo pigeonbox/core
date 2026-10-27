@@ -165,10 +165,20 @@ func (s *Service) generatePreview(ctx context.Context, fileCode *model.FileCode)
 	if filePath == "" {
 		return nil, fmt.Errorf("file path is empty")
 	}
+	// 预览引擎（2026-10-28 真机实证 fnOS）：必须在**暂存文件之前**取到。
+	// 预览服务 init 失败时（缓存目录不可建 ⇒ 见 bootstrap.initPreviewService）
+	// GetService() 返回 nil，此时 MaxFileSize() 走 nil 接收者分支返回 0（=不限）
+	// ⇒ 2026-10-08 加固的「预览大小上限」被静默关掉；而若把 nil 检查排在暂存
+	// 之后，任意大文件仍会先全量落临时盘才报错 ⇒ 磁盘耗尽 DoS 面回归。
+	// 故：先取引擎，取不到直接失败，全程不碰文件内容。
+	svc := previewService.GetService()
+	if svc == nil {
+		return nil, fmt.Errorf("preview service not available")
+	}
 	// 预览大小上限（2026-10-08 加固）：Config.MaxFileSize 此前从未生效，任意大
 	// 文件会先全量落临时盘才被生成器拒绝——磁盘耗尽 DoS 面。DB 有记录大小时
 	// 预判直接拒绝（连对象都不打开）；记录缺失/为 0 时退化为流式上限截断。
-	maxSize := previewService.GetService().MaxFileSize()
+	maxSize := svc.MaxFileSize()
 	if maxSize > 0 && fileCode.Size > maxSize {
 		return nil, fmt.Errorf("file too large for preview: %d > %d", fileCode.Size, maxSize)
 	}

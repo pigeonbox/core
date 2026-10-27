@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/pigeonbox/contracts/errcode"
+	"path/filepath"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -238,13 +239,32 @@ func readinessHandler(ctx context.Context, c *app.RequestContext) {
 	})
 }
 
-func initPreviewService() error {
+// initPreviewService 初始化预览服务。缓存目录必须落在**已解析的数据目录**下，
+// 不可用相对路径 "./data/previews"——相对路径按进程 CWD 解析，而 NAS 包
+// （fnOS 等）、容器与 systemd 部署的 CWD 都不指向数据目录 ⇒ 建目录 EACCES ⇒
+// 预览服务初始化失败（真机实证 2026-10-28：fnOS 4.0.7 每次启动都报
+// "failed to create preview cache directory: mkdir ./data/previews: permission denied"，
+// 该错误自 3.3.x 起长期存在，非新版本引入）。
+//
+// 连带风险（本函数 init 失败即触发，故必须连同修）：
+//
+//	① preview.GetService() 返回 nil ⇒ MaxFileSize() 走 nil 接收者分支返回 0
+//	   （=不限）⇒ 2026-10-08 加固的「预览大小上限」被**静默关掉**；
+//	② app/preview 的 nil 检查排在「文件全量暂存到临时盘」之后 ⇒ 任意大文件
+//	   仍会先落满临时盘再报错 ⇒ 磁盘耗尽 DoS 面回归。
+//
+// 故：缓存目录 = 已解析数据目录/previews；数据目录为空时回退 "./data"
+// （与 app/storage 的兜底口径一致）。
+func initPreviewService(dataPath string) error {
+	if dataPath == "" {
+		dataPath = "./data"
+	}
 	previewConfig := &previewPkg.Config{
 		EnablePreview:    true,
 		ThumbnailWidth:   300,
 		ThumbnailHeight:  200,
 		MaxFileSize:      50 * 1024 * 1024,
-		PreviewCachePath: "./data/previews",
+		PreviewCachePath: filepath.Join(dataPath, "previews"),
 		FFmpegPath:       "ffmpeg",
 	}
 
