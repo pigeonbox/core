@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -605,11 +606,7 @@ type listSharesOut struct {
 }
 
 func (s *Service) listShares(ctx context.Context, in listSharesIn, caller Caller) (listSharesOut, error) {
-	page := expireValue(in.Page, 1)
-	pageSize := expireValue(in.PageSize, 20)
-	if pageSize > 100 {
-		pageSize = 100
-	}
+	page, pageSize := normalizeListSharesPage(in.Page, in.PageSize)
 	files, total, err := s.fileCodeRepo.List(ctx, page, pageSize, in.Keyword)
 	if err != nil {
 		return listSharesOut{}, fmt.Errorf("查询失败: %w", err)
@@ -737,8 +734,7 @@ func (s *Service) listUsers(ctx context.Context, in listUsersIn, caller Caller) 
 	if msg, missing := s.adminReady(); missing {
 		return listUsersOut{}, fmt.Errorf("%s", msg)
 	}
-	page := expireValue(in.Page, 1)
-	pageSize := expireValue(in.PageSize, 20)
+	page, pageSize := normalizeListUsersPage(in.Page, in.PageSize)
 	users, total, err := s.adminSvc.Users(ctx, page, pageSize)
 	if err != nil {
 		return listUsersOut{}, fmt.Errorf("查询失败: %w", err)
@@ -974,6 +970,21 @@ func derefString(p *string) string {
 }
 
 // expireValue 过期/分页数值归一：非正值回退默认。
+// normalizeListSharesPage 分享列表 MCP 工具的分页参数归一化（默认 20、上限 100、
+// 超限截断）。口径表见 internal/paging。
+func normalizeListSharesPage(page, pageSize int) (int, int) {
+	return paging.MCPListSharesPolicy.Normalize(page, pageSize)
+}
+
+// normalizeListUsersPage 用户列表 MCP 工具的分页参数归一化（默认 20、**不限上限**）。
+//
+// ⚠️ 本口径**不设上限**（与其它域不同）⇒ 下游 dao 仍会按自身口径再钳一次，
+// 但 mcp 输出里报告的 page_size 是本层的值（与实际返回条数可能不一致——
+// 这是既有行为，本次收编不改它）。
+func normalizeListUsersPage(page, pageSize int) (int, int) {
+	return paging.MCPListUsersPolicy.Normalize(page, pageSize)
+}
+
 func expireValue(v, def int) int {
 	if v > 0 {
 		return v

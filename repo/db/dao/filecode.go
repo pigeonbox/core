@@ -199,7 +199,7 @@ func (r *FileCodeRepository) CountTodayUploads(ctx context.Context) (int64, erro
 }
 
 func (r *FileCodeRepository) List(ctx context.Context, page, pageSize int, search string) ([]*model.FileCode, int64, error) {
-	page, pageSize = clampPage(page, pageSize, MaxPageSize)
+	page, pageSize = normalizePage(page, pageSize)
 
 	query := r.db().WithContext(ctx).Model(&model.FileCode{})
 

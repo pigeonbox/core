@@ -26,7 +26,7 @@ func (r *AdminOperationLogRepository) Create(ctx context.Context, log *model.Adm
 }
 
 func (r *AdminOperationLogRepository) List(ctx context.Context, query model.AdminOperationLogQuery) ([]*model.AdminOperationLog, int64, error) {
-	page, pageSize := clampPage(query.Page, query.PageSize, MaxPageSize)
+	page, pageSize := normalizePage(query.Page, query.PageSize)
 
 	dbQuery := r.db().WithContext(ctx).Model(&model.AdminOperationLog{})
 

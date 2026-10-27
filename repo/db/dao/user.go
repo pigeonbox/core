@@ -79,7 +79,7 @@ type UserFilter struct {
 
 // ListFiltered 带筛选的用户分页列表（管理端用户管理）
 func (r *UserRepository) ListFiltered(ctx context.Context, f UserFilter) ([]*model.User, int64, error) {
-	page, pageSize := clampPage(f.Page, f.PageSize, MaxPageSize)
+	page, pageSize := normalizePage(f.Page, f.PageSize)
 	q := r.db().WithContext(ctx).Model(&model.User{})
 	if f.Keyword != "" {
 		like, esc := LikeContains(f.Keyword)
@@ -136,7 +136,7 @@ func (r *UserRepository) GetByOIDCSub(ctx context.Context, sub string) (*model.U
 }
 
 func (r *UserRepository) List(ctx context.Context, page, pageSize int) ([]*model.User, int64, error) {
-	page, pageSize = clampPage(page, pageSize, MaxPageSize)
+	page, pageSize = normalizePage(page, pageSize)
 	return paginate[model.User](r.db().WithContext(ctx).Model(&model.User{}), page, pageSize)
 }
 

@@ -58,13 +58,6 @@ func paramID(c *app.RequestContext, label string) (uint, bool) {
 	return uint(id64), true
 }
 
-// parsePage 分页查询参数解析（缺失/非法回退 1/20；上限截断由 dao clampPage 统一兜底）。
-func parsePage(c *app.RequestContext) (page, pageSize int) {
-	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	return
-}
-
 // saveUploadEntries 校验并落盘 multipart 文件列表（多文件直传/访客投递共用）。
 // 逐文件：文件名消毒 → 扩展名白名单 → 单文件大小上限 → 魔数一致性
 // （encrypted=true 跳过：E2E 密文头为随机字节，必然不过魔数表）→ 唯一相对

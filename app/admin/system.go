@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/oekit/core/version"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/storage"
 )
@@ -107,20 +108,20 @@ type LogEntry struct {
 	UserID    string `json:"user_id"`
 }
 
+// normalizeLogPage 系统日志分页参数归一化（默认 50、上限 500、超限截断）。
+//
+// 与其它域口径不同（默认 50 / 上限 500），是既有契约（响应条数对调用方可见）
+// ⇒ 口径表见 internal/paging。
+func normalizeLogPage(page, pageSize int) (int, int) {
+	return paging.AdminSystemLogPolicy.Normalize(page, pageSize)
+}
+
 // GetSystemLogs 获取系统日志（真实数据）：读 pkg/logger 进程内环形缓冲
 // （Init 时 Tee 进主日志链，容量有界、重启即清——定位是「最近运行日志」
 // 面板；操作审计在 operation_logs 表另有专页）。此前是返回模拟数据的
 // TODO 桩。level 空=全部，否则精确匹配级别名；分页窗口按时间序最旧在前。
 func (s *Service) GetSystemLogs(ctx context.Context, level string, page, pageSize int) ([]*LogEntry, int64, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 50
-	}
-	if pageSize > 500 {
-		pageSize = 500
-	}
+	page, pageSize = normalizeLogPage(page, pageSize)
 
 	entries, total := logger.RecentLogs(level, (page-1)*pageSize, pageSize)
 	logs := make([]*LogEntry, 0, len(entries))
