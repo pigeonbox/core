@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/oekit/gormx"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -115,7 +116,7 @@ func (r *SystemConfigRepository) Save(ctx context.Context, rec *model.SystemConf
 				return tx.Model(&existing).UpdateColumn("data", rec.Data).Error
 			}
 			if cerr := tx.Create(rec).Error; cerr != nil {
-				if IsUniqueViolation(cerr) || isSQLiteBusy(cerr) {
+				if gormx.IsUniqueViolation(cerr) || isSQLiteBusy(cerr) {
 					return errRetryableConflict
 				}
 				return cerr
