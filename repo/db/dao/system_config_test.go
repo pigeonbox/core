@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/glebarez/sqlite"
+	"github.com/oekit/gormx"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -134,8 +135,9 @@ func TestSystemConfigSaveUniqueRetryConverges(t *testing.T) {
 // TestIsUniqueViolation 撞唯一键判据表驱动：gorm 映射分支 + 三家驱动裸 SQL
 // 文案（mysql/pg 无需真库，直接喂驱动实际报错文案）+ 反例锁窄匹配。
 //
-// 判据本身已收编为**导出的单源**（repo/db/dao/unique_violation.go，dao 与
-// app/share 共用）⇒ app/share 的 sqlite 路径不再漏判（见该文件注释）。
+// 判据本体已**收编上游 oekit/gormx**（core 抬 gorm 地板到 v1.31.2 后直接依赖；
+// 见 repo/db/dao/unique_violation.go 的演进注释）⇒ 本用例改为**锁上游行为**：
+// 上游的窄判据一旦改动（措辞/宽窄），这里即红 ⇒ 避免"上游改了、本仓静默失配"。
 func TestIsUniqueViolation(t *testing.T) {
 	cases := []struct {
 		name string
@@ -158,7 +160,7 @@ func TestIsUniqueViolation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, IsUniqueViolation(tc.err))
+			assert.Equal(t, tc.want, gormx.IsUniqueViolation(tc.err))
 		})
 	}
 }
