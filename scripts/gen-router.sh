@@ -171,6 +171,10 @@ if [ "$CHECK" = "1" ]; then
     printf '%s\n' "$REGEN_DIRTY" | sed 's/^/    /'
     echo "若用常规模式跑生成，结束后还原这些文件（桩是纯噪音，手写实现都在同包其他文件）："
     echo "    git checkout -- $(printf '%s\n' "$REGEN_DIRTY" | tr '\n' ' ')"
+    echo -e "  \033[1;33m⚠ 注意：\`git checkout --\` 会**连同该文件里的手写段落一起还原**\033[0m"
+    echo "    （gen/handler 下的既有 handler 文件除生成桩外还含手写实现，"
+    echo "      例如 admin_service.go 的分页口径收编（internal/paging，2026-10-29 core#8））。"
+    echo "    ⇒ 还原后请核对该文件的手写改动是否还在；不在则从 git 历史取回后再提交。"
   fi
   echo "✓ CHECK=1 通过：gen/ 与 IDL 再生成结果一致（本次未改动任何仓库文件）"
   exit 0

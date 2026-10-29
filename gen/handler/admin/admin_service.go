@@ -13,6 +13,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	admin "github.com/pigeonbox/contracts/gen/admin"
 	adminsvc "github.com/pigeonbox/core/app/admin"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -143,12 +144,9 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 
 	page := int(req.Page)
 	pageSize := int(req.PageSize)
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
+	// 口径收编到 internal/paging（2026-10-29，core#8）：声明式一行，行为逐字不变
+	// （原写法：page ≤ 0 ⇒ 1、pageSize ≤ 0 ⇒ 20，无上限）。
+	page, pageSize = paging.GenAdminListPolicy.Normalize(page, pageSize)
 	search := ""
 	if req.Keyword != nil {
 		search = *req.Keyword
@@ -256,12 +254,9 @@ func AdminListUsers(ctx context.Context, c *app.RequestContext) {
 
 	page := int(req.Page)
 	pageSize := int(req.PageSize)
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = 20
-	}
+	// 口径收编到 internal/paging（2026-10-29，core#8）：声明式一行，行为逐字不变
+	// （原写法：page ≤ 0 ⇒ 1、pageSize ≤ 0 ⇒ 20，无上限）。
+	page, pageSize = paging.GenAdminListPolicy.Normalize(page, pageSize)
 
 	users, total, err := getAdminService().GetUsers(ctx, page, pageSize)
 	resp := &admin.AdminListUsersResp{Code: 0, Message: "success"}
