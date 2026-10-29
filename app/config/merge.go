@@ -37,6 +37,17 @@ func (s *Service) UpdateConfigJSON(ctx context.Context, raw []byte) error {
 		return fmt.Errorf("配置体必须是 JSON 对象: %w", err)
 	}
 
+	// ①.5 形状归一：local_import 有**两种提交形状**——顶层 local_import 与
+	// upload_ex 内嵌的 local_import（读侧两种都吐；官方管理台用顶层）。
+	//
+	// 缺陷实录（2026-10-30 真机实测）：此前只认顶层 ⇒ 只提交**嵌套**形状的
+	// 集成方**静默无效但返回 success**——回读仍是旧值，调用方以为改成功了。
+	//   PUT {"upload_ex":{"local_import":{"enabled":true,"roots":["/x"]}}}
+	//     ⇒ {"code":0,"message":"success"}，但 roots 纹丝不动。
+	// ⇒ 本次提交**未带**顶层形状时，把嵌套形状提升为顶层（提交意图以本次请求为准）；
+	// 两者都在则顶层为准（与运行时取值口径一致：sc.LocalImport 覆盖 sc.UploadEx）。
+	normalizeLocalImportShape(incoming)
+
 	// ② 底座 = 已落库配置（无记录 ⇒ 底座为空 ⇒ 语义退化为"整段替换"，
 	//    与旧行为一致）
 	base := map[string]json.RawMessage{}
@@ -69,6 +80,32 @@ func (s *Service) UpdateConfigJSON(ctx context.Context, raw []byte) error {
 		return err
 	}
 	return s.UpdateConfig(ctx, cfg)
+}
+
+// normalizeLocalImportShape 把 upload_ex 内嵌的 local_import 提升为顶层形状。
+//
+// 仅当本次提交**未带**顶层 local_import 时生效（两者都在 ⇒ 顶层为准，
+// 与运行时的取值口径一致：sc.LocalImport 覆盖 sc.UploadEx.LocalImport）。
+//
+// 背景：local_import 同一配置有两种提交形状（顶层 / upload_ex 内嵌），
+// 读侧两种都吐；此前写侧只认顶层 ⇒ 嵌套形状**静默无效但返回 success**。
+func normalizeLocalImportShape(incoming map[string]json.RawMessage) {
+	if _, hasTop := incoming["local_import"]; hasTop {
+		return
+	}
+	ue, ok := incoming["upload_ex"]
+	if !ok {
+		return
+	}
+	var uploadEx map[string]json.RawMessage
+	if err := json.Unmarshal(ue, &uploadEx); err != nil {
+		return
+	}
+	li, ok := uploadEx["local_import"]
+	if !ok || string(li) == "null" {
+		return
+	}
+	incoming["local_import"] = li
 }
 
 // mergeJSONObjects 按字段级合并两个 JSON 对象：

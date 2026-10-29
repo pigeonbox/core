@@ -126,3 +126,56 @@ func TestUpdateUserSettingsJSON_FieldLevelMerge(t *testing.T) {
 	assert.Equal(t, int64(1024*1024*1024), got.User.UserStorageQuota, "未提及字段被清零")
 	assert.Equal(t, 168, got.User.SessionExpiryHours, "未提及字段被清零 ⇒ 会话立刻过期")
 }
+
+// TestUpdateConfigJSON_LocalImportNestedShape 回归（2026-10-30 真机实测）：
+//
+// local_import 有**两种提交形状**——顶层 local_import 与 upload_ex 内嵌的
+// local_import（读侧两种都吐；官方管理台用顶层）。此前写侧只认顶层 ⇒
+// 只提交**嵌套**形状的集成方**静默无效但返回 success**：
+//
+//	PUT {"upload_ex":{"local_import":{"enabled":true,"roots":["/x"]}}}
+//	  ⇒ {"code":0,"message":"success"}，但回读 roots 纹丝不动（仍是旧值）
+//
+// 期望：嵌套形状被提升为顶层 ⇒ 落库/回读/运行时三处一致。
+func TestUpdateConfigJSON_LocalImportNestedShape(t *testing.T) {
+	svc := newTestConfigService(t)
+	ctx := context.Background()
+
+	// 初始：roots=[/old]
+	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
+		UploadEx: &conf.UploadConfig{OpenUpload: true},
+		LocalImport: &conf.LocalImportConfig{
+			Enabled: true,
+			Roots:   []string{"/old"},
+		},
+	}))
+
+	// 只提交**嵌套**形状
+	require.NoError(t, svc.UpdateConfigJSON(ctx,
+		[]byte(`{"upload_ex":{"local_import":{"enabled":true,"roots":["/nested"]}}}`)))
+
+	got, err := svc.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.LocalImport)
+	assert.Equal(t, []string{"/nested"}, got.LocalImport.Roots,
+		"嵌套形状提交必须生效（此前静默无效但返回 success）")
+	require.NotNil(t, got.UploadEx)
+	assert.Equal(t, []string{"/nested"}, got.UploadEx.LocalImport.Roots,
+		"嵌套形状也应在 upload_ex 视图里一致")
+
+	// 顶层形状仍然生效（官方管理台口径不受影响）
+	require.NoError(t, svc.UpdateConfigJSON(ctx,
+		[]byte(`{"local_import":{"enabled":true,"roots":["/top"]}}`)))
+	got, err = svc.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.LocalImport)
+	assert.Equal(t, []string{"/top"}, got.LocalImport.Roots, "顶层形状仍应生效")
+
+	// 两者都在 ⇒ 顶层为准（与运行时取值口径一致）
+	require.NoError(t, svc.UpdateConfigJSON(ctx,
+		[]byte(`{"local_import":{"enabled":true,"roots":["/top-wins"]},"upload_ex":{"local_import":{"enabled":true,"roots":["/nested-loses"]}}}`)))
+	got, err = svc.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.LocalImport)
+	assert.Equal(t, []string{"/top-wins"}, got.LocalImport.Roots, "两者都在时顶层为准")
+}
