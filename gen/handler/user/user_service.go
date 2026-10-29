@@ -13,6 +13,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	usermodel "github.com/pigeonbox/contracts/gen/user"
 	userservice "github.com/pigeonbox/core/app/user"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/middleware"
 )
@@ -397,13 +398,13 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 
 	// 设置默认分页参数
 	page := req.Page
-	if page < 1 {
-		page = 1
-	}
 	pageSize := req.PageSize
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
+	// 口径收编到 internal/paging（2026-10-29，core#8）：声明式一行，行为逐字不变
+	// （原写法：page < 1 ⇒ 1、pageSize < 1 **或 > 100** ⇒ 20 —— 仍是**回落**）。
+	// ⚠️ req.Page/req.PageSize 是 int32 ⇒ 归一化在 int 上做，再转回 int32。
+	normPage, normPageSize := paging.GenUserFilesPolicy.Normalize(int(page), int(pageSize))
+	page = int32(normPage)
+	pageSize = int32(normPageSize)
 
 	// 调用 service 获取用户文件列表
 	fileList, err := getUserService().GetUserFiles(ctx, uint(userID), int(page), int(pageSize))

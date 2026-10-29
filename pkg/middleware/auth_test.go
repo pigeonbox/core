@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -92,7 +93,18 @@ func TestOptionalAuthMiddlewareRespectsBlacklist(t *testing.T) {
 
 	// 纯内存黑名单模式：注销后该 token 应视为匿名
 	auth.SetBlacklistRedis(nil)
-	auth.RevokeToken(context.Background(), token, 1<<20)
+	// ⚠️ TTL 必须是**真实时长**（此处 1 小时）。
+	//
+	// 此前写的是 `1<<20` —— 那是 **1048576 纳秒 ≈ 1.05 毫秒**（作者当成了
+	// "1MB" 或"20 位"，实则是 1ms 的 TTL）⇒ 内存黑名单条目在「签发 token →
+	// 组装中间件链 → 发请求」的**几毫秒内就过期** ⇒ IsTokenRevoked 返回 false
+	// ⇒ 已注销 token 被注入身份（uid=3）⇒ **用例假失败**。
+	//
+	// 为何本地跑不出、CI 才现形：本机这一步 < 1ms（条目还没过期）⇒ 恒绿；
+	// CI runner 慢（-race 尤其慢）⇒ 超过 1ms ⇒ 条目已过期 ⇒ 红。
+	// ⇒ 这是**时间预算型 flaky**：与本用例要测的语义（吊销 ⇒ 降级匿名）无关，
+	// 测的却是「机器够不够快」。
+	auth.RevokeToken(context.Background(), token, time.Hour)
 
 	ran := false
 	var handler app.HandlerFunc = func(ctx context.Context, c *app.RequestContext) {

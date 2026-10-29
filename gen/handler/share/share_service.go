@@ -24,6 +24,7 @@ import (
 	sharemodel "github.com/pigeonbox/contracts/gen/share"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -1106,12 +1107,12 @@ func UserSharesList(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	}
+	// 口径收编到 internal/paging（2026-10-29，core#8）：声明式一行，行为逐字不变
+	// （原写法：page < 1 ⇒ 1、pageSize < 1 ⇒ 20，无上限）。
+	// ⚠️ 归一化**刻意留在查询之后**（与原实现同序）：查询用的是原始 page/pageSize，
+	// 归一化只用于算响应里的 page/page_size/total_pages ⇒ 换序会让「报告的页长」
+	// 与「实际查询条数」错位（响应条数随之变化）。
+	page, pageSize = paging.GenShareUserSharesPolicy.Normalize(page, pageSize)
 	totalPages := (total + int64(pageSize) - 1) / int64(pageSize)
 	if totalPages < 1 {
 		totalPages = 1
