@@ -18,8 +18,51 @@ func (s *Service) GetFiles(ctx context.Context, page, pageSize int, search strin
 
 // GetFilesFiltered 管理端文件列表组合过滤（治理 2026-10-03：
 // keyword/user/upload_type/owner_ip/status/大小/时间/过期，供 /admin/files/filter）。
+//
+// 2026-10-29：顺带批量补齐上传者用户名 —— 此前只给裸 user_id，管理台「上传者」
+// 列只能渲染 "ID: 1"，管理员看不出是谁传的。补齐失败**不阻断**列表返回
+// （用户名是展示增强，不是查询前提）。
 func (s *Service) GetFilesFiltered(ctx context.Context, q model.FileCodeQuery) ([]*model.FileCode, int64, error) {
-	return s.fileCodeRepo.ListWithFilter(ctx, q)
+	files, total, err := s.fileCodeRepo.ListWithFilter(ctx, q)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.fillUploaderNames(ctx, files)
+	return files, total, nil
+}
+
+// fillUploaderNames 批量补上传者用户名（一次 IN 查询，无 N+1）。
+//
+// 不走 JOIN 的原因：file_codes 与 users 同名列（created_at/status/updated_at/
+// deleted_at）⇒ JOIN 后既有的 Where 条件会撞「ambiguous column name」。
+// 账号已删/匿名 ⇒ 用户名留空，由前端回退显示 ID / 匿名。
+func (s *Service) fillUploaderNames(ctx context.Context, files []*model.FileCode) {
+	if len(files) == 0 || s.userRepo == nil {
+		return
+	}
+	ids := make([]uint, 0, len(files))
+	seen := make(map[uint]bool, len(files))
+	for _, f := range files {
+		if f.UserID == nil || *f.UserID == 0 || seen[*f.UserID] {
+			continue
+		}
+		seen[*f.UserID] = true
+		ids = append(ids, *f.UserID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	names, err := s.userRepo.UsernamesByIDs(ctx, ids)
+	if err != nil {
+		logger.CtxWarn(ctx, "fill uploader names failed", "err", err)
+		return
+	}
+	for _, f := range files {
+		if f.UserID == nil {
+			continue
+		}
+		f.Username = names[*f.UserID]
+	}
 }
 
 // RestoreFiles 从回收站恢复（软删 → 存活）：deleted_at 置空，COS 对象未动无需处理。

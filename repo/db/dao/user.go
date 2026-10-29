@@ -116,6 +116,31 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*m
 	return &user, nil
 }
 
+// UsernamesByIDs 批量取「用户 ID → 用户名」映射（管理端文件列表显示上传者用）。
+//
+// 2026-10-29：管理台「上传者」列此前只有裸 user_id ⇒ 界面显示 "ID: 1"。
+// 这里一次 IN 查询补齐，避免逐行查库的 N+1。
+//
+// 已软删的账号不返回（GORM 默认软删过滤）⇒ 分享主人已注销时映射里没有该项，
+// 调用方留空、由前端回退显示 ID —— 与「孤儿分享」的历史事实一致。
+func (r *UserRepository) UsernamesByIDs(ctx context.Context, ids []uint) (map[uint]string, error) {
+	out := make(map[uint]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []model.User
+	if err := r.db().WithContext(ctx).
+		Model(&model.User{}).
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, u := range rows {
+		out[u.ID] = u.Username
+	}
+	return out, nil
+}
+
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	var user model.User
 	err := r.db().WithContext(ctx).Where("email = ?", email).First(&user).Error

@@ -47,7 +47,15 @@ type FileCode struct {
 	UploadID  string `gorm:"size:36" json:"upload_id"`
 
 	// 新增：用户认证相关字段
-	UserID       *uint  `gorm:"index" json:"user_id"`                           // 上传用户ID，为null表示匿名上传
+	UserID *uint `gorm:"index" json:"user_id"` // 上传用户ID，为null表示匿名上传
+	// Username 上传者用户名（**虚拟字段，不落库**）：管理端列表侧批量补齐。
+	//
+	// 2026-10-29：管理台「上传者」列此前只拿到 user_id ⇒ 界面只能渲染裸 ID
+	// （"ID: 1"），管理员看不出是谁传的。用户名取自 users 表；账号已删或
+	// 匿名上传时留空，由前端回退显示 ID / 匿名。
+	//
+	// omitempty：未补齐时**不落进 JSON**，避免给既有分享响应形状加字段。
+	Username     string `gorm:"-" json:"username,omitempty"`
 	UploadType   string `gorm:"size:20;default:'anonymous'" json:"upload_type"` // anonymous, authenticated
 	RequireAuth  bool   `gorm:"default:false" json:"require_auth"`              // 是否需要密码才能下载
 	PasswordHash string `gorm:"size:255" json:"-"`                              // 取件密码的 bcrypt 哈希（json:"-" 不外泄）

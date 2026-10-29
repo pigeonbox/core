@@ -598,9 +598,13 @@ func fileGovernanceItem(f *model.FileCode) map[string]interface{} {
 		"status":        f.Status,
 		"upload_type":   f.UploadType,
 		"user_id":       f.UserID,
-		"owner_ip":      f.OwnerIP,
-		"require_auth":  f.RequireAuth,
-		"created_at":    f.CreatedAt.Format("2006-01-02 15:04:05"),
+		// username 上传者用户名（2026-10-29）：此前只有裸 user_id ⇒ 管理台只能
+		// 显示 "ID: 1"。由 app/admin 侧批量补齐；账号已删/匿名时为空串，
+		// 前端据此回退显示 ID / 匿名。
+		"username":     f.Username,
+		"owner_ip":     f.OwnerIP,
+		"require_auth": f.RequireAuth,
+		"created_at":   f.CreatedAt.Format("2006-01-02 15:04:05"),
 	}
 	if isText {
 		preview := f.Text
