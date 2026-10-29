@@ -160,7 +160,24 @@ func (s *Service) InitiateUpload(ctx context.Context, req *InitiateUploadReq) (*
 			}
 			return controlToResp(existing), nil
 		}
-		return nil, ErrSessionConflict
+		// ⚠️ **已完成**的会话不是"进行中"⇒ 不按"他人进行中"拒绝（2026-10-30 真机实录）。
+		//
+		// 事故实录（2026-10-30 10.10.10.3 真机全量冒烟 S11 全线红 → 真缺陷）：
+		// upload_id 由 file_hash 派生 ⇒ 同一文件永远复用同一 upload_id；而已完成会话
+		// 在 upload_chunks 里**留到 7 天后**才被 janitor 清理
+		// （DeleteStaleSessions(completed=true)，见 app/admin/janitor.go）⇒ 同一文件
+		// 在**换一个来源 IP**（换设备/换网络/换反代出口/手机切基站）后重传 ⇒ 撞
+		// "他人进行中的会话" ⇒ 409「该文件已有进行中的上传会话，请稍后重试或更换文件」
+		// ⇒ 用户**7 天内**无法重传同一文件；而且文案说"进行中"与事实不符——它已完成，
+		// 分片早已合并成文件，**没有任何"进行中"的数据可被截胡**。
+		//
+		// 修法：completed 会话**不触发防截胡闸**（该闸只针对未完成的会话）⇒ 改为
+		// **重置**该会话（进度归零，本次上传从头来），落下方"复活"路径。
+		// 语义边界：绝不把已完成会话的 share_code 回给他人（D1：跨用户秒传是存在性
+		// oracle）——只是允许他重传自己的副本。
+		if existing.Status != "completed" {
+			return nil, ErrSessionConflict
+		}
 	}
 
 	// 旧会话已被清理（软删）后的同一 upload_id 重来 ⇒ **复活**而不是新建。
@@ -176,8 +193,11 @@ func (s *Service) InitiateUpload(ctx context.Context, req *InitiateUploadReq) (*
 	// 修法：查到软删的控制行 ⇒ 归属校验同 live 分支 ⇒ 复活它（进度归零 ⇒
 	// 客户端重传分片，避免复用已被回收的分片文件）。
 	if stale, serr := s.chunkRepo.GetByUploadIDUnscoped(ctx, req.UploadID); serr == nil && stale != nil {
+		// 同上：completed 会话没有"进行中"的数据可截胡 ⇒ 不按"他人进行中"拒绝，
+		// 而是重置会话让本次上传从头来（2026-10-30 真机实录）。
 		if !chunkSessionOwnedBy(stale, req.OwnerIP, req.UserID, req.SessionToken) &&
-			s.sessionHasChunks(ctx, stale.UploadID) {
+			s.sessionHasChunks(ctx, stale.UploadID) &&
+			stale.Status != "completed" {
 			return nil, ErrSessionConflict
 		}
 		if err := s.chunkRepo.ReviveSession(ctx, req.UploadID); err != nil {
