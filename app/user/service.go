@@ -469,6 +469,10 @@ type APIKeyData struct {
 	ExpiresAt  *time.Time
 	CreatedAt  *time.Time
 	Revoked    bool
+	// RevokedAt 撤销时间（软撤销：DB 一直有值，但此前**响应里没有这个字段**
+	// ⇒ 用户/前端看不到「这把 Key 是什么时候被撤销的」⇒ 审计信息断在回传面。
+	// 2026-10-30 真机实录补齐；nil = 未撤销。
+	RevokedAt *time.Time
 	// Scopes 权限范围（空 = 全量）。
 	Scopes []string
 }
@@ -563,6 +567,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIK
 			ExpiresAt:  record.ExpiresAt,
 			CreatedAt:  &record.CreatedAt,
 			Revoked:    record.Revoked,
+			RevokedAt:  record.RevokedAt,
 			Scopes:     scopes,
 		},
 	}, nil
@@ -587,6 +592,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, userID uint) ([]*APIKeyData, 
 			ExpiresAt:  key.ExpiresAt,
 			CreatedAt:  &key.CreatedAt,
 			Revoked:    key.Revoked,
+			RevokedAt:  key.RevokedAt,
 			Scopes:     key.ScopesList(),
 		}
 	}
