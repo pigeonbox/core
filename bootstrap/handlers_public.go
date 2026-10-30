@@ -75,8 +75,18 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		// 登录用户的用户级上限随鉴权而定，不上公共端点，超限时由服务端
 		// typed error 文案给出准确值（CodeTooLarge→413）。
 		"maxFileSize": config.Upload.MaxFileSize,
-		"enableChunk": config.Upload.EnableChunk,
-		"openUpload":  config.Upload.OpenUpload,
+		// 站点默认「单次发送**总量**上限」（user.user_upload_size，字节，0=不限）：
+		// 一次发送（多文件合计）的体积上限，**只约束登录用户**（匿名走访客日配额
+		// upload.anonymous_daily_bytes）。⚠️ 与上面的 maxFileSize（**单文件**上限）
+		// 是两个不同的闸——2026-10-30 事故：前端只显示单文件上限（4GB），登录用户
+		// 却被总量闸（默认 50MB）卡住，报「上传总大小超过限制（上限 52428800 字节）」。
+		// ⇒ 两个旋钮必须一起可见，否则 UI 与真实限制必然对不上。
+		// 取值 = 管理后台持久化的 user 段（无记录回退 yaml），与 GetUploadSizeCap 的
+		// **系统默认层**同源；**不含** per-user 覆盖（登录用户私有值，不上公开面——
+		// 服务端 413 才是权威，本值只用于前端**提示**）。
+		"maxBatchSize": effectiveUploadBatchCap(ctx),
+		"enableChunk":  config.Upload.EnableChunk,
+		"openUpload":   config.Upload.OpenUpload,
 		// 注册开关走生效值：管理后台"用户配置"持久化段优先，
 		// 无记录回退 yaml（与 /user/register 判定同源）
 		"registerEnabled": configApp.EffectiveUserSettings(ctx).AllowUserRegistration,
@@ -112,6 +122,22 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		"background":  safeImageURL(config.UI.Background),
 		"accentColor": safeHexColor(config.UI.AccentColor),
 	})
+}
+
+// effectiveUploadBatchCap 生效的站点默认「单次发送**总量**上限」（字节，0=不限）。
+//
+// 与「单文件上限」（upload.max_file_size ⇒ /api/config 的 maxFileSize）是两个不同的闸：
+//
+//	· maxFileSize：单个文件的体积上限
+//	· maxBatchSize：一次发送（多文件合计）的体积上限，**只约束登录用户**
+//	  （匿名走访客日配额 upload.anonymous_daily_bytes）
+//
+// 取值 = 管理后台持久化的 user 段（无记录回退 yaml），与 user 域
+// GetUploadSizeCap 的**系统默认层**同源；**不含** per-user 覆盖
+// （users.max_upload_size 是登录用户私有值，不上公开面——服务端 413 才是权威，
+// 本值只用于前端**提示**）。
+func effectiveUploadBatchCap(ctx context.Context) int64 {
+	return configApp.Default().EffectiveUploadBatchCap(ctx)
 }
 
 // safeImageURL 背景 URL 白名单校验：仅 http(s)，其余返回空（防 CSS/JS 注入）
