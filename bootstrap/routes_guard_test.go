@@ -88,6 +88,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		// ===== storage（IDL）=====
 		"GET /admin/storage", "PUT /admin/storage/config",
 		"POST /admin/storage/switch", "GET /admin/storage/test/:type",
+		// 存储迁移（2026-10-30）：把存量对象搬到目标后端，搬完才切换
+		"POST /admin/storage/migrate",
 		"GET /admin/storage/insights", "POST /admin/storage/clean-presign-orphans",
 		// ===== notify（IDL）=====
 		"GET /admin/notifies", "POST /admin/notifies",
