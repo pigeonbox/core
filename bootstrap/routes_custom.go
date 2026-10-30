@@ -148,6 +148,17 @@ func customizedRegister(r *server.Hertz) {
 	//（standalone 走 GeneratedRegister 全量组合，admin 副本按部署模式 case 注册，
 	// AdminMiddleware 组内），customHandler 手写注册全部摘除（wire 逐字段保形）。
 
+	// ===== 部署自检快照（2026-10-30；管理面）=====
+	// 供官方 CLI `pb doctor` 消费：把服务端的运行事实（DB/存储/Redis/版本/
+	// 部署模式/首启状态/时钟）结构化出来 —— 用户「装完不ら」时缺的不是日志，
+	// 是一条能给出结论的命令。诊断逻辑集中在 core 一处，不散落到 CLI 侧。
+	// 鉴权 = AdminOrAdminKey（admin JWT 或 **admin 用户的 API Key**，与
+	// /admin/p2p/* 同款口径：官方 CLI 用的就是 admin API Key）。
+	// public 副本不注册（ServesAdminPlane 门控 + public 的 /admin/* 门卫双保险）。
+	if config.ServesAdminPlane() {
+		r.GET("/admin/diagnostics", middleware.AdminOrAdminKey(), diagnosticsHandler)
+	}
+
 	// ===== 前端构建产物静态资源 =====
 	// Vite 输出的 index.html 用根级绝对路径引用资源（/assets/xxx、/vite.svg），
 	// 故把 ./static/assets 挂到 /assets。用 StaticFS 正确处理 Range 请求、MIME、

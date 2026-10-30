@@ -90,6 +90,18 @@ func Default() *Service {
 	return defaultSvc
 }
 
+// DefaultSafe 未装配时返回 nil（**不** panic）——供「可选读取」场景使用。
+//
+// 与 Default 的区别：Default 是 fail-loud（业务路径拿不到配置中心 = 装配错误，
+// 必须当场炸出来）；DefaultSafe 供**确实可能没有配置中心**的读取点，
+// 例如能力快照（bootstrap 早期阶段、单元测试未 InitDefault）。
+// ⚠️ 用它的地方必须自己处理 nil（缺配置 ≠ 崩溃，但也不能假装有值）。
+func DefaultSafe() *Service {
+	defaultMu.RLock()
+	defer defaultMu.RUnlock()
+	return defaultSvc
+}
+
 // EffectiveUserSettings 生效的用户设置：优先管理后台持久化值，
 // 无记录时回退 yaml 全局配置。注册开关、配额默认值、会话时长的
 // 运行时消费点统一走这里（修复管理端开关不生效）。
