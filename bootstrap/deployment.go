@@ -69,7 +69,7 @@ func applyDeploymentConstraints(cfg *conf.AppConfiguration) error {
 	if cfg.Database.Driver == "sqlite" {
 		return fmt.Errorf("deployment.mode=%s requires database.driver=mysql|postgres (SQLite 为单写者，不支持多进程共享)", mode)
 	}
-	if cfg.Federation.Enabled {
+	if cfg.Federation.Enabled && !conf.FederationAllowedInMode(mode) {
 		cfg.Federation.Enabled = false
 		logger.Warn("federation disabled: node identity is process-level (Ed25519), multi-replica semantics undefined")
 	}

@@ -502,6 +502,23 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 		}
 		if sc.P2P.Federation != nil {
 			next.Federation = *sc.P2P.Federation
+			// ⚠️ **部署模式派生的硬约束**：多副本拓扑（public/admin）下联邦
+			// **架构上不可用**（节点身份是进程级 Ed25519 密钥，多副本语义未定义）。
+			//
+			// 上面那行是**整段赋值**，会把 DB 里存着的 enabled=true 原样盖进来
+			// ⇒ 把 bootstrap/deployment.go 在**启动时**做下的降级**复活**。
+			// 后果链：全局 conf 的 Federation.Enabled 变回 true ⇒ /api/config 报
+			// federationEnabled=true ⇒ 前端在多副本拓扑下展示「本柜与其它站点联网」
+			// ⇒ 承诺了一个**架构上不可用**的跨站取件能力。
+			//
+			// 触发时机不止启动：管理台任意一次保存、以及**多副本配置广播**
+			// （applyPropagatedConfig → RestoreAdminSettings → 本函数）都会走到。
+			//
+			// DB 里的 enabled 是**提交意图**，生效值一律由部署模式裁决；
+			// 口径与 bootstrap 的降级共用 conf.FederationAllowedInMode 单一真相源。
+			if !conf.FederationAllowedInMode(next.NormalizedDeploymentMode()) {
+				next.Federation.Enabled = false
+			}
 		}
 	})
 

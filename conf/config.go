@@ -114,6 +114,36 @@ func (c *AppConfiguration) ServesAdminPlane() bool {
 	return !c.IsPublicReplica()
 }
 
+// FederationAllowedInMode 部署模式是否允许联邦。
+//
+// 多副本拓扑（public / admin）下联邦**架构上不可用**：联邦节点身份是**进程级**
+// Ed25519 密钥（PB_FEDERATION_NODE_KEY_PATH），多副本各持各的身份 ⇒
+// 注册/解析语义未定义（2026-10-30 拍板：暂不支持）⇒ 一律关闭。
+//
+// ⚠️ 这是**部署模式派生的硬约束**，不是配置项：管理台保存的联邦开关
+// （DB 里 system_configs 的 p2p.federation）是**提交意图**，不是生效值——
+// 它**不得**把多副本下的联邦打开。
+//
+// # 为什么放在 conf（单一真相源）
+//
+// 同一约束有两个触发点，口径必须一致，否则会漂：
+//
+//  1. bootstrap 的 applyDeploymentConstraints（**启动时**降级）；
+//  2. app/config 的 applySystemConfigOverlayLocked（**运行期**热应用；
+//     管理台保存 / 多副本配置广播都会走到）。
+//
+// 第 2 点曾经漏了这条约束 ⇒ overlay 的整段赋值（next.Federation = *sc.P2P.Federation）
+// 把启动时的降级**复活** ⇒ 多副本下 /api/config 报 federationEnabled=true
+// ⇒ 前端承诺了架构上不可用的跨站取件。两处都必须走本函数。
+func FederationAllowedInMode(mode string) bool {
+	// 空模式按 standalone 归一（与 NormalizedDeploymentMode 同一约定）——
+	// 否则调用方传原始 mode（空串）时会与传归一值得到**相反**的结论。
+	if mode == "" {
+		mode = DeployModeStandalone
+	}
+	return mode == DeployModeStandalone
+}
+
 // FederationConfig P2P 联邦接入（M2；默认关闭。对端服务：github.com/pigeonbox/p2p）。
 // 启用后本站注册进联邦注册中心，口令分享跨站可达（文件仍从本站直出，
 // 注册中心不落盘不见明文）。详见 docs/specs/2026-10-04-p2p-registry-service-design.md。
