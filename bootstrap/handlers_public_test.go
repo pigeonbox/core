@@ -86,7 +86,7 @@ func TestPublicConfigHandler_UploadCaps(t *testing.T) {
 		"单次发送总量上限必须下发（与单文件上限是两个闸，只发一个必然对不上）")
 
 	// per-user 私有值不得出现在公开面（登录用户的实际上限以服务端 413 为准）
-	body := string(w.Body.Bytes())
+	body := w.Body.String()
 	assert.NotContains(t, body, "useruploadsize", "内部字段名不得出现在公开响应")
 	assert.NotContains(t, body, "max_upload_size", "per-user 私有值不得出现在公开响应")
 }
