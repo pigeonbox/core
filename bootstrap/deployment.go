@@ -288,17 +288,27 @@ func maybeApplyConfig(source string) {
 func applyPropagatedConfig() {
 	cfgSvc := configApp.Default()
 	cfgSvc.InvalidateRuntimeConfig()
-	cfgSvc.RestoreAdminSettings() // 重读 DB → 内存缓存 + 全局 conf overlay + 会话时长
-	restoreRuntimeStorage()       // DB 存储段 → 全局 conf（env 覆盖优先级保持）
+	cfgSvc.RestoreAdminSettings()  // 重读 DB → 内存缓存 + 全局 conf overlay + 会话时长
+	cur := restoreRuntimeStorage() // DB 存储段 → 全局 conf（env 覆盖优先级保持）
+	if cur == nil {
+		cur = conf.Snapshot()
+	}
+	if cur == nil {
+		return
+	}
+	// ⚠️ 必须读**当前全局快照**（restoreRuntimeStorage 的返回值），
+	// 不能读 bootstrap.config 这个局部变量：自 2026-10-31 起全局配置改为
+	// copy-on-write（原子换指针），bootstrap.config 是**被换掉的那一份旧对象**
+	// ⇒ 读它拿到的是旧值 ⇒ 热广播的配置**不会生效**。
 	if svc := getBootstrapStorageService(); svc != nil {
-		if err := svc.Reload(storage.ConfigFromConf(&config.Storage, bootstrapBaseURL())); err != nil {
+		if err := svc.Reload(storage.ConfigFromConf(&cur.Storage, bootstrapBaseURL())); err != nil {
 			logger.Error("propagated storage reload failed", zap.Error(err))
 		}
 	}
 	if notifySvcInstance != nil {
-		applyNotifyConfig(notifySvcInstance, &config.Notify)
+		applyNotifyConfig(notifySvcInstance, &cur.Notify)
 	}
-	o := &config.Security.OIDC
+	o := &cur.Security.OIDC
 	customHandler.SetOIDCService(oidcApp.NewService(db.GetDB(), oidcApp.Config{ // 装配层显式句柄
 		Enabled:          o.Enabled,
 		Issuer:           o.Issuer,

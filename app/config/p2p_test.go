@@ -44,11 +44,21 @@ func TestValidateSystemConfigP2PFederation(t *testing.T) {
 }
 
 // withGlobalConf 测试期注入全局 conf（overlay 的落点）；t.Cleanup 还原空壳。
-func withGlobalConf(t *testing.T) *conf.AppConfiguration {
+//
+// ⚠️ 自 2026-10-31 起全局配置改为 **copy-on-write**（原子换指针），
+// 因此**不能再长期持有一个快照指针**去断言"生效值"——热应用会换指针，
+// 旧指针会停在旧值。断言一律读 conf.Snapshot()（当前快照）。
+func withGlobalConf(t *testing.T) {
 	t.Helper()
 	conf.SetGlobalConfig(&conf.AppConfiguration{})
 	t.Cleanup(func() { conf.SetGlobalConfig(&conf.AppConfiguration{}) })
-	return conf.GetGlobalConfig()
+}
+
+// setGlobalFederation 在**当前快照的副本**上改 federation（copy-on-write 写侧）。
+func setGlobalFederation(f conf.FederationConfig) {
+	conf.UpdateGlobalConfig(func(next *conf.AppConfiguration) {
+		next.Federation = f
+	})
 }
 
 // TestUpdateConfigP2PPartialPreserveAndOverlay 局部保存不清零 p2p 段;
@@ -56,14 +66,14 @@ func withGlobalConf(t *testing.T) *conf.AppConfiguration {
 func TestUpdateConfigP2PPartialPreserveAndOverlay(t *testing.T) {
 	svc := newTestConfigService(t)
 	ctx := context.Background()
-	g := withGlobalConf(t)
+	withGlobalConf(t)
 
 	// 1) 提交 p2p.federation → 全局 conf 即刻热生效
 	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
 		P2P: &P2PSection{Federation: &conf.FederationConfig{Enabled: true, RegistryURL: "http://p2p:12346"}},
 	}))
-	require.True(t, g.Federation.Enabled)
-	require.Equal(t, "http://p2p:12346", g.Federation.RegistryURL)
+	require.True(t, conf.Snapshot().Federation.Enabled)
+	require.Equal(t, "http://p2p:12346", conf.Snapshot().Federation.RegistryURL)
 
 	// 2) 局部保存(只带 oidc)→ p2p 段保留,不回弹
 	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{OIDC: &conf.OIDCConfig{}}))
@@ -71,13 +81,13 @@ func TestUpdateConfigP2PPartialPreserveAndOverlay(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.P2P)
 	require.True(t, got.P2P.Federation.Enabled)
-	require.True(t, g.Federation.Enabled)
+	require.True(t, conf.Snapshot().Federation.Enabled)
 
 	// 3) 显式改回关闭 → overlay 跟随
 	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
 		P2P: &P2PSection{Federation: &conf.FederationConfig{Enabled: false}},
 	}))
-	require.False(t, g.Federation.Enabled)
+	require.False(t, conf.Snapshot().Federation.Enabled)
 }
 
 // TestOverlayBackfillsP2PFromGlobalConf DB 无 p2p 段时，overlay 从全局 conf
@@ -85,9 +95,8 @@ func TestUpdateConfigP2PPartialPreserveAndOverlay(t *testing.T) {
 func TestOverlayBackfillsP2PFromGlobalConf(t *testing.T) {
 	svc := newTestConfigService(t)
 	ctx := context.Background()
-	g := withGlobalConf(t)
-	g.Federation.Enabled = true
-	g.Federation.RegistryURL = "http://seed:56788"
+	withGlobalConf(t)
+	setGlobalFederation(conf.FederationConfig{Enabled: true, RegistryURL: "http://seed:56788"})
 
 	// 任意局部保存（只带 oidc）触发 overlay → p2p 段被回填为 env 种子镜像
 	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{OIDC: &conf.OIDCConfig{}}))

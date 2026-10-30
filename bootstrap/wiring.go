@@ -144,7 +144,10 @@ func initThriftIDLServices(database *gorm.DB) {
 	}
 	shareSvc.SetFlagEventEmitter(notifyApp) // *Service 已实现 EmitShareFlagged（webhook 未配置时内部短路）
 	// 2.3.1/2.3.2 Webhook + SMTP 渠道装配（抽 applyNotifyConfig 供运行时热重建复用）
-	applyNotifyConfig(notifyApp, &config.Notify)
+	// 读**当前快照**（全局配置改为原子换指针后，bootstrap.config 是旧对象）
+	if snap := conf.Snapshot(); snap != nil {
+		applyNotifyConfig(notifyApp, &snap.Notify)
+	}
 	// 管理端通知/OIDC 设置保存 → 组件热重建（SystemConfig 新段）
 	configApp.Default().SetReconfigureHooks(&configApp.ReconfigureHooks{
 		OnNotifyChanged: func(n *conf.NotifyConfig) {
@@ -154,7 +157,13 @@ func initThriftIDLServices(database *gorm.DB) {
 			if o == nil {
 				return
 			}
-			config.Security.OIDC = *o
+			// ⚠️ **copy-on-write**（2026-10-31）：此前是 `config.Security.OIDC = *o`
+			// —— 原地改写 bootstrap.config 这个**旧对象**（全局配置改为原子换指针后
+			// 它已被换掉）⇒ 改的是没人读的旧快照 ⇒ **OIDC 热生效失效**。
+			// 现在写进当前快照的副本，再原子换指针。
+			conf.UpdateGlobalConfig(func(next *conf.AppConfiguration) {
+				next.Security.OIDC = *o
+			})
 			customHandler.SetOIDCService(oidcApp.NewService(database, oidcApp.Config{
 				Enabled:          o.Enabled,
 				Issuer:           o.Issuer,
@@ -172,11 +181,11 @@ func initThriftIDLServices(database *gorm.DB) {
 			// 配置值与运行态分叉不可静默（评审 P1-1/P1-2）
 			return fedRT.apply(*f)
 		},
-		OnOverlayApplied: func() { ReapplyEnvOverrides(config) },
+		OnOverlayApplied: func() { ReapplyEnvOverrides() },
 	})
 	// 统一配置优先级（yaml < DB < env，2026-10-15）：首次 RestoreAdminSettings
 	// 跑在钩子注册之前（上方第 0 步），此处补一次 env 重施对齐存储段同款规则
-	ReapplyEnvOverrides(config)
+	ReapplyEnvOverrides()
 	// 2.4 注入 user service：上传统计（此前从未接线，用户统计恒为 0）
 	// + 存储配额强制检查（user_quota / 用户级 max_storage_quota）
 	userSvc := userService.NewService(database)
@@ -217,7 +226,9 @@ func initThriftIDLServices(database *gorm.DB) {
 				mcpService.SetFederationService(mcpFederationAdapter{svc: nil})
 			}
 		},
-		func() bool { return config.IsStandalone() }, // 部署形态装配期固化（运行期不变）
+		// 读**当前快照**的部署形态（部署模式运行期不变，但 bootstrap.config
+		// 已是旧对象 ⇒ 统一走当前快照，避免"读旧值"的隐患）
+		func() bool { return conf.Snapshot().IsStandalone() }, // 部署形态运行期不变
 	)
 	if err := fedRT.apply(config.Federation); err != nil {
 		// 启动期失败=以非联邦模式运行（管理员无在线会话可报，响亮落日志；

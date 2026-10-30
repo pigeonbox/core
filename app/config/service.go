@@ -394,7 +394,7 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	s.configMu.Lock()
 	s.config = newConfig
 	s.configLoaded = true
-	// 新段热应用：整体 overlay 到全局 conf（所有 conf.GetGlobalConfig() 读取点即刻生效）
+	// 新段热应用：整体 overlay 到全局 conf（所有 conf 快照读取点即刻生效）
 	s.applySystemConfigOverlayLocked(newConfig)
 	notifyCfg, oidcCfg := newConfig.Notify, newConfig.OIDC
 	var p2pFedCfg *conf.FederationConfig
@@ -433,58 +433,78 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 
 // applySystemConfigOverlayLocked 把新段 overlay 到全局 conf（调用方持 configMu）。
 // 全局 conf 是几乎所有读取点（utils/gate/handler/middleware）的真相源，
-// 原地改写即全站热生效；重启后由 RestoreAdminSettings 从 system_configs 恢复。
+// overlay 即全站热生效；重启后由 RestoreAdminSettings 从 system_configs 恢复。
+//
+// # ⚠️ **copy-on-write，不得原地改写**（2026-10-31 更正）
+//
+// 此前本函数**原地改写**全局 conf 的字段（g.UI = *sc.UI、g.Upload = *sc.UploadEx
+// ……每段都是整段结构体赋值），而 GetGlobalConfig() 有 **45 处**读取点分布在
+// 请求路径上、**无锁读**这些字段 ⇒ **结构体字段的数据竞争**：
+// 读者可能看到**撕裂的字段组合**（如 Upload.ExUpload 已是新值、白名单还是旧值）
+// ⇒ 闸口按半新半旧的配置判定。
+//
+// 这不是"启动竞态窗口"式的理论风险：管理员在管理台保存配置的**那一刻**，
+// 全站配置被整段改写，同刻有请求在读 ⇒ **必然发生**。
+//
+// ⇒ 现在所有字段改动都发生在 conf.UpdateGlobalConfig 的**副本**上，
+// 最后原子换指针 ⇒ 读者要么看到完整旧快照、要么看到完整新快照。
 func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
-	g := conf.GetGlobalConfig()
+	g := conf.Snapshot()
 	if g == nil {
 		return
 	}
-	if sc.UI != nil {
-		g.UI = *sc.UI
-	}
-	if sc.UploadEx != nil {
-		// 保留既有 local_import（2026-10-05 审计附带 bug：UploadEx 整段覆盖
-		// 会把零值的 LocalImport 一并写入——"上传"tab 保存未携带该段时
-		// 冲掉已配置 roots）
-		prevLocal := g.Upload.LocalImport
-		g.Upload = *sc.UploadEx
-		// 单开关收敛（2026-10-16 拍板）：require_login 与 open_upload 对匿名上传
-		// 效果完全等价（都拦匿名、都放行登录用户），双开关只会制造「UI 显示允许
-		// 访客、闸门却拦下」的矛盾态。DB 段 apply 时 require_login 恒派生自
-		// open_upload；yaml/env 直配的部署不经此处、行为不变；管理表单已不再
-		// 暴露该字段（遗留 DB 值由镜像回写自然纠正）
-		g.Upload.RequireLogin = !g.Upload.OpenUpload
-		if sc.LocalImport == nil && !sc.UploadEx.LocalImport.Enabled && len(sc.UploadEx.LocalImport.Roots) == 0 {
-			g.Upload.LocalImport = prevLocal
-		}
-	}
-	if sc.Download != nil {
-		g.Download = *sc.Download
-	}
-	if sc.Notify != nil {
-		g.Notify = *sc.Notify
-	}
-	if sc.LocalImport != nil {
-		g.Upload.LocalImport = *sc.LocalImport
-	}
-	if sc.OIDC != nil {
-		g.Security.OIDC = *sc.OIDC
-	}
-	if sc.APIToken != nil {
-		g.Security.APIToken = *sc.APIToken
-	}
-	// P2P 段从未在线保存过时回填全局 conf 生效值（与 UploadEx 回填同理：管理
+	// P2P 段从未在线保存过时回填**当前生效值**（与 UploadEx 回填同理：管理
 	// 后台看到真实生效的联邦配置，整段保存也不会把 env 种子冲成零值）。注意
 	// 语义：回填本身不写库，但随后任意一次保存经 nil-保留会把镜像值持久化
-	// ——与 UploadEx 先例同语义（env 种子自此以 DB 值固化，后台可改）。g 已在
-	// 本函数读取，不新增直读点（棘轮规则 8）。
+	// ——与 UploadEx 先例同语义（env 种子自此以 DB 值固化，后台可改）。
+	// ⚠️ 必须**在换指针之前**回填：回填要读的是「改写前的生效值」。
 	if sc.P2P == nil {
 		fed := g.Federation
 		sc.P2P = &P2PSection{Federation: &fed}
 	}
-	if sc.P2P.Federation != nil {
-		g.Federation = *sc.P2P.Federation
-	}
+
+	// copy-on-write：在**副本**上做全部字段改动，再原子换指针。
+	// 读者要么看到完整旧快照、要么看到完整新快照，永不撕裂。
+	conf.UpdateGlobalConfig(func(next *conf.AppConfiguration) {
+		if sc.UI != nil {
+			next.UI = *sc.UI
+		}
+		if sc.UploadEx != nil {
+			// 保留既有 local_import（2026-10-05 审计附带 bug：UploadEx 整段覆盖
+			// 会把零值的 LocalImport 一并写入——"上传"tab 保存未携带该段时
+			// 冲掉已配置 roots）
+			prevLocal := next.Upload.LocalImport
+			next.Upload = *sc.UploadEx
+			// 单开关收敛（2026-10-16 拍板）：require_login 与 open_upload 对匿名上传
+			// 效果完全等价（都拦匿名、都放行登录用户），双开关只会制造「UI 显示允许
+			// 访客、闸门却拦下」的矛盾态。DB 段 apply 时 require_login 恒派生自
+			// open_upload；yaml/env 直配的部署不经此处、行为不变；管理表单已不再
+			// 暴露该字段（遗留 DB 值由镜像回写自然纠正）
+			next.Upload.RequireLogin = !next.Upload.OpenUpload
+			if sc.LocalImport == nil && !sc.UploadEx.LocalImport.Enabled && len(sc.UploadEx.LocalImport.Roots) == 0 {
+				next.Upload.LocalImport = prevLocal
+			}
+		}
+		if sc.Download != nil {
+			next.Download = *sc.Download
+		}
+		if sc.Notify != nil {
+			next.Notify = *sc.Notify
+		}
+		if sc.LocalImport != nil {
+			next.Upload.LocalImport = *sc.LocalImport
+		}
+		if sc.OIDC != nil {
+			next.Security.OIDC = *sc.OIDC
+		}
+		if sc.APIToken != nil {
+			next.Security.APIToken = *sc.APIToken
+		}
+		if sc.P2P.Federation != nil {
+			next.Federation = *sc.P2P.Federation
+		}
+	})
+
 	// env 恒覆盖（统一优先级 yaml < DB < env，2026-10-15）：上面的 DB overlay 整段
 	// 盖掉了启动时 viper 绑定的 env 值，bootstrap 注册的重施器在此恢复 env 语义
 	// （storage 段在 restoreRuntimeStorage 已是同规则）。随后把生效值回镜像进
@@ -495,7 +515,8 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 	if overlayApplied != nil && overlayApplied.OnOverlayApplied != nil {
 		overlayApplied.OnOverlayApplied()
 	}
-	s.syncMirrorFromGlobalLocked(g, sc)
+	// mirror 回填读的是**换指针之后**的生效值（env 恒覆盖已生效）。
+	s.syncMirrorFromGlobalLocked(conf.Snapshot(), sc)
 }
 
 // syncMirrorFromGlobalLocked 把全局 conf 托管段回镜像进 sc（调用方持 configMu；

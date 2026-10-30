@@ -29,9 +29,15 @@ type RuntimePersister interface {
 
 // Service 存储服务
 type Service struct {
-	config    *conf.AppConfiguration
-	runtime   Runtime
-	persister RuntimePersister
+	// fallbackConfig 构造时的配置快照，**只在全局快照缺失时**兜底。
+	//
+	// ⚠️ 2026-10-31：全局配置改为 copy-on-write（原子换指针）后，长期持有
+	// conf 快照读取（Snapshot）返回的指针 = 永远持有**旧快照** ⇒ 存储域读到的
+	// 永远是热更新前的值（在线切换后端后 GetStorageInfo 仍报旧后端）。
+	// ⇒ 改为一律通过 cfg() 取**当前**快照。
+	fallbackConfig *conf.AppConfiguration
+	runtime        Runtime
+	persister      RuntimePersister
 	// objectLister 被 DB 引用的对象清单来源（存储域不直接碰 DB；admin 域注入）。
 	// 存储迁移（migrate.go）据此枚举待搬对象。
 	objectLister ObjectLister
@@ -40,8 +46,18 @@ type Service struct {
 // NewService 创建存储服务
 func NewService() *Service {
 	return &Service{
-		config: conf.GetGlobalConfig(),
+		fallbackConfig: conf.Snapshot(),
 	}
+}
+
+// cfg 取当前生效的全局配置快照（copy-on-write 后每次都可能不同）。
+//
+// 全局快照缺失时回落到构造时的兜底快照（保持旧行为：不会 nil 解引用）。
+func (s *Service) cfg() *conf.AppConfiguration {
+	if c := conf.Snapshot(); c != nil {
+		return c
+	}
+	return s.fallbackConfig
 }
 
 // SetRuntime 注入存储运行时（在线切换后端热生效）
@@ -57,38 +73,38 @@ func (s *Service) SetPersister(p RuntimePersister) { s.persister = p }
 // 消费链 ConfigFromConf→StorageConfig.BaseURL→GetFileURL：base 空时显式报错
 // （该链路当前无生产消费方），不产虚构地址。
 func (s *Service) baseURL() string {
-	return s.config.Server.BaseURL
+	return s.cfg().Server.BaseURL
 }
 
 // candidateFor 复制全局存储段并覆盖目标类型（切换/更新的候选配置）
 func (s *Service) candidateFor(t string) *conf.StorageConfig {
-	c := &conf.StorageConfig{Type: t, StoragePath: s.config.Storage.StoragePath}
-	if s.config.Storage.S3 != nil {
-		cp := *s.config.Storage.S3
+	c := &conf.StorageConfig{Type: t, StoragePath: s.cfg().Storage.StoragePath}
+	if s.cfg().Storage.S3 != nil {
+		cp := *s.cfg().Storage.S3
 		c.S3 = &cp
 	}
-	if s.config.Storage.WebDAV != nil {
-		cp := *s.config.Storage.WebDAV
+	if s.cfg().Storage.WebDAV != nil {
+		cp := *s.cfg().Storage.WebDAV
 		c.WebDAV = &cp
 	}
-	if s.config.Storage.FTP != nil {
-		cp := *s.config.Storage.FTP
+	if s.cfg().Storage.FTP != nil {
+		cp := *s.cfg().Storage.FTP
 		c.FTP = &cp
 	}
-	if s.config.Storage.SFTP != nil {
-		cp := *s.config.Storage.SFTP
+	if s.cfg().Storage.SFTP != nil {
+		cp := *s.cfg().Storage.SFTP
 		c.SFTP = &cp
 	}
-	if s.config.Storage.AzureBlob != nil {
-		cp := *s.config.Storage.AzureBlob
+	if s.cfg().Storage.AzureBlob != nil {
+		cp := *s.cfg().Storage.AzureBlob
 		c.AzureBlob = &cp
 	}
-	if s.config.Storage.HDFS != nil {
-		cp := *s.config.Storage.HDFS
+	if s.cfg().Storage.HDFS != nil {
+		cp := *s.cfg().Storage.HDFS
 		c.HDFS = &cp
 	}
-	if s.config.Storage.OneDrive != nil {
-		cp := *s.config.Storage.OneDrive
+	if s.cfg().Storage.OneDrive != nil {
+		cp := *s.cfg().Storage.OneDrive
 		c.OneDrive = &cp
 	}
 	// 云厂商段（oss/cos/bos/ks3/obs）随 type 归属复制
@@ -99,15 +115,15 @@ func (s *Service) candidateFor(t string) *conf.StorageConfig {
 	}
 	switch t {
 	case "oss":
-		c.OSS = cloneCloud(s.config.Storage.OSS)
+		c.OSS = cloneCloud(s.cfg().Storage.OSS)
 	case "cos":
-		c.COS = cloneCloud(s.config.Storage.COS)
+		c.COS = cloneCloud(s.cfg().Storage.COS)
 	case "bos":
-		c.BOS = cloneCloud(s.config.Storage.BOS)
+		c.BOS = cloneCloud(s.cfg().Storage.BOS)
 	case "ks3":
-		c.KS3 = cloneCloud(s.config.Storage.KS3)
+		c.KS3 = cloneCloud(s.cfg().Storage.KS3)
 	case "obs":
-		c.OBS = cloneCloud(s.config.Storage.OBS)
+		c.OBS = cloneCloud(s.cfg().Storage.OBS)
 	}
 	return c
 }
@@ -182,10 +198,20 @@ func (s *Service) activate(ctx context.Context, candidate *conf.StorageConfig) e
 			return fmt.Errorf("切换存储后端失败: %w", err)
 		}
 	}
-	s.config.Storage.Type = candidate.Type
-	s.config.Storage.StoragePath = candidate.StoragePath
-	s.config.Storage.S3 = candidate.S3
-	s.config.Storage.WebDAV = candidate.WebDAV
+	// ⚠️ **copy-on-write**（2026-10-31 更正）：此前这里是**原地改写**全局 conf
+	// 的四个字段（Type / StoragePath / S3 / WebDAV，分四次赋值）⇒
+	// 并发读者可能看到**撕裂的组合**（如 Type 已是 s3、而 S3 还是旧值）
+	// ⇒ 「读到的存储配置」与「实际生效的存储」对不上。
+	//
+	// 在线切换存储是管理员操作（不是启动竞态窗口）⇒ **必然发生**。
+	//
+	// 现在整段替换 + 原子换指针：读者要么看到完整旧快照、要么看到完整新快照。
+	conf.UpdateGlobalConfig(func(next *conf.AppConfiguration) {
+		next.Storage.Type = candidate.Type
+		next.Storage.StoragePath = candidate.StoragePath
+		next.Storage.S3 = candidate.S3
+		next.Storage.WebDAV = candidate.WebDAV
+	})
 	if s.persister != nil {
 		if err := s.persister.SaveRuntimeStorage(ctx, candidate); err != nil {
 			return fmt.Errorf("存储已生效但持久化失败（重启后可能回退到原配置）: %w", err)
@@ -201,7 +227,7 @@ func (s *Service) GetStorageInfo(ctx context.Context) (*StorageInfo, error) {
 		"local", "s3", "oss", "cos", "bos", "ks3", "obs", "gcs", "webdav",
 		"ftp", "sftp", "azureblob", "hdfs", "onedrive",
 	}
-	if s.config.Storage.Type != "" {
+	if s.cfg().Storage.Type != "" {
 		availableStorages = append(availableStorages, "local")
 	}
 
@@ -217,7 +243,7 @@ func (s *Service) GetStorageInfo(ctx context.Context) (*StorageInfo, error) {
 	}
 
 	// 当前存储类型
-	currentType := s.config.Storage.Type
+	currentType := s.cfg().Storage.Type
 	if currentType == "" {
 		currentType = "local"
 	}
@@ -338,7 +364,7 @@ func (s *Service) UpdateStorageConfig(ctx context.Context, req *UpdateConfigRequ
 	req.StorageConfig.Type = req.Type
 	candidate := req.StorageConfig
 	if candidate.StoragePath == "" {
-		candidate.StoragePath = s.config.Storage.StoragePath
+		candidate.StoragePath = s.cfg().Storage.StoragePath
 	}
 	if err := validateEndpoints(&candidate); err != nil {
 		return err
@@ -348,11 +374,11 @@ func (s *Service) UpdateStorageConfig(ctx context.Context, req *UpdateConfigRequ
 
 // getStoragePath 获取存储路径
 func (s *Service) getStoragePath() string {
-	if s.config.Storage.StoragePath != "" {
-		return s.config.Storage.StoragePath
+	if s.cfg().Storage.StoragePath != "" {
+		return s.cfg().Storage.StoragePath
 	}
-	if s.config.App.DataPath != "" {
-		return s.config.App.DataPath
+	if s.cfg().App.DataPath != "" {
+		return s.cfg().App.DataPath
 	}
 	return "./data"
 }
@@ -381,7 +407,7 @@ func diskUsage(path string) (uint64, uint64, error) {
 // getStorageConfig 获取存储配置
 func (s *Service) getStorageConfig() *StorageConfig {
 	return &StorageConfig{
-		Type:        s.config.Storage.Type,
+		Type:        s.cfg().Storage.Type,
 		StoragePath: s.getStoragePath(),
 		WebDAV:      s.getWebDAVConfig(),
 		S3:          s.getS3Config(),
@@ -391,11 +417,11 @@ func (s *Service) getStorageConfig() *StorageConfig {
 
 // getWebDAVConfig 获取 WebDAV 配置（来自全局配置）
 func (s *Service) getWebDAVConfig() *WebDAVConfig {
-	if s.config.Storage.WebDAV != nil {
+	if s.cfg().Storage.WebDAV != nil {
 		return &WebDAVConfig{
-			URL:      s.config.Storage.WebDAV.Endpoint,
-			Username: s.config.Storage.WebDAV.Username,
-			Password: s.config.Storage.WebDAV.Password,
+			URL:      s.cfg().Storage.WebDAV.Endpoint,
+			Username: s.cfg().Storage.WebDAV.Username,
+			Password: s.cfg().Storage.WebDAV.Password,
 		}
 	}
 	return &WebDAVConfig{}
@@ -403,13 +429,13 @@ func (s *Service) getWebDAVConfig() *WebDAVConfig {
 
 // getS3Config 获取 S3 配置（来自全局配置）
 func (s *Service) getS3Config() *S3Config {
-	if s.config.Storage.S3 != nil {
+	if s.cfg().Storage.S3 != nil {
 		return &S3Config{
-			EndpointURL:     s.config.Storage.S3.Endpoint,
-			RegionName:      s.config.Storage.S3.Region,
-			BucketName:      s.config.Storage.S3.Bucket,
-			AccessKeyID:     s.config.Storage.S3.AccessKey,
-			SecretAccessKey: s.config.Storage.S3.SecretKey,
+			EndpointURL:     s.cfg().Storage.S3.Endpoint,
+			RegionName:      s.cfg().Storage.S3.Region,
+			BucketName:      s.cfg().Storage.S3.Bucket,
+			AccessKeyID:     s.cfg().Storage.S3.AccessKey,
+			SecretAccessKey: s.cfg().Storage.S3.SecretKey,
 		}
 	}
 	return &S3Config{}

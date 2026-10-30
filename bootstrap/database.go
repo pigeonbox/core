@@ -130,61 +130,79 @@ func CreateDefaultAdmin(database *gorm.DB, cfg *conf.AppConfiguration) error {
 // 优先级：env（PB_STORAGE_TYPE/PB_STORAGE_PATH）> DB（管理端在线修改的意图，
 // 晚于 yaml）> yaml。DB 无记录时不动 conf（yaml/env 生效）。
 // 2026-10-15 起 env>DB 已推广为全部托管段统一规则（见 env_reapply.go）。
-func restoreRuntimeStorage() {
+// 返回值：换指针之后的**新快照**（调用方据此读生效值；nil = 未应用）。
+func restoreRuntimeStorage() *conf.AppConfiguration {
 	rs := configApp.Default().LoadRuntimeStorage(context.Background()) // DB 已于 InitDatabase 就绪
 	if rs == nil {
-		return
+		return nil
 	}
-	if rs.Type != "" {
-		config.Storage.Type = rs.Type
+	// ⚠️ **copy-on-write**（2026-10-31 更正）：本函数此前**原地改写**全局配置
+	// 的 Storage 段（13 处字段赋值）。
+	//
+	// 它不只在启动时跑——applyPropagatedConfig()（**多副本配置广播**，运行期）
+	// 也会调它 ⇒ 管理员在另一副本改存储配置时，本副本会**原地改写**全局快照
+	// ⇒ 与 45 处无锁读取点并发 ⇒ **撕裂读**（读到「Type=s3 但 S3 还是旧值」）。
+	//
+	// 注意 `type Config = conf.AppConfiguration`（类型别名）⇒ bootstrap.config
+	// 与 conf 包的全局快照读取指向**同一个对象**。
+	//
+	// 现在整段替换 + 原子换指针：读者要么看到完整旧快照、要么看到完整新快照。
+	applied := conf.UpdateGlobalConfig(func(next *conf.AppConfiguration) {
+		if rs.Type != "" {
+			next.Storage.Type = rs.Type
+		}
+		if rs.StoragePath != "" {
+			next.Storage.StoragePath = rs.StoragePath
+		}
+		if rs.S3 != nil {
+			next.Storage.S3 = rs.S3
+		}
+		if rs.WebDAV != nil {
+			next.Storage.WebDAV = rs.WebDAV
+		}
+		// 全段恢复（历史代码只回填 Type/StoragePath/S3/WebDAV，新类型段丢失会导致
+		// 重启后构建失败 → 静默降级 local，与管理端已切换的状态不一致）
+		if rs.FTP != nil {
+			next.Storage.FTP = rs.FTP
+		}
+		if rs.SFTP != nil {
+			next.Storage.SFTP = rs.SFTP
+		}
+		if rs.AzureBlob != nil {
+			next.Storage.AzureBlob = rs.AzureBlob
+		}
+		if rs.HDFS != nil {
+			next.Storage.HDFS = rs.HDFS
+		}
+		if rs.OneDrive != nil {
+			next.Storage.OneDrive = rs.OneDrive
+		}
+		if rs.OSS != nil {
+			next.Storage.OSS = rs.OSS
+		}
+		if rs.COS != nil {
+			next.Storage.COS = rs.COS
+		}
+		if rs.BOS != nil {
+			next.Storage.BOS = rs.BOS
+		}
+		if rs.KS3 != nil {
+			next.Storage.KS3 = rs.KS3
+		}
+		if rs.OBS != nil {
+			next.Storage.OBS = rs.OBS
+		}
+		// env 优先级最高：显式注入的环境变量覆盖 DB 恢复值
+		if v := os.Getenv("PB_STORAGE_TYPE"); v != "" {
+			next.Storage.Type = v
+		}
+		if v := os.Getenv("PB_STORAGE_PATH"); v != "" {
+			next.Storage.StoragePath = v
+		}
+	})
+	// 读**换指针之后**的生效快照（不是 config 这个旧对象——它已被 COW 换掉）
+	if applied != nil {
+		log.Println("runtime storage config restored from database, type =", applied.Storage.Type)
 	}
-	if rs.StoragePath != "" {
-		config.Storage.StoragePath = rs.StoragePath
-	}
-	if rs.S3 != nil {
-		config.Storage.S3 = rs.S3
-	}
-	if rs.WebDAV != nil {
-		config.Storage.WebDAV = rs.WebDAV
-	}
-	// 全段恢复（历史代码只回填 Type/StoragePath/S3/WebDAV，新类型段丢失会导致
-	// 重启后构建失败 → 静默降级 local，与管理端已切换的状态不一致）
-	if rs.FTP != nil {
-		config.Storage.FTP = rs.FTP
-	}
-	if rs.SFTP != nil {
-		config.Storage.SFTP = rs.SFTP
-	}
-	if rs.AzureBlob != nil {
-		config.Storage.AzureBlob = rs.AzureBlob
-	}
-	if rs.HDFS != nil {
-		config.Storage.HDFS = rs.HDFS
-	}
-	if rs.OneDrive != nil {
-		config.Storage.OneDrive = rs.OneDrive
-	}
-	if rs.OSS != nil {
-		config.Storage.OSS = rs.OSS
-	}
-	if rs.COS != nil {
-		config.Storage.COS = rs.COS
-	}
-	if rs.BOS != nil {
-		config.Storage.BOS = rs.BOS
-	}
-	if rs.KS3 != nil {
-		config.Storage.KS3 = rs.KS3
-	}
-	if rs.OBS != nil {
-		config.Storage.OBS = rs.OBS
-	}
-	// env 优先级最高：显式注入的环境变量覆盖 DB 恢复值
-	if v := os.Getenv("PB_STORAGE_TYPE"); v != "" {
-		config.Storage.Type = v
-	}
-	if v := os.Getenv("PB_STORAGE_PATH"); v != "" {
-		config.Storage.StoragePath = v
-	}
-	log.Println("runtime storage config restored from database, type =", config.Storage.Type)
+	return applied
 }
