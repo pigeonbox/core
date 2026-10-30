@@ -25,6 +25,7 @@ import (
 	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
+	"sync/atomic"
 )
 
 // webhookHTTPClient webhook 推送专用客户端（5s 超时；推送失败静默记日志不重试）。
@@ -54,8 +55,33 @@ var (
 // Service 通知 service
 type Service struct {
 	notifyRepo *dao.NotifyRepository
-	webhookURL string      // 外部 Webhook 推送地址（空 = 禁用）
-	mailer     *SMTPMailer // 邮件通知渠道（nil = 禁用；P2 SMTP）
+
+	// webhookURL 外部 Webhook 推送地址（空 = 禁用）。
+	//
+	// ⚠️ **原子持有**（2026-10-31 修）：此前是**裸 string 字段**，而
+	// SetWebhookURL 由 bootstrap 的 OnNotifyChanged 钩子在**运行期**调用
+	// （管理员在管理台保存通知配置 ⇒ 整站热重建），读点则分布在事件推送
+	// 路径上（请求并发）⇒ **data race**。
+	//
+	// ⚠️ 且 string 是 **16 字节**（数据指针 + 长度）⇒ 非原子写 ⇒ 并发读可能
+	// 拿到**新指针配旧长度**（撕裂）⇒ 越界读/崩溃。
+	//
+	// ⇒ 改用 atomic.Pointer[string]：写侧整体换指针，读侧 Load() 一次拿到
+	// 一致快照（要么全旧、要么全新）。
+	webhookURL atomic.Pointer[string]
+
+	// mailer 邮件通知渠道（nil = 禁用；P2 SMTP）。
+	//
+	// ⚠️ 同上：运行期热重建写、请求路径读，无锁 ⇒ data race。
+	mailer atomic.Pointer[SMTPMailer]
+}
+
+// webhookTarget 当前生效的 Webhook 地址（空串 = 禁用）。
+func (s *Service) webhookTarget() string {
+	if p := s.webhookURL.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // NewService 创建 service（repo 构造注入，去全局化终态）
@@ -406,23 +432,28 @@ func (s *Service) CreateForUserSimple(ctx context.Context, userID uint, title, c
 	if err == nil {
 		s.dispatchWebhook(ctx, userID, title, content, notifyType, level)
 		// 邮件补发（fire-and-forget；未配置 SMTP/用户无邮箱时内部短路）
-		if s.mailer != nil && s.mailer.Enabled() {
+		if m := s.mailer.Load(); m != nil && m.Enabled() {
 			// GoSafeLabeled:SMTP 客户端 panic 不打死进程，只记日志（邮件可下次补发）
-			async.GoSafeLabeled("notify-mail", func() { s.mailer.SendToUser(userID, title, content) })
+			// ⚠️ 闭包捕获已 Load 的 m（不是再读 s.mailer）—— 热重建换了 mailer
+			// 时，本次发送用**同一个**实例（不会出现"判空时非 nil、发信时已换掉"）。
+			async.GoSafeLabeled("notify-mail", func() { m.SendToUser(userID, title, content) })
 		}
 	}
 	return err
 }
 
 // SetMailer 注入邮件发送器（bootstrap 从 notify.smtp 段构建；nil = 禁用）
-func (s *Service) SetMailer(m *SMTPMailer) { s.mailer = m }
+//
+// 运行期热重建会调用 ⇒ 必须原子换指针（见 Service.mailer 的说明）。
+func (s *Service) SetMailer(m *SMTPMailer) { s.mailer.Store(m) }
 
 // ==================== Webhook 外部通知渠道 ====================
 
 // SetWebhookURL 注入 Webhook 推送地址（bootstrap 从 notify.webhook.url / PB_WEBHOOK_URL 注入；
 // 空串 = 禁用）。推送失败只记日志，绝不影响站内信主流程。
 func (s *Service) SetWebhookURL(url string) {
-	s.webhookURL = strings.TrimSpace(url)
+	trimmed := strings.TrimSpace(url)
+	s.webhookURL.Store(&trimmed)
 }
 
 // webhookPayload Webhook POST 的 JSON 载荷
@@ -440,15 +471,18 @@ type webhookPayload struct {
 // 此前只有保存期校验（env/file 注入的 PB_WEBHOOK_URL 完全绕过）与 302 逐跳
 // 校验——首发请求本身从未被校验，DNS 重绑定/换配置窗口内可打私网。
 func (s *Service) sendWebhook(ctx context.Context, event string, body []byte) error {
-	if s.webhookURL == "" {
+	// 取一次当前目标（原子快照）⇒ 后续校验与发送用同一个 URL，
+	// 不会因运行期热重建换地址而"校验的是 A、发的�� B"。
+	target := s.webhookTarget()
+	if target == "" {
 		return nil
 	}
-	if err := security.ValidateEndpointURL(s.webhookURL); err != nil {
+	if err := security.ValidateEndpointURL(target); err != nil {
 		return fmt.Errorf("webhook 目标被拒绝: %w", err)
 	}
 	return httpjson.DoJSON(ctx, webhookHTTPClient, httpjson.Request{
 		Method: http.MethodPost,
-		URL:    s.webhookURL,
+		URL:    target,
 		Body:   body,
 		Header: func(h http.Header) {
 			h.Set("Content-Type", "application/json")
@@ -460,7 +494,7 @@ func (s *Service) sendWebhook(ctx context.Context, event string, body []byte) er
 // EmitShareFlagged 分享命中审核钩子事件（share.flagged）——结构化 webhook 推送，
 // 供外挂自动处置（如拉取后调管理端禁用接口）。异步推送，失败静默记日志。
 func (s *Service) EmitShareFlagged(code, reason, ownerIP string) {
-	if s.webhookURL == "" {
+	if target := s.webhookTarget(); target == "" {
 		return
 	}
 	payload := map[string]interface{}{
@@ -477,7 +511,7 @@ func (s *Service) EmitShareFlagged(code, reason, ownerIP string) {
 	}
 	async.GoSafe(func() {
 		if err := s.sendWebhook(context.Background(), "share.flagged", body); err != nil {
-			logger.Warn("webhook push failed", zap.String("url", s.webhookURL), zap.Error(err))
+			logger.Warn("webhook push failed", zap.String("url", s.webhookTarget()), zap.Error(err))
 		}
 	})
 }
@@ -485,7 +519,7 @@ func (s *Service) EmitShareFlagged(code, reason, ownerIP string) {
 // EmitP2pInvite 设备直传邀请到达 webhook 推送（P3；best-effort，未配置 webhook 即短路）。
 // 邀请面向 admin（收件箱在管理页轮询呈现），此事件供运维侧及时感知。
 func (s *Service) EmitP2pInvite(fromName, code, note string) {
-	if s.webhookURL == "" {
+	if target := s.webhookTarget(); target == "" {
 		return
 	}
 	payload := map[string]interface{}{
@@ -502,14 +536,14 @@ func (s *Service) EmitP2pInvite(fromName, code, note string) {
 	}
 	async.GoSafe(func() {
 		if err := s.sendWebhook(context.Background(), "p2p.invite", body); err != nil {
-			logger.Warn("webhook push failed", zap.String("url", s.webhookURL), zap.Error(err))
+			logger.Warn("webhook push failed", zap.String("url", s.webhookTarget()), zap.Error(err))
 		}
 	})
 }
 
 // dispatchWebhook 异步推送（5s 超时，失败静默记日志）
 func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, content, notifyType, level string) {
-	if s.webhookURL == "" {
+	if target := s.webhookTarget(); target == "" {
 		return
 	}
 	payload := webhookPayload{
@@ -529,7 +563,7 @@ func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, conte
 		// ValueOnlyFrom 剥离取消/超时：请求返回即取消请求 ctx,fire-and-forget
 		// webhook 若继承之会在请求尾后被掐断(间歇性推送失败);超时由 client 兜
 		if err := s.sendWebhook(contextx.ValueOnlyFrom(ctx), "notify.created", body); err != nil {
-			logger.CtxWarn(ctx, "webhook push failed", "url", s.webhookURL, "err", err)
+			logger.CtxWarn(ctx, "webhook push failed", "url", s.webhookTarget(), "err", err)
 		}
 	})
 }

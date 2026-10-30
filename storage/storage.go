@@ -142,7 +142,16 @@ func (s *StorageService) Reload(config *StorageConfig) error {
 }
 
 // DataPath 返回本地存储根目录（分片临时区；远端模式下仍承载合并副本）。
+//
+// ⚠️ **必须持读锁**（2026-10-31 修）：Reload（在线切换存储后端）在写锁下替换
+// s.config 指针，而本方法此前**无锁读**该指针 ⇒ data race。
+// 调用点都在运行期并发路径上：/admin/diagnostics（pb doctor 消费）、admin
+// 系统信息、后台 janitor 任务（周期性跑，与在线切换并发）。
+//
+// 与私有的 dataPath() 同款：都走读锁取当前快照。
 func (s *StorageService) DataPath() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.config.DataPath
 }
 
