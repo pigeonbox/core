@@ -22,6 +22,15 @@ type Service struct {
 	userRepo *dao.UserRepository
 }
 
+// OnInitialized 首启成功后的回调（由装配层注入）。
+//
+// 用途：首启面关闭时做**收尾**动作——当前唯一消费方是 bootstrap 清理
+// 一次性首启令牌（进程内 + 数据目录下的 .setup_token 文件）。
+//
+// 为何用钩子而不是直接 import bootstrap：app/setup 是领域服务，反向依赖
+// 装配层会成环（bootstrap 已 import app/setup）。
+var OnInitialized func()
+
 func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
 		userRepo: dao.NewUserRepository(gormDB),
@@ -83,6 +92,11 @@ func (s *Service) InitializeSystem(ctx context.Context, req *InitializeSystemReq
 	}
 	if !created {
 		return errors.New("系统已初始化，禁止重复初始化")
+	}
+
+	// 首启成功 ⇒ 通知装配层收尾（清理一次性令牌等）。
+	if OnInitialized != nil {
+		OnInitialized()
 	}
 
 	return nil

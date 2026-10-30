@@ -16,6 +16,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// setupLockKey 门禁**实际**使用的按 IP 锁定键。
+//
+// ⚠️ 单测里请求没有真实客户端 IP ⇒ ClientIPFromContext 返回空串 ⇒
+// 所有 setup 门禁用例共用同一个键（"setup|\"\""）。⇒ 每个碰门禁的用例
+// 必须自己重置这个键，否则用例之间互相污染：
+// 既有 FailuresLockOutByIP 用例曾重置的是"另一个键"（带假 IP），
+// 把真正的空 IP 键留成锁定态 ⇒ 后续用例全部 429（2026-10-30 实测踩中）。
+func setupLockKey() string {
+	return middleware.FormatLockKey("setup", middleware.ClientIPFromContext(context.Background()))
+}
+
 // runSetupGate 跑 setupGate + 单个下游 handler，返回「下游是否被执行」与响应码。
 func runSetupGate(t *testing.T, method, path, headerToken, queryToken string) (bool, int) {
 	t.Helper()
@@ -96,7 +107,7 @@ func TestSetupGate_MissingTokenRejected(t *testing.T) {
 func TestSetupGate_FailuresLockOutByIP(t *testing.T) {
 	t.Setenv(setupTokenEnv, "right-token")
 	lock := middleware.GetDefaultLockout()
-	key := middleware.FormatLockKey("setup", "203.0.113.9")
+	key := setupLockKey()
 	lock.Reset(context.Background(), key) // 前置清理，避免受其它用例影响
 
 	// 连续失败直到触发锁定（配置阈值 MaxAttempts 次）
