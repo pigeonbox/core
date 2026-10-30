@@ -135,6 +135,118 @@ type APIKeyPrincipal struct {
 	UserID   uint
 	Username string
 	Role     string
+	// Scopes 该 Key 被允许的能力面（空 = **全量**，与本机制引入前一致）。
+	Scopes []string
+}
+
+// ===== API Key 权限范围（scopes，2026-10-30）=====
+//
+// 用户级 API Key 此前是**全量令牌**：挂到 MCP / CI / 集成方即全权，
+// 无法「只给寄件权限」。本次给 Key 加「权限范围」：创建时指定该 Key 被允许的
+// 能力面，服务端按**请求路径**判定所需能力，缺该能力 ⇒ 403。
+//
+// **缺省 / 空 = 全量** ⇒ 与本机制引入前行为完全一致（老 Key 无需重建、存量部署零影响）。
+const (
+	// ScopeAdmin 管理面（/admin/**、/api/v1/admin/**）。
+	ScopeAdmin = "admin"
+	// ScopeUser 用户自有资源（/user/**、/api/v1/user/**）。
+	ScopeUser = "user"
+	// ScopeShare 寄件与取件（/share/**、/chunk/**、/anonymous/** 等）。
+	ScopeShare = "share"
+)
+
+// AllAPIKeyScopes 全部合法取值（管理台下拉的数据源；校验也用它）。
+var AllAPIKeyScopes = []string{ScopeAdmin, ScopeUser, ScopeShare}
+
+// apiKeyScopePrefixes 路径前缀 → 所需权限范围。
+//
+// ⚠️ 顺序无关（前缀互不包含），但**每条都带结尾斜杠**——否则 /user/ 会误伤
+// /usersomething/ 这类路径。
+var apiKeyScopePrefixes = []struct {
+	prefix string
+	scope  string
+}{
+	{"/admin/", ScopeAdmin},
+	{"/api/v1/admin/", ScopeAdmin},
+	{"/user/", ScopeUser},
+	{"/api/v1/user/", ScopeUser},
+	{"/share/", ScopeShare},
+	{"/api/v1/share/", ScopeShare},
+	{"/chunk/", ScopeShare},
+	{"/anonymous/", ScopeShare},
+	{"/api/v1/presign/", ScopeShare},
+	{"/api/v1/request/", ScopeShare},
+	{"/request/", ScopeShare},
+}
+
+// RequiredAPIKeyScope 返回该路径所需的权限范围（空串 = 不要求该能力）。
+func RequiredAPIKeyScope(path string) string {
+	for _, p := range apiKeyScopePrefixes {
+		if strings.HasPrefix(path, p.prefix) {
+			return p.scope
+		}
+	}
+	return ""
+}
+
+// APIKeyScopeAllowed 判断该 Key 是否被允许访问所需能力面。
+// scopes 为空 = 全量（老 Key / 未指定范围的 Key）。
+func APIKeyScopeAllowed(scopes []string, need string) bool {
+	if need == "" || len(scopes) == 0 {
+		return true
+	}
+	for _, sc := range scopes {
+		if sc == need {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateAPIKeyScopes 校验并归一化权限范围（去空白/去重；空 = 全量；非法值报错）。
+//
+// 非法值**直接报错**而不是悄悄忽略：用户以为自己签发的是受限 Key，
+// 实际拿到全量 ⇒ 安全语义被静默放宽（与「旗标缺值被吞」同类事故）。
+func ValidateAPIKeyScopes(scopes []string) ([]string, error) {
+	if len(scopes) == 0 {
+		return nil, nil
+	}
+	allowed := make(map[string]bool, len(AllAPIKeyScopes))
+	for _, s := range AllAPIKeyScopes {
+		allowed[s] = true
+	}
+	seen := make(map[string]bool, len(scopes))
+	out := make([]string, 0, len(scopes))
+	for _, raw := range scopes {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		if !allowed[v] {
+			return nil, fmt.Errorf("未知的权限范围 %q（合法值: %s）", v, strings.Join(AllAPIKeyScopes, "/"))
+		}
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// ScopeError 权限不足（Key 有效，但缺该路径所需的能力面）。
+//
+// 与「Key 无效」区分开：前者是 403（Key 是好的、只是能力不够），后者是 401。
+// 调用方据此能区分「换一把 Key」与「重新签发一把范围更宽的 Key」。
+type ScopeError struct {
+	Scope string
+}
+
+func (e *ScopeError) Error() string {
+	return "api key scope not allowed: " + e.Scope
 }
 
 // APIKeyStore API Key 认证所需持久化能力（bootstrap 注入 dao 桥实现）。
@@ -183,6 +295,13 @@ func validateAPIKey(ctx context.Context, c *app.RequestContext, plainKey string)
 	}
 	lock.Reset(ctx, lockKey)
 
+	// 权限范围（2026-10-30）：Key 缺该路径所需的能力 ⇒ 403。
+	// 放在「Key 有效」之后、「限流/触碰」之前——无效 Key 与能力不足是两回事，
+	// 且能力不足的请求**不计入**单 Key 使用统计（它根本没被授权成功）。
+	if need := RequiredAPIKeyScope(string(c.Request.URI().Path())); !APIKeyScopeAllowed(principal.Scopes, need) {
+		return ctx, &ScopeError{Scope: need}
+	}
+
 	// 单 Key 独立限流（先于 Touch：被限流的请求不计入使用统计）
 	if !allowPerKey(principal.KeyID) {
 		return ctx, errPerKeyRateLimited
@@ -225,6 +344,15 @@ func respondAPIKeyError(c *app.RequestContext, err error) {
 		c.JSON(http.StatusUnauthorized, map[string]interface{}{
 			"code":    errcode.CodeUnauthorized,
 			"message": "API token authentication is disabled",
+		})
+		return
+	}
+	var se *ScopeError
+	if errors.As(err, &se) {
+		c.Abort()
+		c.JSON(http.StatusForbidden, map[string]interface{}{
+			"code":    errcode.CodeForbidden,
+			"message": "该 API Key 的权限范围不含 " + se.Scope + "（请在用户中心创建带相应范围的 Key）",
 		})
 		return
 	}

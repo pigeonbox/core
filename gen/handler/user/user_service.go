@@ -470,6 +470,8 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 			"expires_at":   formatTime(key.ExpiresAt),
 			"created_at":   formatTime(key.CreatedAt),
 			"revoked":      key.Revoked,
+			// 权限范围（2026-10-30）：空数组 = 全量（老 Key 无需重建）
+			"scopes": key.Scopes,
 		}
 	}
 
@@ -507,6 +509,8 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 		Name          string `json:"name"`
 		ExpiresAt     string `json:"expires_at"`
 		ExpiresInDays *int64 `json:"expires_in_days"`
+		// Scopes 权限范围（2026-10-30）：缺省 = 全量（老行为不变）
+		Scopes []string `json:"scopes"`
 	}
 	if err := c.Bind(&req); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
@@ -541,6 +545,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 		Name:          req.Name,
 		ExpiresAt:     expiresAt,
 		ExpiresInDays: expiresInDays,
+		Scopes:        req.Scopes,
 	})
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
@@ -564,6 +569,8 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 				"expires_at":   formatTime(result.APIKey.ExpiresAt),
 				"created_at":   formatTime(result.APIKey.CreatedAt),
 				"revoked":      result.APIKey.Revoked,
+				// 权限范围（2026-10-30）：空数组 = 全量
+				"scopes": result.APIKey.Scopes,
 			},
 		},
 	})

@@ -448,6 +448,9 @@ type CreateAPIKeyReq struct {
 	Name          string
 	ExpiresAt     *time.Time
 	ExpiresInDays *int64
+	// Scopes 权限范围（2026-10-30）：该 Key 被允许的能力面；**空 = 全量**
+	// （与 scopes 机制引入前完全一致 ⇒ 老 Key 无需重建）。
+	Scopes []string
 }
 
 // CreateAPIKeyResp 创建 API Key 响应
@@ -466,6 +469,8 @@ type APIKeyData struct {
 	ExpiresAt  *time.Time
 	CreatedAt  *time.Time
 	Revoked    bool
+	// Scopes 权限范围（空 = 全量）。
+	Scopes []string
 }
 
 // ==================== API Key 方法 ====================
@@ -527,6 +532,12 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIK
 		name = name[:100]
 	}
 
+	// 权限范围：校验取值（非法值直接报错，不静默放宽）
+	scopes, err := middleware.ValidateAPIKeyScopes(req.Scopes)
+	if err != nil {
+		return nil, err
+	}
+
 	// 创建记录
 	record := &model.UserAPIKey{
 		UserID:    userID,
@@ -535,6 +546,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIK
 		KeyHash:   keyHash,
 		ExpiresAt: expiresAt,
 		Revoked:   false,
+		Scopes:    model.EncodeUserAPIKeyScopes(scopes),
 	}
 
 	if err := s.apiKeyRepo.Create(ctx, record); err != nil {
@@ -551,6 +563,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIK
 			ExpiresAt:  record.ExpiresAt,
 			CreatedAt:  &record.CreatedAt,
 			Revoked:    record.Revoked,
+			Scopes:     scopes,
 		},
 	}, nil
 }
@@ -574,6 +587,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, userID uint) ([]*APIKeyData, 
 			ExpiresAt:  key.ExpiresAt,
 			CreatedAt:  &key.CreatedAt,
 			Revoked:    key.Revoked,
+			Scopes:     key.ScopesList(),
 		}
 	}
 

@@ -41,7 +41,13 @@ func (daoAPIKeyStore) FindActiveByHash(ctx context.Context, hash string) (*middl
 		// 封禁/停用用户的 Key 视为无效 Key（调用方计入防爆破，防枚举）
 		return nil, fmt.Errorf("api key invalid")
 	}
-	return &middleware.APIKeyPrincipal{KeyID: key.ID, UserID: user.ID, Username: user.Username, Role: user.Role}, nil
+	return &middleware.APIKeyPrincipal{
+		KeyID:    key.ID,
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
+		Scopes:   key.ScopesList(), // 空 = 全量（老 Key 无需重建）
+	}, nil
 }
 
 func (daoAPIKeyStore) TouchLastUsed(ctx context.Context, keyID uint, ip string) error {
