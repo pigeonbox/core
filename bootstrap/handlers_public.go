@@ -44,7 +44,8 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 	// 与 share/presign 域的 baseURL provider 同源（bootstrap/wiring.go 的
 	// publicBaseURL）——前端拿到的地址与服务端拼链接用的地址必须是同一个，
 	// 否则用户看到的链接与自己发的链接对不上。
-	publicURL := strings.TrimSpace(config.Server.BaseURL)
+	// 口径收敛到 effectivePublicURL（bootstrap/capabilities.go）——三处取同一值。
+	publicURL := effectivePublicURL(ctx)
 	if cfg, err := configApp.Default().GetConfig(ctx); err == nil && cfg != nil {
 		if cfg.Base.Name != "" {
 			name = cfg.Base.Name
@@ -54,9 +55,6 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		}
 		if cfg.Download != nil {
 			effectiveDownload = *cfg.Download
-		}
-		if u := strings.TrimSpace(cfg.Base.PublicURL); u != "" {
-			publicURL = u
 		}
 	}
 	resp.Success(c, map[string]interface{}{
@@ -111,6 +109,13 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		// 安全版主题（serve 时白名单校验：非 http(s) URL / 非 #hex 颜色整体忽略）
 		"background":  safeImageURL(config.UI.Background),
 		"accentColor": safeHexColor(config.UI.AccentColor),
+		// 能力自描述（2026-10-30）：「本面支持什么」的一份真相源。
+		// 公开面只放匿名可见也无害的三项（部署模式 / 站点地址是否配置 /
+		// 首启是否要令牌）；存储后端、Redis 模式等管理面事实走
+		// GET /admin/diagnostics（见 bootstrap/diagnostics.go）。
+		// ⚠️ 客户端事实（WebCrypto 是否可用、Beam 是否挂载）**不在这里**——
+		// 服务端无从得知，由前端探测（utils/e2e.ts、components/share/deliveryPath.ts）。
+		"capabilities": publicCapabilitySnapshot(ctx),
 	})
 }
 

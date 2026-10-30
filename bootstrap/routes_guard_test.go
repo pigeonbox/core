@@ -145,6 +145,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /api/v1/user/oidc/login", "GET /api/v1/user/oidc/callback",
 		// ===== NAS 本地文件导入（P3，2026-10-26 IDL 化：publicapi 域生成路由）=====
 		"POST /api/v1/user/shares/import-local",
+		// ===== 部署自检快照（2026-10-30 手写；管理面，供官方 CLI pb doctor 消费）=====
+		"GET /admin/diagnostics",
 	}
 
 	// 1. 契约内路由必须全部已注册

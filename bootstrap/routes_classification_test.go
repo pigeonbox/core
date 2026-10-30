@@ -86,6 +86,10 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 		Reason:  "平台面：K8s 就绪探针（IDL 的 /ready 是业务健康面，两者并存：/ready 在 IDL 里、/readyz 是容器编排探针）",
 		Pending: false,
 	},
+	"GET /admin/diagnostics": {
+		Reason:  "平台面：部署自检快照（2026-10-30），供官方 CLI `pb doctor` 消费——只读的运行事实集合（DB/存储/Redis/版本/部署模式/首启状态），不是业务 API；管理面鉴权（AdminOrAdminKey）",
+		Pending: false,
+	},
 	"POST /api/v1/mcp": {
 		Reason:  "协议面：MCP（Streamable HTTP）JSON-RPC 流，**不是** REST/JSON 包络 ⇒ thrift IDL 模型表达不了",
 		Pending: false,

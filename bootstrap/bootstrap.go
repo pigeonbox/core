@@ -15,6 +15,7 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/core/lifecycle"
 	"github.com/pigeonbox/contracts/openapi"
+	setupApp "github.com/pigeonbox/core/app/setup"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/baseurl"
@@ -356,8 +357,12 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 		startConfigPropagationSubscriber()
 	}
 
-	// 首启暴露面告警（2026-10-22）：未初始化且未设令牌时响亮提示——此刻
-	// 任何能访问到本实例的人都可以抢先建号。详见 bootstrap/setup_gate.go。
+	// 首启暴露面处置（2026-10-22 建门禁 / 2026-10-30 自动令牌）：
+	// 未初始化且未显式配置令牌 ⇒ 自动生成一次性令牌并打印在启动日志
+	//（写进数据目录 .setup_token 供 NAS 用户直接取）；自动生成被显式关闭
+	// （PB_SETUP_TOKEN_AUTO=0）时才降级为"响亮告警"。详见 bootstrap/setup_gate.go。
+	setupApp.OnInitialized = clearSetupToken
+	ensureSetupToken(context.Background())
 	warnSetupExposure(context.Background())
 
 	logger.Info("Application bootstrap completed successfully")
