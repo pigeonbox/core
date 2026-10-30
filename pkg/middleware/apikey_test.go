@@ -42,7 +42,13 @@ func (s daoAPIKeyStore) FindActiveByHash(ctx context.Context, hash string) (*API
 		// 封禁/停用用户的 Key 视为无效 Key（同生产桥语义）
 		return nil, errInvalidAPIKey
 	}
-	return &APIKeyPrincipal{KeyID: key.ID, UserID: user.ID, Username: user.Username, Role: user.Role}, nil
+	return &APIKeyPrincipal{
+		KeyID:    key.ID,
+		UserID:   user.ID,
+		Username: user.Username,
+		Role:     user.Role,
+		Scopes:   key.ScopesList(), // 与生产桥同形：空 = 全量
+	}, nil
 }
 
 func (s daoAPIKeyStore) TouchLastUsed(ctx context.Context, keyID uint, ip string) error {
@@ -467,4 +473,52 @@ func TestAdminOrAdminKey_NoCredentials401(t *testing.T) {
 	newAPIKeyTestEnv(t)
 	code, _, _, _ := performProbe(t, []app.HandlerFunc{AdminOrAdminKey()}, "/probe")
 	assert.Equal(t, 401, code)
+}
+
+// =====================================================================
+// 权限范围（scopes）的端到端强制。
+// =====================================================================
+
+// TestOptionalAPIKey_ScopeEnforcement 受限 Key 访问超范围路径 ⇒ 403。
+func TestOptionalAPIKey_ScopeEnforcement(t *testing.T) {
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	// 只给寄件权限的 Key
+	plain, _ := newFixtureKey(t, g, u.ID, func(k *model.UserAPIKey) {
+		k.Scopes = model.EncodeUserAPIKeyScopes([]string{ScopeShare})
+	})
+
+	// ① 范围内（/share/**）⇒ 放行
+	code, body := performProbeAt(t, []app.HandlerFunc{OptionalAPIKey()}, "/share/file/",
+		hdr("X-API-Key", plain))
+	assert.Equal(t, 200, code, body)
+
+	// ② 超范围（/admin/**）⇒ 403（不是 401：Key 本身有效，只是能力不够）
+	code, body = performProbeAt(t, []app.HandlerFunc{OptionalAPIKey()}, "/admin/config",
+		hdr("X-API-Key", plain))
+	assert.Equal(t, 403, code, "超范围必须 403："+body)
+	assert.Contains(t, body, ScopeAdmin, "错误文案要说明缺哪个能力")
+
+	// ③ 超范围（/user/**）⇒ 403
+	code, body = performProbeAt(t, []app.HandlerFunc{OptionalAPIKey()}, "/user/api-keys",
+		hdr("X-API-Key", plain))
+	assert.Equal(t, 403, code, "只给寄件权限的 Key 不该碰用户自有资源："+body)
+
+	// ④ 不在范围表里的路径（/api/config）⇒ 不受范围限制
+	code, body = performProbeAt(t, []app.HandlerFunc{OptionalAPIKey()}, "/api/config",
+		hdr("X-API-Key", plain))
+	assert.Equal(t, 200, code, "范围外的路径不受限制（否则受限 Key 连公开面都读不到）："+body)
+}
+
+// TestOptionalAPIKey_NoScopesMeansFullAccess 老 Key（无范围列）⇒ 全量（零影响）。
+func TestOptionalAPIKey_NoScopesMeansFullAccess(t *testing.T) {
+	g := newAPIKeyTestEnv(t)
+	u := newFixtureUser(t, g, "active")
+	plain, _ := newFixtureKey(t, g, u.ID, nil) // Scopes 空串 = 全量
+
+	for _, path := range []string{"/admin/config", "/user/api-keys", "/share/file/"} {
+		code, body := performProbeAt(t, []app.HandlerFunc{OptionalAPIKey()}, path,
+			hdr("X-API-Key", plain))
+		assert.Equal(t, 200, code, "无范围的 Key 必须全量放行（老 Key 零影响）："+path+" "+body)
+	}
 }

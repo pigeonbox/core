@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -27,6 +29,51 @@ type UserAPIKey struct {
 	ExpiryNotifiedAt *time.Time
 	RevokedAt        *time.Time
 	Revoked          bool `gorm:"default:false"`
+	// Scopes 权限范围（JSON 数组文本，如 ["admin","user"]）；**空串 = 全量**
+	// （与 scopes 机制引入前完全一致 ⇒ 老 Key 无需重建）。
+	Scopes string `gorm:"size:200"`
+}
+
+// EncodeUserAPIKeyScopes 把权限范围切片编码为列值（空 = 全量 ⇒ 落库空串）。
+func EncodeUserAPIKeyScopes(scopes []string) string {
+	if len(scopes) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(scopes)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// ScopesList 解析列值 → 权限范围切片（空/非法 = 全量）。
+func (k *UserAPIKey) ScopesList() []string {
+	return ParseUserAPIKeyScopes(k.Scopes)
+}
+
+// ParseUserAPIKeyScopes 解析权限范围列值 → 切片。
+// **解析不出合法值 ⇒ 返回空切片（= 全量）**：宁可宽松（老数据/损坏数据不锁死用户），
+// 也不能因为一行脏数据把整把 Key 变成不可用。
+func ParseUserAPIKeyScopes(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	clean := make([]string, 0, len(out))
+	for _, v := range out {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			clean = append(clean, v)
+		}
+	}
+	if len(clean) == 0 {
+		return nil
+	}
+	return clean
 }
 
 // TableName 指定表名

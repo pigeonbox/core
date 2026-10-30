@@ -29,7 +29,7 @@ func TestMigrator_Up_FreshDB(t *testing.T) {
 
 	applied, err := m.Up()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"000001", "000002", "000003", "000004", "000005", "000006"}, applied)
+	assert.Equal(t, []string{"000001", "000002", "000003", "000004", "000005", "000006", "000007"}, applied)
 
 	// 版本记录存在
 	var versions []schemaMigrations
