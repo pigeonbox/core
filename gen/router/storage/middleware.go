@@ -59,3 +59,8 @@ func _getstorageinsightsMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _migratestorageMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

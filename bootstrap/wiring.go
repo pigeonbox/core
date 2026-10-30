@@ -293,6 +293,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	storageSvc := storageApp.NewService()
 	storageSvc.SetRuntime(getBootstrapStorageService())
 	storageSvc.SetPersister(configApp.Default()) // RuntimePersister=config 域(运行时存储段唯一写者)
+	storageSvc.SetObjectLister(adminSvc)         // ObjectLister=admin 域(存储域不直接碰 DB)
 	storageHandler.SetService(storageSvc)
 	storageHandler.SetAdminStats(adminSvc)
 

@@ -32,6 +32,9 @@ type Service struct {
 	config    *conf.AppConfiguration
 	runtime   Runtime
 	persister RuntimePersister
+	// objectLister 被 DB 引用的对象清单来源（存储域不直接碰 DB；admin 域注入）。
+	// 存储迁移（migrate.go）据此枚举待搬对象。
+	objectLister ObjectLister
 }
 
 // NewService 创建存储服务

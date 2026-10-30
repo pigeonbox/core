@@ -64,6 +64,52 @@ func GetStorageInfo(ctx context.Context, c *app.RequestContext) {
 	resp.Success(c, info)
 }
 
+// MigrateStorage 存储迁移：把存量对象搬到目标后端。
+// @router /admin/storage/migrate [POST]
+//
+// 语义（与 app/storage/migrate.go 的实现一致）：
+//
+//	· 取件码与分享链接**不变**（DB 记录不动，只换对象所在后端）；
+//	· **全部复制成功才切换** —— 有任何对象失败则不切换，源后端继续在用；
+//	· 可中断可续（目标已存在的对象跳过）。
+//
+// dry_run=true 时只算计划（对象数/字节数/源→目标），不复制不切换。
+func MigrateStorage(ctx context.Context, c *app.RequestContext) {
+	var req storage.MigrateStorageReq
+	if err := c.BindAndValidate(&req); err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+		return
+	}
+	domainReq := &storageapp.MigrateStorageReq{TargetType: req.TargetType}
+	if req.TargetPath != nil {
+		domainReq.TargetPath = *req.TargetPath
+	}
+	if req.DryRun != nil {
+		domainReq.DryRun = *req.DryRun
+	}
+	res, err := getService().MigrateStorage(ctx, domainReq)
+	if err != nil {
+		// 迁移失败 ⇒ 源后端仍在用（未切换），错误文案里带失败摘要。
+		resp.NewErrorWithMessage(c, errcode.CodeStorageScheme, err.Error())
+		return
+	}
+	data := storage.MigrateStorageData{
+		Switched: res.Switched,
+		Copied:   res.Copied,
+		Skipped:  res.Skipped,
+		Failed:   res.Failed,
+		Bytes:    res.Bytes,
+		Objects:  res.Objects,
+		FromType: res.FromType,
+		ToType:   res.ToType,
+	}
+	if res.Message != "" {
+		msg := res.Message
+		data.Message = &msg
+	}
+	resp.Success(c, data)
+}
+
 // SwitchStorage .
 // @router /admin/storage/switch [POST]
 func SwitchStorage(ctx context.Context, c *app.RequestContext) {
