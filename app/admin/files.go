@@ -4,6 +4,8 @@ package admin
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pigeonbox/core/conf"
@@ -285,4 +287,53 @@ func (s *Service) BatchDeleteFiles(ctx context.Context, ids []uint) (int, error)
 // BatchExtendFiles 管理端跨用户批量延期。
 func (s *Service) BatchExtendFiles(ctx context.Context, ids []uint, expireAt time.Time) (int, error) {
 	return s.fileCodeRepo.BatchExtendByIDsAdmin(ctx, ids, expireAt)
+}
+
+// ListReferencedObjectPaths 列出被 DB 引用的存储对象路径（存储迁移用）。
+//
+// 与孤儿对账（janitor.ReconcileOrphans）的引用集口径**必须一致**：
+//
+//	· 主表 file_codes（软删也含：软删分享可恢复 ⇒ 对象要一起搬）；
+//	· 子表 file_code_files（多文件分享的非首文件只在这里）；
+//	· 路径归一（斜杠 + Clean）后去重（同一路径可能被多行引用）。
+//
+// 差异：孤儿对账要的是"哪些**不是**孤儿"，这里要的是"哪些**要搬**"——
+// 引用集相同，用途不同。
+func (s *Service) ListReferencedObjectPaths(ctx context.Context) ([]string, error) {
+	if s == nil || s.fileCodeRepo == nil {
+		return nil, fmt.Errorf("存储对象清单来源未就绪")
+	}
+	seen := make(map[string]bool)
+	out := make([]string, 0, 64)
+
+	rows, err := s.fileCodeRepo.ListAllIncludingDeleted(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("列举分享记录失败: %w", err)
+	}
+	for _, r := range rows {
+		if p := normalizeObjectPath(r.GetFilePath()); p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	childPaths, err := s.fileFileRepo.ListAllPathsIncludingDeleted(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("列举多文件清单失败: %w", err)
+	}
+	for _, p := range childPaths {
+		if p := normalizeObjectPath(p); p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// normalizeObjectPath 归一对象路径（斜杠 + Clean）；空路径返回空串。
+func normalizeObjectPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(p))
 }
