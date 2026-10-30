@@ -11,10 +11,12 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPublicCapabilitySnapshot_OnlyPublicSafeFields(t *testing.T) {
@@ -32,10 +34,22 @@ func TestPublicCapabilitySnapshot_OnlyPublicSafeFields(t *testing.T) {
 	pub := publicCapabilitySnapshot(context.Background())
 
 	assert.Equal(t, conf.DeployModePublic, pub.DeploymentMode, "部署模式必须如实下发")
-	assert.Empty(t, pub.RedisMode, "公开面不得下发 Redis 模式（管理面事实）")
-	assert.Empty(t, pub.StorageBackend, "公开面不得下发存储后端（管理面事实）")
-	assert.False(t, pub.Federation, "联邦不在公开快照里（顶层 federationEnabled 才是它的家）")
+	assert.False(t, full.Federation, "联邦不在公开快照里（顶层 federationEnabled 才是它的家）")
 	assert.True(t, full.RedisMode == "redis", "完整快照才带 Redis 模式")
+
+	// 公开面下发的 JSON **恰好三个键** —— 管理面事实（Redis 模式/存储后端）
+	// 连空串形态都不许泄出去（`redis_mode:""` 既不是事实也不是可辨识的「未知」）。
+	raw, err := json.Marshal(pub)
+	require.NoError(t, err)
+	var keys map[string]any
+	require.NoError(t, json.Unmarshal(raw, &keys))
+	assert.Len(t, keys, 3, "公开能力段只允许三个键：%s", string(raw))
+	for _, k := range []string{"deployment_mode", "public_url_set", "setup_token_required"} {
+		assert.Contains(t, keys, k)
+	}
+	assert.NotContains(t, keys, "redis_mode")
+	assert.NotContains(t, keys, "storage_backend")
+	assert.NotContains(t, keys, "federation")
 }
 
 func TestCapabilitySnapshot_DeploymentMode(t *testing.T) {

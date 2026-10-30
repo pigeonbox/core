@@ -34,14 +34,22 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/oekit/core/version"
 
 	"github.com/pigeonbox/core/pkg/resp"
 )
 
 // DiagnosticsReport 部署自检报告（一份快照）。
 type DiagnosticsReport struct {
-	// Version 服务版本（config.App.Version）。
+	// Version **构建版本**（oekit/core/version.Version，由 ldflags 注入）。
+	// ⚠️ 不是 config.App.Version —— 那是 yaml 里的 app.version（缺省 1.0.0，
+	// 常年不更新）⇒ 真机上 doctor 会把 4.2.0 的实例报成「1.0.0」。
+	// 版本披露用于 CVE 匹配，必须与 /version 端点**同源**。
 	Version string `json:"version"`
+	// BuildCommit 构建 commit（版本对齐用）。
+	BuildCommit string `json:"build_commit,omitempty"`
+	// BuildTime 构建时间。
+	BuildTime string `json:"build_time,omitempty"`
 	// DeploymentMode 部署模式：standalone | public | admin。
 	DeploymentMode string `json:"deployment_mode"`
 	// ServerTime 服务端当前时间（CLI 用它与本机时钟比对 ⇒ 时钟偏差）。
@@ -127,8 +135,10 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 		DeploymentMode: "standalone",
 		ServerTime:     time.Now(),
 	}
+	report.Version = version.Version
+	report.BuildCommit = version.BuildCommit
+	report.BuildTime = version.BuildTime
 	if config != nil {
-		report.Version = config.App.Version
 		report.DeploymentMode = config.NormalizedDeploymentMode()
 	}
 

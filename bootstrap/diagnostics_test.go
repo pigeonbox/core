@@ -12,6 +12,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/oekit/core/version"
+
 	"github.com/pigeonbox/core/conf"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,7 +29,10 @@ func TestDiagnosticsReport_DeploymentAndRedisMode(t *testing.T) {
 	})
 
 	report := diagnosticsReport(context.Background())
-	assert.Equal(t, "v4.2.0", report.Version)
+	// 版本必须与 /version 端点**同源**（oekit/core/version，ldflags 注入）——
+	// 不是 yaml 的 app.version（真机上会报成常年不更新的 1.0.0）。
+	assert.Equal(t, version.Version, report.Version, "诊断报告的版本必须与 /version 同源")
+	assert.NotEqual(t, "v4.2.0", report.Version, "不得读 yaml 的 app.version（那是另一个真相源）")
 	assert.Equal(t, conf.DeployModeStandalone, report.DeploymentMode)
 	assert.Equal(t, "memory", report.Redis.Mode, "redis.host 空 = 单机内存模式")
 	assert.False(t, report.Setup.Initialized, "未初始化实例")
