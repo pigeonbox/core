@@ -74,7 +74,7 @@ func (s *Service) Restore(ctx context.Context, r io.Reader, opts RestoreOptions)
 	if err != nil {
 		return nil, fmt.Errorf("创建恢复临时目录失败: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	manifest, err := s.unpack(r, dir)
 	if err != nil {
@@ -107,7 +107,7 @@ func (s *Service) Restore(ctx context.Context, r io.Reader, opts RestoreOptions)
 			return nil, fmt.Errorf("打开包内对象失败 %q: %w", entry.Path, err)
 		}
 		n, err := s.store.SaveStream(ctx, entry.Path, f, entry.Size)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			return nil, fmt.Errorf("写回对象失败 %q: %w", entry.Path, err)
 		}
@@ -131,7 +131,7 @@ func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("备份包不是合法的 gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	for {
@@ -172,10 +172,10 @@ func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
 			return nil, fmt.Errorf("写出条目失败 %q: %w", name, err)
 		}
 		if _, err := io.Copy(f, tr); err != nil {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("写出条目失败 %q: %w", name, err)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 
 	raw, err := os.ReadFile(filepath.Join(dir, ManifestName))
@@ -199,7 +199,7 @@ func (s *Service) verifyObjects(dir string, manifest *Manifest) error {
 		}
 		h := sha256Hasher()
 		_, err = io.Copy(h, f)
-		f.Close()
+		_ = f.Close()
 		if err != nil {
 			return fmt.Errorf("读取包内对象失败 %q: %w", entry.Path, err)
 		}
@@ -272,7 +272,7 @@ func replaceDB(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("打开数据库快照失败: %w", err)
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	tmp := dst + ".restore-tmp"
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
@@ -280,16 +280,16 @@ func replaceDB(src, dst string) error {
 		return fmt.Errorf("创建数据库临时文件失败: %w", err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
+		_ = out.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("写数据库临时文件失败: %w", err)
 	}
 	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("关闭数据库临时文件失败: %w", err)
 	}
 	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("替换数据库文件失败: %w", err)
 	}
 	for _, side := range []string{"-wal", "-shm"} {

@@ -58,7 +58,7 @@ type Service struct {
 // 依赖都是**窄接口**（对象清单 / 对象读写 / DB）⇒ 备份域不直接依赖任何业务域，
 // 装配在 bootstrap 完成（与「存储域不直接碰 DB」同款纪律）。
 func NewService(db *gorm.DB, objects ObjectLister, store ObjectStore) *Service {
-	return &Service{db: db, objects: objects, store: store, dbType: db.Dialector.Name()}
+	return &Service{db: db, objects: objects, store: store, dbType: db.Name()}
 }
 
 // Export 把「DB 快照 + 文件清单 + 存储对象 + 校验」导出成一个 tar.gz 包。
@@ -147,7 +147,7 @@ func (s *Service) writeObject(ctx context.Context, tw *tar.Writer, path string) 
 	if err != nil {
 		return ObjectEntry{}, fmt.Errorf("读取对象失败 %q: %w", path, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	hasher := sha256Hasher()
 	hdr := &tar.Header{
@@ -179,7 +179,7 @@ func (s *Service) writeDBSnapshot(ctx context.Context, tw *tar.Writer, manifest 
 	if err != nil {
 		return fmt.Errorf("创建快照临时目录失败: %w", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	// VACUUM INTO 的目标**必须不存在** ⇒ 放在新建的空目录里。
 	target := filepath.Join(dir, "backup.db")
@@ -190,7 +190,7 @@ func (s *Service) writeDBSnapshot(ctx context.Context, tw *tar.Writer, manifest 
 	if err != nil {
 		return fmt.Errorf("打开数据库快照失败: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("读取数据库快照信息失败: %w", err)
