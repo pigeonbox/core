@@ -34,13 +34,16 @@ func TestMigrator_Up_FreshDB(t *testing.T) {
 	// 版本记录存在
 	var versions []schemaMigrations
 	require.NoError(t, gormDB.Find(&versions).Error)
-	assert.Len(t, versions, 6)
+	// 条数**不写死**（此前写死 6 ⇒ 每加一条迁移就要改测试，是个反复的税）：
+	// 断言「记录数 = 本次应用的迁移数」，版本清单本身由上面的 applied 断言钉住。
+	assert.Len(t, versions, len(applied), "版本记录数应与本次应用的迁移数一致")
 	assert.Equal(t, "000001", versions[0].Version)
 	assert.Equal(t, "000002", versions[1].Version)
 	assert.Equal(t, "000003", versions[2].Version)
 	assert.Equal(t, "000004", versions[3].Version)
 	assert.Equal(t, "000005", versions[4].Version)
 	assert.Equal(t, "000006", versions[5].Version)
+	assert.Equal(t, "000007", versions[6].Version)
 }
 
 // 测试：幂等性——二次 Up 不重复执行
@@ -48,7 +51,7 @@ func TestMigrator_Up_Idempotent(t *testing.T) {
 	gormDB := newMigrateTestDB(t)
 	m, _ := NewMigrator(gormDB, "sqlite")
 
-	_, err := m.Up()
+	firstApplied, err := m.Up()
 	require.NoError(t, err)
 
 	// 二次迁移应返回空（无新迁移）
@@ -56,10 +59,10 @@ func TestMigrator_Up_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, applied)
 
-	// 版本记录仍只 6 条（000001~000006）
+	// 版本记录条数不变（不写死数字 ⇒ 新增迁移不必再改这里）
 	var count int64
 	gormDB.Model(&schemaMigrations{}).Count(&count)
-	assert.Equal(t, int64(6), count)
+	assert.Equal(t, int64(len(firstApplied)), count)
 }
 
 // 测试：迁移后核心业务表存在
