@@ -28,7 +28,20 @@ type tokenBlacklist struct {
 }
 
 // 供 auth 包内部单例使用
-var globalBlacklist *tokenBlacklist
+//
+// ⚠️ **并发安全**（2026-10-31 修）：此前是**裸包级指针** + 无锁 lazy-init，
+// 而 getBlacklist() 被**认证中间件**（每个请求都查）与**注销端点**（每个注销
+// 都写）并发调用 ⇒ 经典 data race（Go 内存模型下未定义行为）：
+// 可能造出**两个** tokenBlacklist 实例 ⇒ **JWT 注销黑名单分裂**
+// ⇒ 吊销写进实例 A、校验查实例 B ⇒ **已注销的 token 仍然可用**（会话注销失效）。
+//
+// 同款形态的 middleware.GetDefaultLockout() 已在同批修复（见 pkg/middleware）。
+//
+// ⇒ 读走 RLock，写（SetBlacklistRedis / 测试重置）走 Lock；lazy-init 双检。
+var (
+	globalBlacklistMu sync.RWMutex
+	globalBlacklist   *tokenBlacklist
+)
 
 // SetBlacklistRedis 注入 Redis（bootstrap 调用；nil = 纯内存模式）。
 // nil 归一化：typed-nil 接口会骗过内存模式守卫（!= nil 判真）。
@@ -37,10 +50,23 @@ func SetBlacklistRedis(rdb *redis.Client) {
 	if rdb != nil {
 		cmds = rdb
 	}
-	globalBlacklist = &tokenBlacklist{rdb: cmds, mem: map[string]time.Time{}}
+	bl := &tokenBlacklist{rdb: cmds, mem: map[string]time.Time{}}
+	globalBlacklistMu.Lock()
+	globalBlacklist = bl
+	globalBlacklistMu.Unlock()
 }
 
 func getBlacklist() *tokenBlacklist {
+	globalBlacklistMu.RLock()
+	bl := globalBlacklist
+	globalBlacklistMu.RUnlock()
+	if bl != nil {
+		return bl
+	}
+
+	globalBlacklistMu.Lock()
+	defer globalBlacklistMu.Unlock()
+	// double-check：等锁期间可能已被别的 goroutine 初始化
 	if globalBlacklist == nil {
 		globalBlacklist = &tokenBlacklist{mem: map[string]time.Time{}}
 	}

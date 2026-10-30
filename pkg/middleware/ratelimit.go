@@ -400,16 +400,38 @@ func (rl *RateLimiter) LoginMiddleware() app.HandlerFunc {
 }
 
 // DefaultRateLimiter 全局默认限流器（单例）
-var defaultLimiter *RateLimiter
+//
+// ⚠️ **并发安全**（2026-10-31 修）：与 defaultLockout 同款问题——此前是裸包级
+// 指针 + 无锁 lazy-init，而登录/上传等限流面在并发下会同时调用
+// GetDefaultRateLimiter() ⇒ data race（未定义行为：可能造出两个限流器
+// 实例 ⇒ 限流额度被分裂，或拿到半初始化的实例）。
+//
+// ⇒ 读走 RLock，写（Init/重置）走 Lock；lazy-init 双检。
+var (
+	defaultLimiterMu sync.RWMutex
+	defaultLimiter   *RateLimiter
+)
 
 // InitDefaultRateLimiter 初始化默认限流器
 func InitDefaultRateLimiter(cfg RateLimitConfig) *RateLimiter {
-	defaultLimiter = NewRateLimiter(cfg)
-	return defaultLimiter
+	rl := NewRateLimiter(cfg)
+	defaultLimiterMu.Lock()
+	defaultLimiter = rl
+	defaultLimiterMu.Unlock()
+	return rl
 }
 
 // GetDefaultRateLimiter 获取默认限流器
 func GetDefaultRateLimiter() *RateLimiter {
+	defaultLimiterMu.RLock()
+	rl := defaultLimiter
+	defaultLimiterMu.RUnlock()
+	if rl != nil {
+		return rl
+	}
+
+	defaultLimiterMu.Lock()
+	defer defaultLimiterMu.Unlock()
 	if defaultLimiter == nil {
 		defaultLimiter = NewRateLimiter(DefaultRateLimitConfig())
 	}

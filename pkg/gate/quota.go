@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pigeonbox/contracts/errcode"
@@ -21,15 +22,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// redisPipelineSrc 配额计数所需的最小 Redis 能力（*redis.Client 天然满足；
-// 字段收窄为方法集以便注入 mock，注入函数仍收具体客户端）。
-type redisPipelineSrc interface {
-	TxPipeline() redis.Pipeliner
-}
-
 // dailyQuota 匿名日配额计数器。
 type dailyQuota struct {
-	rdb     redisPipelineSrc
+	// rdb 原子持有（**不放在 dailyQuota 结构体内直接赋值**）。
+	//
+	// ⚠️ 接口字段的读写**不是原子的**（接口值 = 类型指针 + 数据指针，16 字节）：
+	// SetQuotaRedis 写与请求路径读并发时可能读到**撕裂**的接口值
+	// ⇒ Go runtime panic（invalid memory address）。故用 atomic.Pointer 存
+	// 具体类型 *redis.Client，读侧 Load() 一次拿到一致快照。
+	rdb atomic.Pointer[redis.Client]
+
 	mu      sync.Mutex
 	mem     map[string]*quotaEntry // key: ip -> 当日计数
 	memDate string
@@ -45,11 +47,7 @@ var quota = &dailyQuota{mem: map[string]*quotaEntry{}}
 // SetQuotaRedis 注入 Redis（bootstrap 调用；nil = 内存模式）。
 // nil 归一化：typed-nil 接口会骗过内存模式守卫（!= nil 判真）。
 func SetQuotaRedis(rdb *redis.Client) {
-	if rdb == nil {
-		quota.rdb = nil
-		return
-	}
-	quota.rdb = rdb
+	quota.rdb.Store(rdb)
 }
 
 // QuotaLimits 当前生效的匿名日配额（0 = 不限）。
@@ -75,8 +73,8 @@ func CheckAnonymousQuota(ctx context.Context, ip string, addBytes int64) error {
 	day := time.Now().Format("20060102")
 	var curCount, curBytes int64
 	var err error
-	if quota.rdb != nil {
-		curCount, curBytes, err = quota.incrRedis(ctx, ip, day, addBytes)
+	if rdb := quota.rdb.Load(); rdb != nil {
+		curCount, curBytes, err = quota.incrRedis(ctx, rdb, ip, day, addBytes)
 	} else {
 		curCount, curBytes, err = quota.incrMem(ip, day, addBytes)
 	}
@@ -99,9 +97,11 @@ func CheckAnonymousQuota(ctx context.Context, ip string, addBytes int64) error {
 	return nil
 }
 
-func (d *dailyQuota) incrRedis(ctx context.Context, ip, day string, addBytes int64) (int64, int64, error) {
+// incrRedis Redis 侧计数。rdb 由调用方从 atomic 取出后传入——
+// **不在这里读 d.rdb**，保证同一次调用内用的是同一个一致快照。
+func (d *dailyQuota) incrRedis(ctx context.Context, rdb *redis.Client, ip, day string, addBytes int64) (int64, int64, error) {
 	key := fmt.Sprintf("pb:quota:%s:%s", ip, day)
-	pipe := d.rdb.TxPipeline()
+	pipe := rdb.TxPipeline()
 	cntCmd := pipe.Incr(ctx, key+":count")
 	byteCmd := pipe.IncrBy(ctx, key+":bytes", addBytes)
 	// TTL 到当日结束 + 1h 缓冲（跨时区/时钟偏移兜底），重复设置无害

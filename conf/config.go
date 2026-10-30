@@ -3,14 +3,38 @@ package conf
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// globalConfig 全局配置单例。
+// globalConfig 全局配置快照（原子持有）。
+//
 // 设计权衡：bootstrap 启动时 SetGlobalConfig 注入，各处用 GetGlobalConfig 读取。
-// 采用全局单例避免配置在 service/handler 间层层透传。运行期不可变（无写并发）。
-// 未来若迁移到 DI 容器，可改为构造注入。
-var globalConfig *AppConfiguration
+// 采用全局单例避免配置在 service/handler 间层层透传。未来若迁移到 DI 容器，
+// 可改为构造注入。
+//
+// # ⚠️ 运行期**会**改写（原注释写「运行期不可变（无写并发）」——与实现矛盾，
+// 2026-10-31 更正）
+//
+// app/config 的「新段热应用」（applySystemConfigOverlayLocked）会在**管理员保存
+// 配置时原地改写**本对象的字段（UI / Upload / Download / Notify /
+// Security.OIDC / Security.APIToken / Federation……每段都是整段结构体赋值）。
+//
+// 而 GetGlobalConfig() 有 **45 处**读取点（上传白名单、magic check、下载过期、
+// SMTP、OIDC、匿名配额……），分布在请求路径上，**无锁读**这些字段。
+//
+// ⇒ 原地改写 + 无锁读 = **结构体字段的数据竞争**：读者可能看到**撕裂的字段
+// 组合**（如 Upload.ExUpload 已是新值、白名单还是旧值）⇒ 闸口按半新半旧的
+// 配置判定。
+//
+// # 修法：copy-on-write + 原子换指针
+//
+//   - 写侧：UpdateGlobalConfig(mutator) —— **复制一份**当前快照，在副本上改，
+//     再原子换指针。读者要么看到完整旧快照，要么看到完整新快照，**永不撕裂**；
+//   - 读侧：GetGlobalConfig() 一次 Load()，拿到一致的快照指针。
+//
+// ⇒ 全局配置在运行期变成**不可变快照**，热生效靠换指针而不是改字段。
+var globalConfig atomic.Pointer[AppConfiguration]
 
 // AppConfiguration 完整应用配置
 type AppConfiguration struct {
@@ -183,12 +207,59 @@ type SMTPConfig struct {
 
 // SetGlobalConfig 设置全局配置
 func SetGlobalConfig(cfg *AppConfiguration) {
-	globalConfig = cfg
+	globalConfig.Store(cfg)
 }
 
 // GetGlobalConfig 获取全局配置
+//
+// 返回的是**当前快照**（不可变）：调用方拿到的指针在一次读取里是自洽的，
+// 但**不要直接改它的字段**——要用 UpdateGlobalConfig 走 copy-on-write
+// （否则会绕过原子换指针，重新引入撕裂读）。
 func GetGlobalConfig() *AppConfiguration {
-	return globalConfig
+	return globalConfig.Load()
+}
+
+// Snapshot 取当前全局配置快照（**推荐入口**）。
+//
+// 与 GetGlobalConfig() 等价，但语义更明确：返回值是**不可变快照**，
+// 调用方要么用它读、要么整段替换后再走 UpdateGlobalConfig，
+// **不要直接改它的字段**（那会绕过原子换指针，重新引入撕裂读）。
+//
+// ⚠️ 取到快照后**不要长期持有**：热更新会换指针 ⇒ 长期持有的快照会过期。
+// 需要长期持有就复制一份需要的内容。
+func Snapshot() *AppConfiguration {
+	return globalConfig.Load()
+}
+
+// UpdateGlobalConfig 以 copy-on-write 方式更新全局配置。
+//
+// mutator 在**当前快照的副本**上修改；返回后原子换指针。
+// ⇒ 并发读者要么看到完整旧快照、要么看到完整新快照，**永不看到撕裂的中间态**。
+//
+// 之所以必须这样：热应用（管理台保存配置）会整段改写 Upload / Download /
+// Notify / Security 等大段字段，而 45 处读取点在请求路径上无锁读它们 ⇒
+// 原地改写即数据竞争。
+//
+// mutator 收到的副本是浅拷贝：段内若有引用类型字段（map/slice/指针），
+// mutator 若要改它们的**内容**（而非整体替换），需自行深拷贝——
+// 整体替换某个段（cfg.Upload = *newUpload）是安全的。
+//
+// 返回值是**换指针之后**的新快照：调用方若要读生效值，用它而不要再直读
+// （避免多一个直读点，也避免读到换指针前的旧值）。
+func UpdateGlobalConfig(mutator func(cfg *AppConfiguration)) *AppConfiguration {
+	for {
+		old := globalConfig.Load()
+		if old == nil {
+			return nil
+		}
+		// 浅拷贝一份：段内引用类型字段共享底层，但「整体替换某段」是原子的
+		next := *old
+		mutator(&next)
+		// CAS：期间若有人换过快照，重试（避免丢掉别人的更新）
+		if globalConfig.CompareAndSwap(old, &next) {
+			return &next
+		}
+	}
 }
 
 // ServerConfig 服务器配置
@@ -345,10 +416,11 @@ func (c DownloadConfig) CodeFoldEnabled() bool {
 
 // CodeFoldEnabledOrDefault 全局配置未初始化（单测/极早期启动）时按默认开。
 func CodeFoldEnabledOrDefault() bool {
-	if globalConfig == nil {
+	cfg := globalConfig.Load()
+	if cfg == nil {
 		return true
 	}
-	return globalConfig.Download.CodeFoldEnabled()
+	return cfg.Download.CodeFoldEnabled()
 }
 
 // 直传策略取值（download.presign_policy）

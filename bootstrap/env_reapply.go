@@ -25,31 +25,43 @@ import (
 )
 
 // ReapplyEnvOverrides 把非空 env 绑定值重新施加到全局 conf（幂等）。
-// g 由调用方注入（bootstrap 包级 config / OnOverlayApplied 闭包捕获），
-// 不直读 conf.GetGlobalConfig（棘轮规则 8：装配层也不再新增直读面）。
+//
 // 由 config service 的 OnOverlayApplied 钩子在每次 DB overlay 后调用；
 // 启动期因钩子注册晚于首次 RestoreAdminSettings，wiring 在注册后显式补调一次。
-func ReapplyEnvOverrides(g *conf.AppConfiguration) {
-	if g == nil {
-		return
-	}
-	root := reflect.ValueOf(g).Elem()
-	for key, envs := range envBindings {
-		val := ""
-		for _, env := range envs {
-			if v := os.Getenv(env); v != "" {
-				val = v
-				break
+//
+// # ⚠️ **copy-on-write**（2026-10-31 更正）
+//
+// 此前本函数**原地改写**调用方传入的 conf 指针（bootstrap 包级 config）。
+// 自全局配置改为 copy-on-write（原子换指针）后：
+//
+//   - 传入的 bootstrap.config 是**被换掉的旧对象** ⇒ env 覆盖**根本没作用到
+//     当前快照** ⇒ 「env 恒覆盖」这条配置优先级规则**静默失效**；
+//   - 更糟：旧对象被改后再被 COW 的浅拷贝带走 ⇒ env 覆盖值会**污染后续所有
+//     快照**（看起来像生效了，实际是脏值扩散）。
+//
+// ⇒ 现在走 conf.UpdateGlobalConfig：在**当前快照的副本**上反射改字段，
+// 再原子换指针 ⇒ env 覆盖既生效、又不会造成撕裂读。
+func ReapplyEnvOverrides() {
+	applied := conf.UpdateGlobalConfig(func(g *conf.AppConfiguration) {
+		root := reflect.ValueOf(g).Elem()
+		for key, envs := range envBindings {
+			val := ""
+			for _, env := range envs {
+				if v := os.Getenv(env); v != "" {
+					val = v
+					break
+				}
+			}
+			if val == "" {
+				continue
+			}
+			if err := setConfPath(root, key, val); err != nil {
+				// 单键失败不阻断：配置必须兜底可启动，问题留在日志
+				log.Printf("[env-reapply] skip %s (%s=…): %v", key, envs[0], err)
 			}
 		}
-		if val == "" {
-			continue
-		}
-		if err := setConfPath(root, key, val); err != nil {
-			// 单键失败不阻断：配置必须兜底可启动，问题留在日志
-			log.Printf("[env-reapply] skip %s (%s=…): %v", key, envs[0], err)
-		}
-	}
+	})
+	_ = applied
 }
 
 // setConfPath 按 "a.b.c" 点径沿 mapstructure tag 走结构体并给叶字段赋值。
