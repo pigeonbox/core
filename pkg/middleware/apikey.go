@@ -170,6 +170,10 @@ var apiKeyScopePrefixes = []struct {
 	{"/api/v1/admin/", ScopeAdmin},
 	{"/user/", ScopeUser},
 	{"/api/v1/user/", ScopeUser},
+	// ⚠️ /api/v1/notifies/** 是 UserOrAPIKey 面（notify 域的 /api 组）⇒
+	// Key 在这里会被真正用于鉴权 ⇒ 必须有 user 范围。
+	// （站内公开公告 /api/v1/notifies/public 在 common 域、无鉴权 ⇒ 不受影响。）
+	{"/api/v1/notifies/", ScopeUser},
 	{"/share/", ScopeShare},
 	{"/api/v1/share/", ScopeShare},
 	{"/chunk/", ScopeShare},

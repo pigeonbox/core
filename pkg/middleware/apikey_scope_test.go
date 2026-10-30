@@ -45,6 +45,8 @@ func TestRequiredAPIKeyScope_PathMapping(t *testing.T) {
 		{"/api/v1/admin/anything", ScopeAdmin},
 		{"/user/api-keys", ScopeUser},
 		{"/api/v1/user/shares", ScopeUser},
+		{"/api/v1/notifies/mine", ScopeUser},
+		{"/api/v1/notifies/unread-count", ScopeUser},
 		{"/share/file/", ScopeShare},
 		{"/api/v1/share/multi-direct", ScopeShare},
 		{"/chunk/upload/init/", ScopeShare},
