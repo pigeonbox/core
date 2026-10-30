@@ -183,3 +183,36 @@ func TestGetUploadSizeCap(t *testing.T) {
 		assert.Equal(t, int64(0), svc.GetUploadSizeCap(ctx, 99999))
 	})
 }
+
+// =====================================================================
+// API Key 撤销时间必须**回传**（2026-10-30 真机实录）
+// =====================================================================
+//
+// 现象：真机查「撤销到底生效没有」时发现 —— DB 里 `user_api_keys.revoked_at`
+// **一直有值**（撤销时正确写入），但 `GET /user/api-keys` 的响应里**没有这个字段**
+// ⇒ 用户/前端看不到「这把 Key 是什么时候被撤销的」⇒ 审计信息断在**回传面**。
+//
+// 判据打在**真正会被读到的量**上：ListAPIKeys 返回的结构体里必须带撤销时间
+// （不是「撤销成功就算数」——那是另一个量）。
+func TestListAPIKeys_IncludesRevokedAt(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, &CreateUserReq{
+		Username: "kate", Email: "kate@example.com", Password: "passw0rd!",
+	})
+	require.NoError(t, err)
+
+	key, err := svc.CreateAPIKey(ctx, created.ID, &CreateAPIKeyReq{Name: "probe"})
+	require.NoError(t, err)
+	require.NotNil(t, key.APIKey)
+	assert.Nil(t, key.APIKey.RevokedAt, "新建的 Key 不应有撤销时间")
+
+	require.NoError(t, svc.DeleteAPIKey(ctx, created.ID, key.APIKey.ID))
+
+	list, err := svc.ListAPIKeys(ctx, created.ID)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.True(t, list[0].Revoked)
+	require.NotNil(t, list[0].RevokedAt, "已撤销的 Key 必须回传撤销时间（DB 有值但响应不给 = 审计断在回传面）")
+}

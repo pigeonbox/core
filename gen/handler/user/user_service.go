@@ -470,6 +470,10 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 			"expires_at":   formatTime(key.ExpiresAt),
 			"created_at":   formatTime(key.CreatedAt),
 			"revoked":      key.Revoked,
+			// 撤销时间（2026-10-30 真机实录补齐）：DB 一直有值，但此前**响应里没有
+			// 这个字段** ⇒ 用户/前端看不到「这把 Key 是什么时候被撤销的」
+			// ⇒ 审计信息断在回传面。空串 = 未撤销。
+			"revoked_at": formatTime(key.RevokedAt),
 			// 权限范围（2026-10-30）：空数组 = 全量（老 Key 无需重建）
 			"scopes": key.Scopes,
 		}
@@ -569,6 +573,8 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 				"expires_at":   formatTime(result.APIKey.ExpiresAt),
 				"created_at":   formatTime(result.APIKey.CreatedAt),
 				"revoked":      result.APIKey.Revoked,
+				// 撤销时间（2026-10-30 真机实录补齐）：新建的 Key 未撤销 ⇒ 空串
+				"revoked_at": formatTime(result.APIKey.RevokedAt),
 				// 权限范围（2026-10-30）：空数组 = 全量
 				"scopes": result.APIKey.Scopes,
 			},
