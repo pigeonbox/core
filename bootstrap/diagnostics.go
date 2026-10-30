@@ -133,11 +133,11 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 	}
 
 	// ===== 数据库 =====
-	switch {
-	case database == nil:
+	switch database {
+	case nil:
 		report.Database = DiagnosticsDatabase{Error: "database not initialized"}
 	default:
-		report.Database.Driver = database.Dialector.Name()
+		report.Database.Driver = database.Name()
 		sqlDB, err := database.DB()
 		if err != nil {
 			report.Database.Error = err.Error()
