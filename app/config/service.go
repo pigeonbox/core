@@ -113,6 +113,26 @@ func EffectiveUserSettings(ctx context.Context) UserSettings {
 	return *cfg.User
 }
 
+// EffectiveUploadBatchCap 生效的站点默认「单次发送**总量**上限」（字节，0=不限）。
+//
+// 与 upload.max_file_size（**单文件**上限）是两个不同的闸：
+//
+//	· max_file_size：单个文件的体积上限
+//	· 本值：一次发送（多文件合计）的体积上限，**只约束登录用户**
+//	  （匿名走访客日配额 upload.anonymous_daily_bytes）
+//
+// 取值 = 管理后台持久化的 user 段（无记录回退 yaml），与 user 域
+// GetUploadSizeCap 的**系统默认层**同源；**不含** per-user 覆盖
+// （users.max_upload_size 是登录用户私有值，不上公开面——服务端 413 才是权威，
+// 本值只用于前端**提示**）。
+func (s *Service) EffectiveUploadBatchCap(ctx context.Context) int64 {
+	cfg, err := s.GetConfig(ctx)
+	if err != nil || cfg == nil || cfg.User == nil {
+		return userSettingsFromYAML().UserUploadSize
+	}
+	return cfg.User.UserUploadSize
+}
+
 // ReconfigureHooks 存储域之外的组件热重建钩子（bootstrap 注册；SMTP mailer / OIDC service）。
 // 参数为合并后的新段；nil 段表示维持现状。
 type ReconfigureHooks struct {
