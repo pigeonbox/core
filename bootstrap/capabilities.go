@@ -142,12 +142,26 @@ func capabilitySnapshot(ctx context.Context) CapabilitySnapshot {
 	return snap
 }
 
+// PublicCapabilities 公开面（/api/config）下发的能力子集。
+//
+// ⚠️ **独立结构体**，不复用 CapabilitySnapshot：复用会把管理面字段
+// （redis_mode / storage_backend / …）以**空串**形态泄到公开 JSON 里
+// ⇒ 客户端读到的 `redis_mode: ""` 既不是事实、也不是"未知"的可辨识形态。
+type PublicCapabilities struct {
+	// DeploymentMode 部署模式：standalone | public | admin。
+	DeploymentMode string `json:"deployment_mode"`
+	// PublicURLSet 站点公网地址是否已配置。
+	PublicURLSet bool `json:"public_url_set"`
+	// SetupTokenRequired 首启建号是否需要令牌。
+	SetupTokenRequired bool `json:"setup_token_required"`
+}
+
 // publicCapabilitySnapshot 公开面（/api/config）下发的能力子集。
 //
 // 只含**匿名可见也无害**的三项；存储后端/Redis 模式留在管理面诊断端点。
-func publicCapabilitySnapshot(ctx context.Context) CapabilitySnapshot {
+func publicCapabilitySnapshot(ctx context.Context) PublicCapabilities {
 	full := capabilitySnapshot(ctx)
-	return CapabilitySnapshot{
+	return PublicCapabilities{
 		DeploymentMode:     full.DeploymentMode,
 		PublicURLSet:       full.PublicURLSet,
 		SetupTokenRequired: full.SetupTokenRequired,
