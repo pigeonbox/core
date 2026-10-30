@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oekit/concurrency/ratelimit"
@@ -150,16 +151,49 @@ func (l *Lockout) Reset(ctx context.Context, key string) {
 }
 
 // defaultLockout 全局单例（bootstrap 注入 Redis 后创建）
-var defaultLockout *Lockout
+//
+// ⚠️ **并发安全**（2026-10-31 修）：此前是**裸包级指针** + 无锁 lazy-init，
+// 而 GetDefaultLockout() 被 7 个**安全相关**面调用（setup 门禁 / 登录爆破 /
+// 管理后台爆破 / 取件码爆破 / 匿名取件 / preview / API Key 限流）⇒
+// 并发请求下「读-判空-写」是经典 data race（Go 内存模型下未定义行为：
+// 可能返回两个不同的 Lockout 实例 ⇒ 内存兜底计数分裂，Redis 模式也可能
+// 拿到半初始化的实例）。
+//
+// 症状：`go test -race` 在并发首启用例上直接报 DATA RACE
+// （pkg/middleware/lockout.go 的读与写并发）。
+//
+// ⇒ 读走 RLock，写（Init/重置）走 Lock。lazy-init 用双检 + 写锁。
+var (
+	defaultLockoutMu sync.RWMutex
+	defaultLockout   *Lockout
+)
 
 // InitDefaultLockout 初始化全局锁定器（bootstrap 调用一次）
+//
+// 兼作**测试重置**入口（传 nil 退回内存模式）⇒ 写操作受锁保护。
 func InitDefaultLockout(rdb *redis.Client) *Lockout {
-	defaultLockout = NewLockout(rdb)
-	return defaultLockout
+	lo := NewLockout(rdb)
+	defaultLockoutMu.Lock()
+	defaultLockout = lo
+	defaultLockoutMu.Unlock()
+	return lo
 }
 
 // GetDefaultLockout 获取全局锁定器（未初始化时用纯内存模式兜底，保证 handler 可用）
+//
+// 并发安全：先无锁读一次（快路径，绝大多数调用命中已初始化实例），
+// 未初始化时再加写锁做 double-check 初始化。
 func GetDefaultLockout() *Lockout {
+	defaultLockoutMu.RLock()
+	lo := defaultLockout
+	defaultLockoutMu.RUnlock()
+	if lo != nil {
+		return lo
+	}
+
+	defaultLockoutMu.Lock()
+	defer defaultLockoutMu.Unlock()
+	// double-check：等锁期间可能已被别的 goroutine 初始化
 	if defaultLockout == nil {
 		defaultLockout = NewLockout(nil)
 	}
