@@ -44,7 +44,14 @@ type FileCode struct {
 
 	FileHash  string `gorm:"size:64" json:"file_hash"`
 	IsChunked bool   `gorm:"default:false" json:"is_chunked"`
-	UploadID  string `gorm:"size:36" json:"upload_id"`
+	// UploadID 分片会话 ID。
+	//
+	// ⚠️ **`size:64`（不是 36）**：与 `UploadChunk.UploadID` 同一个值域——
+	// 客户端自带（契约无长度约束）或服务端由 file_hash 派生（SHA-256 hex = 64）。
+	// 原先 `size:36` 在 SQLite 上从未暴露（SQLite 忽略长度）⇒ 但真机实测有
+	// 64 字符的值 ⇒ **换库到 PG/MySQL 直接失败**（value too long for type
+	// character varying(36)）⇒ 详见 `repo/db/model/chunk.go` 同名字段的说明。
+	UploadID string `gorm:"size:64" json:"upload_id"`
 
 	// 新增：用户认证相关字段
 	UserID *uint `gorm:"index" json:"user_id"` // 上传用户ID，为null表示匿名上传
