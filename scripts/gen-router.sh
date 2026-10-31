@@ -45,6 +45,7 @@ IDL_SRC="${IDL_DIR:-$(pwd)/../contracts/idl}"
 # hz 插件按 out_dir 相对解析 IDL，拷贝进仓内临时目录再跑
 WORK="$(mktemp -d)"
 OK=0
+# shellcheck disable=SC2154  # rc 在 trap 体内赋值，shellcheck 看不见
 trap 'rc=$?; rm -rf "$WORK"; if [ "$rc" -ne 0 ]; then exit $rc; fi; if [ "${OK:-0}" != 1 ]; then exit 1; fi; exit 0' EXIT
 cp -R "$IDL_SRC" "$WORK/idl"
 
