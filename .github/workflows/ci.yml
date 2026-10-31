@@ -64,6 +64,71 @@ jobs:
           if [ -n "$BAD" ]; then echo "✗ core 违规依赖:"; echo "$BAD"; exit 1; fi
           echo "✓ 依赖方向合规"
 
+      # ── 换库真库验收（SQLite → Postgres / MySQL）──
+      #
+      # # 为什么必须是真库（不是 SQLite 替身）
+      #
+      # 换库最核心的断言是「**导入后新建一行不撞主键**」：
+      # 导入是**显式写 ID**（主键与外键才保持不变）⇒ 而
+      #   · PG 的 `bigserial` **序列不会**因显式插入而前进
+      #   · MySQL 的 `AUTO_INCREMENT` **通常**会自己抬（但行为不保证）
+      # ⇒ 不对齐的话，迁移完**第一次新建分享**就撞主键（duplicate key）。
+      #
+      # SQLite 的 rowid 分配天然是 max(rowid)+1 ⇒ **测不出这个问题**
+      # ⇒ 必须用真 PG / 真 MySQL 跑。
+      #
+      # 本步同时带**负对照**（把 PG 序列推回 1 ⇒ 必须撞主键）
+      # ⇒ 证明「对齐有效」那条断言不是「本来就绿」。
+      #
+      # # 为什么并进 test job 而不是另开一个 job
+      #
+      # 实录（2026-10-31）：**独立 job 连续四次**在「Set up job」阶段就红，
+      # 报错是「Unable to resolve action actions/checkout@<与 main 逐字相同的
+      # SHA>」⇒ action 解析失败；同一 run 里 `test` job 解析正常 ⇒ 差异在
+      # 「新 job 抢在解析接口抖动时首个启动」这条路径（去掉 job 级 `services:`
+      # 仍复现 ⇒ 不是 service 容器的问题）。
+      # ⇒ 既然 `test` job 的 action 解析稳定 ⇒ **并进它**，不再新增 job
+      # （新增 job = 新增一条 action 解析路径 = 新增一类抖动面）。
+      - name: 换库真库验收（SQLite → PG / MySQL）
+        if: always()
+        env:
+          PB_TEST_PG_DSN: "host=127.0.0.1 port=5432 user=pigeonbox password=pbtest dbname=pigeonbox_test sslmode=disable"
+          PB_TEST_MYSQL_DSN: "root:pbtest@tcp(127.0.0.1:3306)/pigeonbox_test?charset=utf8mb4&parseTime=True&loc=Local"
+        run: |
+          set -uo pipefail
+          echo "起 PG / MySQL 容器…"
+          docker run -d --name pb-pg -e POSTGRES_USER=pigeonbox -e POSTGRES_PASSWORD=pbtest \
+            -e POSTGRES_DB=pigeonbox_test -p 5432:5432 postgres:16-alpine
+          docker run -d --name pb-mysql -e MYSQL_ROOT_PASSWORD=pbtest \
+            -e MYSQL_DATABASE=pigeonbox_test -p 3306:3306 mysql:8
+
+          echo "等待 PG 就绪…"
+          pg_ok=0
+          n=0
+          while [ "$n" -lt 60 ]; do
+            n=$((n + 1))
+            if docker exec pb-pg pg_isready -U pigeonbox >/dev/null 2>&1; then pg_ok=1; break; fi
+            sleep 2
+          done
+          echo "等待 MySQL 就绪…"
+          my_ok=0
+          n=0
+          while [ "$n" -lt 90 ]; do
+            n=$((n + 1))
+            if docker exec pb-mysql mysqladmin ping -uroot -ppbtest >/dev/null 2>&1; then my_ok=1; break; fi
+            sleep 2
+          done
+
+          # 容器没起来 ⇒ **红**（不是跳过）：跳过 = 假绿 = 真库验收形同虚设。
+          if [ "$pg_ok" != "1" ] || [ "$my_ok" != "1" ]; then
+            echo "✗ PG 就绪=$pg_ok MySQL 就绪=$my_ok（容器没起来 ⇒ 真库验收无法进行）"
+            docker ps -a || true
+            exit 1
+          fi
+          echo "✓ PG / MySQL 就绪"
+
+          go test ./app/dbmigrate/... -run 'TestPG|TestMySQL' -v -count=1
+
   # 生成物对账（CHECK=1）：沙箱里从 IDL 再生成 gen/ 并与提交物比对，IDL 改了没跑
   # gen-router.sh（或生成物被手改/多出杂散文件）即红。IDL 真相源=contracts，按
   # core go.mod 钉版检出（不用 main，避免 contracts 领先造成假红）；目录布局对齐
@@ -94,67 +159,3 @@ jobs:
           ../contracts/scripts/install-tools.sh
       - name: Gen drift check (CHECK=1, 不落盘)
         run: CHECK=1 ./scripts/gen-router.sh
-
-  # ── 换库真库验收（SQLite → Postgres / MySQL）──
-  #
-  # # 为什么必须是真库（不是 SQLite 替身）
-  #
-  # 换库最核心的断言是「**导入后新建一行不撞主键**」：
-  # 导入是**显式写 ID**（主键与外键才保持不变）⇒ 而
-  #   · PG 的 `bigserial` **序列不会**因显式插入而前进
-  #   · MySQL 的 `AUTO_INCREMENT` **通常**会自己抬（但行为不保证）
-  # ⇒ 不对齐的话，迁移完**第一次新建分享**就撞主键（duplicate key）。
-  #
-  # SQLite 的 rowid 分配天然是 max(rowid)+1 ⇒ **测不出这个问题**
-  # ⇒ 必须用 service 容器起真 PG / 真 MySQL 跑。
-  #
-  # 本 job 同时带**负对照**（把 PG 序列推回 1 ⇒ 必须撞主键）
-  # ⇒ 证明「对齐有效」那条不是「本来就绿」。
-  db-migrate:
-    runs-on: ubuntu-latest
-    env:
-      GOTOOLCHAIN: auto
-    steps:
-      - uses: actions/checkout@3d3d42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@40f1582b2485089dde7abd71c1524aa768e1baff # v5
-        with:
-          go-version: "1.26.10"
-          cache-dependency-path: go.sum
-
-      # ⚠️ 这里用**步骤内 docker run**而不是 job 级 `services:`。
-      #
-      # 实录（2026-10-31）：带 `services:` 的 job 在本仓**连续三次**在
-      # 「Set up job」阶段就红 —— 报错是「Unable to resolve action
-      # actions/checkout@<与 main 逐字相同的 SHA>」⇒ **action 解析失败**，
-      # 且同一 run 里无 services 的 `test` job 解析正常 ⇒ 差异在 service 容器
-      # 这条路径（不是 SHA 写错：同样的 SHA 在别的 job 绿）。
-      # ⇒ 改成步骤内起容器：**就绪等待自己控**（不靠 health-cmd 的隐式等待），
-      # 也不依赖 service 容器的行为。
-      - name: 起 PG / MySQL 容器并等就绪
-        run: |
-          set -euo pipefail
-          docker run -d --name pb-pg -e POSTGRES_USER=pigeonbox -e POSTGRES_PASSWORD=pbtest \
-            -e POSTGRES_DB=pigeonbox_test -p 5432:5432 postgres:16-alpine
-          docker run -d --name pb-mysql -e MYSQL_ROOT_PASSWORD=pbtest \
-            -e MYSQL_DATABASE=pigeonbox_test -p 3306:3306 mysql:8
-
-          echo "等待 PG 就绪…"
-          for i in $(seq 1 60); do
-            if docker exec pb-pg pg_isready -U pigeonbox >/dev/null 2>&1; then echo "PG 就绪"; break; fi
-            [ "$i" = "60" ] && { echo "PG 启动超时"; exit 1; }
-            sleep 2
-          done
-
-          echo "等待 MySQL 就绪…"
-          for i in $(seq 1 90); do
-            if docker exec pb-mysql mysqladmin ping -uroot -ppbtest >/dev/null 2>&1; then echo "MySQL 就绪"; break; fi
-            [ "$i" = "90" ] && { echo "MySQL 启动超时"; exit 1; }
-            sleep 2
-          done
-
-      - name: 换库真库验收（SQLite → PG / MySQL）
-        env:
-          PB_TEST_PG_DSN: "host=127.0.0.1 port=5432 user=pigeonbox password=pbtest dbname=pigeonbox_test sslmode=disable"
-          PB_TEST_MYSQL_DSN: "root:pbtest@tcp(127.0.0.1:3306)/pigeonbox_test?charset=utf8mb4&parseTime=True&loc=Local"
-        run: |
-          go test ./app/dbmigrate/... -run 'TestPG|TestMySQL' -v -count=1
