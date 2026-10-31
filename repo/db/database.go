@@ -102,25 +102,18 @@ func SetDatabaseInstance(db *gorm.DB) {
 }
 
 // autoMigrate 自动迁移数据库表
+//
+// ⚠️ 清单**不在这里手写** ⇒ 统一取自 `model.AutoMigrateModels()`
+// （`repo/db/model/registry.go` = 全部领域模型的**单一真相源**）。
+//
+// 为什么挪走：此前这里是一份**手写清单**，与模型定义文件**两处漂移**，
+// 漂移的后果是**静默**的——漏登记 ⇒ 升级路径的老库上那张表永远缺失
+// （v0.11.1 实录：漏登 FilePreview ⇒ 所有升级库预览域整体 404）。
+// 而「换库」（SQLite→PG/MySQL）要**逐表**搬数据 ⇒ 漏一张表 = 那张表的数据
+// 在换库后**静默丢失** ⇒ 两处漂移的风险从「功能缺失」升级为「数据丢失」。
+//
+// ⇒ 清单收敛到一处，且由 `model/registry_guard_test.go` 的 AST 守卫
+// **强制**它与模型定义一致（新增模型没登记 ⇒ 提交即红）。
 func autoMigrate() error {
-	// 注意：新增领域模型必须同步登记于此——版本化迁移(migrations/*.sql)对已应用
-	// 过的库不会重放，漏登记的表在升级路径老库上永远缺失（v0.11.1 前漏登
-	// FilePreview，导致所有升级库预览域整体 404）。
-	return DB.AutoMigrate(
-		&model.User{},
-		&model.FileCode{},
-		&model.FileCodeFile{},
-		&model.FileRequest{},
-		&model.UploadChunk{},
-		&model.TransferLog{},
-		&model.AdminOperationLog{},
-		&model.UserAPIKey{},
-		&model.SystemConfigRecord{},
-		&model.FilePreview{},
-		// notify 表此前只靠 bootstrap standalone 步骤迁移,而该步骤被
-		// database.auto_migrate 门控——env-only 形态(无 yaml,该键取零值
-		// false)下全新安装缺表,/notifies/* 全 500(2026-10-07 真机事故)。
-		// 在此登记使 autoMigrate 路径与版本化路径都覆盖。
-		&model.Notify{},
-	)
+	return DB.AutoMigrate(model.AutoMigrateModels()...)
 }
