@@ -28,6 +28,7 @@ package dbmigrate
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,8 +148,22 @@ func TestPGSequenceAligned(t *testing.T) {
 
 // TestPGSequenceNotAlignedNegative —— **负对照**：证明序列对齐确实是关键。
 //
-// 手工把 PG 的序列**推回 1**（模拟「没做序列对齐」）⇒ 新建行撞主键。
+// 把 PG 的序列**设成一个确实已存在的 id**（模拟「没做序列对齐」）⇒ 新建行撞主键。
 // ⇒ 这条证明上一条用例不是「本来就绿」。
+//
+// ⚠️ **负对照本身也要设计得对**（2026-10-31 真机实录）：第一版把序列设成
+// `setval(seq, 1, false)`（next=1）⇒ 在真机数据上**没撞主键**——因为那份库的
+// `file_codes` id 范围是 **239~783**，**id=1 恰好是空洞**（不存在）⇒ 不冲突。
+// ⇒ 负对照的前提是「那个 id **确实存在**」⇒ 必须**动态取一个已存在的 id**
+//
+//	（`SELECT max(id) FROM file_codes`）而不是硬编码 1。
+//
+// ⚠️ 还要注意 `setval` 的第三个参数（is_called）：
+//
+//	· `setval(seq, X, false)` ⇒ 下次 nextval **返回 X**（⇒ 撞已存在的 X）；
+//	· `setval(seq, X, true)`  ⇒ 下次 nextval 返回 **X+1**（⇒ 不撞）。
+//
+// ⇒ 负对照必须用 **false**。
 func TestPGSequenceNotAlignedNegative(t *testing.T) {
 	ctx := context.Background()
 
@@ -164,9 +179,14 @@ func TestPGSequenceNotAlignedNegative(t *testing.T) {
 	_, err = NewImporter(pg, true).Import(ctx, dump)
 	require.NoError(t, err)
 
-	// 手动把序列推回 1（= 模拟没对齐）。
+	// 动态取一个**确实存在**的 id（不能硬编码 1：真实库里 1 可能是空洞）。
+	var existing uint
+	require.NoError(t, pg.Model(&model.FileCode{}).Select("MAX(id)").Scan(&existing).Error)
+	require.Positive(t, existing, "导入后应有数据（否则负对照无意义）")
+
+	// 把序列设成该 id 且 is_called=false ⇒ 下次 nextval 就返回它 ⇒ 必然撞主键。
 	require.NoError(t, pg.Exec(
-		"SELECT setval(pg_get_serial_sequence('file_codes','id'), 1, false)").Error)
+		"SELECT setval(pg_get_serial_sequence('file_codes','id'), ?, false)", existing).Error)
 
 	// 此时新建行 ⇒ 撞主键。
 	newCode := model.FileCode{
@@ -188,3 +208,46 @@ func dropAll(db *gorm.DB) {
 
 // 确认时间类型在 PG 上真的被解析（避免 unused import）。
 var _ = time.Now
+
+// TestPGWidthExceededRejected —— **列宽超限要当场报人话**。
+//
+// # 为什么这条重要
+//
+// 目标库的列宽 = AutoMigrate 按**模型声明**建的 ⇒ 值超长 ⇒ 目标库插入失败。
+// 而 **SQLite 忽略 varchar 长度** ⇒ 生产上跑得好好的 ⇒ **只有换库时才炸**
+// （真机实录：`upload_id` 声明 36、实际 64（由 file_hash 派生）⇒ PG 报
+// 「value too long for type character varying(36)」⇒ 定位到模型声明与实际值域不符）。
+//
+// ⇒ 导入前逐列校验 ⇒ 给出「哪张表/哪列/声明多宽/实际多长」，
+// 而不是让目标库抛晦涩的驱动错误 ⇒ **换库失败时能立刻看出是宽度问题**。
+func TestPGWidthExceededRejected(t *testing.T) {
+	ctx := context.Background()
+
+	src := newSQLite(t)
+	seedSource(t, src)
+
+	// 塞一个**超宽**的 upload_id（> 声明宽度 64）。
+	long := strings.Repeat("x", 100)
+	require.NoError(t, src.Create(&model.FileCode{
+		Code: "WIDE001", UUIDFileName: "wide.bin", FilePath: "uploads/wide.bin",
+		Size: 1, Text: "wide.txt", Status: model.StatusNormal, ExpiredCount: -1,
+		UploadID: long,
+	}).Error)
+
+	dump, err := NewExporter(src).Export(ctx)
+	require.NoError(t, err)
+
+	pg := openPG(t)
+	dropAll(pg)
+	require.NoError(t, pg.AutoMigrate(model.AutoMigrateModels()...))
+
+	_, err = NewImporter(pg, true).Import(ctx, dump)
+	require.Error(t, err, "超宽值必须被拒（否则由目标库抛晦涩的驱动错误）")
+	assert.Contains(t, err.Error(), "upload_id", "错误要点名列")
+	assert.Contains(t, err.Error(), "file_codes", "错误要点名表")
+
+	// 拒绝时目标库**一条数据都没进去**（不留在半成品状态）。
+	var n int64
+	require.NoError(t, pg.Model(&model.FileCode{}).Count(&n).Error)
+	assert.Zero(t, n, "宽度校验必须发生在任何插入之前")
+}

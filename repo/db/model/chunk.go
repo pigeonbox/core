@@ -21,7 +21,17 @@ type UploadChunk struct {
 	// 「UNIQUE constraint failed: upload_chunks.chunk_index」⇒ 整条秒传链路挂）。
 	//
 	// 生产走版本化迁移 000006（复合）；此处标签让**新建库**（AutoMigrate）也有。
-	UploadID    string `gorm:"index;size:36;uniqueIndex:idx_upload_chunks_upload_id_chunk_index" json:"upload_id"`
+	//
+	// ⚠️ **`size:64`（不是 36）**：upload_id 有两个来源——
+	//   ① 客户端自带（契约 chunk.thrift 里**无长度约束** ⇒ 客户端可传任意串）；
+	//   ② 客户端不带时由服务端**用 file_hash 派生**（SHA-256 hex = **64 字符**）。
+	// ⇒ 原先的 `size:36`（按 uuid 长度定的）在 SQLite 上**从未暴露**
+	//   （SQLite 忽略 varchar 长度）⇒ 但真机实测有 64 字符的值 ⇒
+	//   **换库到 PG/MySQL 时直接失败**（value too long for type character
+	//   varying(36)）⇒ 这是「换库」抓出来的隐藏地雷。
+	// ⇒ 宽度取 64（与 file_hash 同宽，覆盖派生值）；更宽的自定义值由
+	//   **导入侧显式报错**兜底（见 app/dbmigrate 的列宽校验），不让 PG 抛晦涩错。
+	UploadID    string `gorm:"index;size:64;uniqueIndex:idx_upload_chunks_upload_id_chunk_index" json:"upload_id"`
 	ChunkIndex  int    `gorm:"uniqueIndex:idx_upload_chunks_upload_id_chunk_index" json:"chunk_index"`
 	ChunkHash   string `gorm:"size:64" json:"chunk_hash"`
 	TotalChunks int    `json:"total_chunks"`

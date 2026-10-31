@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -251,3 +252,37 @@ func marshalJSON(t *testing.T, v any) []byte {
 
 // sp 取可空字符串指针（测试辅助）。
 func sp(s string) *string { return &s }
+
+// TestCheckWidths —— **宽度声明与实际不符**要当场报人话。
+//
+// # 为什么这条很重要
+//
+// 目标库的列宽 = AutoMigrate 按**模型声明**建的 ⇒ 值超长 ⇒ 目标库插入失败。
+// 而 **SQLite 忽略 varchar 长度** ⇒ 生产上跑得好好的 ⇒ **只有换库时才炸**
+// （真机实录：upload_id 声明 36、实际 64 ⇒ PG 上「value too long for
+// character varying(36)」⇒ 定位到模型声明与实际值域不符）。
+//
+// ⇒ 导入前逐列校验 ⇒ 失败时给出「哪张表/哪列/声明多宽/实际多长」，
+// 而不是让目标库抛晦涩的驱动错误。
+func TestCheckWidths(t *testing.T) {
+	rows := [][]*string{
+		{sp("short"), sp("0123456789abcdef0123456789abcdef0123456789abcdef")}, // 48 > 36
+	}
+	widths := map[string]int{"a": 10, "b": 36}
+
+	// 超宽 ⇒ 必须报错，且错误里要点名表与列。
+	err := checkWidths("file_codes", []string{"a", "b"}, rows, widths)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file_codes", "错误要点名表")
+	assert.Contains(t, err.Error(), "b", "错误要点名列")
+	assert.Contains(t, err.Error(), "36", "错误要点出声明宽度")
+	assert.Contains(t, err.Error(), "48", "错误要点出实际长度")
+
+	// 不超宽 ⇒ 通过。
+	assert.NoError(t, checkWidths("file_codes", []string{"a", "b"},
+		[][]*string{{sp("short"), sp("ok")}}, widths))
+
+	// 未声明宽度的列（widths 里没有）⇒ 不校验（不误伤）。
+	assert.NoError(t, checkWidths("t", []string{"x"},
+		[][]*string{{sp(strings.Repeat("y", 500))}}, map[string]int{}))
+}

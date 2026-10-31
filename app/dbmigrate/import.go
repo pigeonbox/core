@@ -104,9 +104,14 @@ func (i *Importer) importTable(ctx context.Context, td TableDump) (int, error) {
 	if len(td.Rows) == 0 {
 		return 0, nil
 	}
-	// 目标库的列类型（用于把字符串值归一化成目标方言要的类型）。
-	colTypes, err := i.columnTypes(ctx, td)
+	// 目标库的列类型与声明宽度（用于归一化 + 宽度校验）。
+	colTypes, colWidths, err := i.columnTypes(ctx, td)
 	if err != nil {
+		return 0, err
+	}
+	// 宽度校验**先于**任何插入 ⇒ 失败时目标库**一条数据都没进去**
+	// （不留在「插了一半」的半成品状态）。
+	if err := checkWidths(td.Name, td.Columns, td.Rows, colWidths); err != nil {
 		return 0, err
 	}
 
@@ -171,24 +176,82 @@ func placeholders(n int) []string {
 }
 
 // columnTypes 取目标库各列的数据类型（用于归一化）。
-func (i *Importer) columnTypes(ctx context.Context, td TableDump) (map[string]string, error) {
+//
+// ⚠️ 一并取出**声明宽度**（`size:N`）⇒ 导入前就能发现「模型声明的宽度
+// 小于实际数据长度」⇒ **当场报人话**，而不是到目标库才炸成
+// `value too long for type character varying(36)`（PG/MySQL 专有错误，
+// SQLite 上永远看不到 ⇒ 只在换库时才暴露）。
+//
+// 真机实录（2026-10-31，10.10.10.3）：`upload_id` 声明 36、实际 64
+// （由 file_hash 派生）⇒ **PG 上导入直接失败** ⇒ 定位到模型声明与实际值域不符。
+func (i *Importer) columnTypes(ctx context.Context, td TableDump) (map[string]string, map[string]int, error) {
 	types := make(map[string]string, len(td.Columns))
+	widths := make(map[string]int, len(td.Columns))
+	for _, c := range td.Columns {
+		types[c] = "text"
+	}
 	stmt := &gorm.Statement{DB: i.db}
 	if err := stmt.Parse(modelForTable(td.Name)); err != nil {
 		// 目标库可能还没这张表的模型（理论上不会：导入前已 AutoMigrate）
-		// ⇒ 退化成「全部按字符串处理」。
-		for _, c := range td.Columns {
-			types[c] = "text"
-		}
-		return types, nil
+		// ⇒ 退化成「全部按字符串处理 + 不校验宽度」。
+		return types, widths, nil
 	}
 	for _, f := range stmt.Schema.Fields {
 		if f.DBName == "" {
 			continue
 		}
 		types[f.DBName] = string(f.DataType)
+		if f.Size > 0 {
+			widths[f.DBName] = f.Size
+		}
 	}
-	return types, nil
+	return types, widths, nil
+}
+
+// checkWidths 校验各列的实际长度是否超出**模型声明的宽度**。
+//
+// # 为什么要有
+//
+// 「模型声明的宽度」是**换库目标库 schema 的宽度**（AutoMigrate 按模型建表）
+// ⇒ 值超长 ⇒ 目标库插入失败（PG/MySQL：`value too long for type character varying(N)`）。
+// 而 SQLite **忽略** varchar 长度 ⇒ 生产上跑得好好的 ⇒ **只有换库时才会炸**。
+//
+// ⇒ 在**导入前**逐列校验 ⇒ 失败时给出**人话**（哪张表、哪列、声明多宽、实际多长），
+// 而不是让目标库抛晦涩的驱动错误。
+func checkWidths(table string, columns []string, rows [][]*string, widths map[string]int) error {
+	for ci, col := range columns {
+		want, ok := widths[col]
+		if !ok || want <= 0 {
+			continue
+		}
+		maxLen := 0
+		var sample string
+		for _, r := range rows {
+			if ci >= len(r) || r[ci] == nil {
+				continue
+			}
+			if l := len(*r[ci]); l > maxLen {
+				maxLen = l
+				sample = *r[ci]
+			}
+		}
+		if maxLen > want {
+			return fmt.Errorf(
+				"表 %s 的列 %s：数据最长 %d 字符，但模型只声明了 %d ⇒ 目标库建出的列装不下 ⇒ "+
+					"请把该列的 size 调大（或确认真机数据确实超长）。样例: %q",
+				table, col, maxLen, want, truncateSample(sample))
+		}
+	}
+	return nil
+}
+
+// truncateSample 截断样例（避免错误信息过长）。
+func truncateSample(s string) string {
+	const max = 80
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // normalizeValue 把导出的值按**目标列类型**归一化。
