@@ -141,8 +141,8 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@3d3d42e5aac3ba80582576410c181273ba90b1 # v7
-      - uses: actions/setup-go@40f1885b2485089dde7abd71c1524aa768e1baff # v5
+      - uses: actions/checkout@3d3d42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@40f1582b2485089dde7abd71c1524aa768e1baff # v5
         with:
           go-version: "1.26.10"
           cache-dependency-path: go.sum
