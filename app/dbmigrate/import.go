@@ -48,12 +48,12 @@ type TableImportResult struct {
 //
 // # 顺序
 //
-// 1. **建表**：用 `model.AutoMigrateModels()` 在目标库按**目标方言**建表
-//    （方言无关 ⇒ 不依赖那些 SQLite 方言的 migrations/*.sql）。
-// 2. **逐表导入**：按 dump 里的表顺序（= 登记顺序 ⇒ 父表在前 ⇒ 外键不炸）。
-// 3. **序列对齐**：把目标库的自增计数器重置到 `max(id)+1`
-//    ⇒ **不做这一步，下一次新建行立刻撞主键**（PG 的 bigserial 序列
-//    与 MySQL 的 AUTO_INCREMENT 都不会因为显式插入 ID 而前进）。
+//  1. **建表**：用 `model.AutoMigrateModels()` 在目标库按**目标方言**建表
+//     （方言无关 ⇒ 不依赖那些 SQLite 方言的 migrations/*.sql）。
+//  2. **逐表导入**：按 dump 里的表顺序（= 登记顺序 ⇒ 父表在前 ⇒ 外键不炸）。
+//  3. **序列对齐**：把目标库的自增计数器重置到 `max(id)+1`
+//     ⇒ **不做这一步，下一次新建行立刻撞主键**（PG 的 bigserial 序列
+//     与 MySQL 的 AUTO_INCREMENT 都不会因为显式插入 ID 而前进）。
 //
 // # 幂等/可中断
 //
@@ -130,7 +130,8 @@ func (i *Importer) importTable(ctx context.Context, td TableDump) (int, error) {
 				return inserted, err
 			}
 			inserted++
-		}	}
+		}
+	}
 	return inserted, nil
 }
 

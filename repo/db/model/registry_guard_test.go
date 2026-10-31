@@ -96,8 +96,8 @@ func scanModels(t *testing.T) []scannedModel {
 
 				tbl, hasMethod := tableNameOf(f, ts.Name.Name)
 				out = append(out, scannedModel{
-					TypeName:          ts.Name.Name,
-					TableName:         tbl,
+					TypeName:           ts.Name.Name,
+					TableName:          tbl,
 					HasTableNameMethod: hasMethod,
 				})
 			}
