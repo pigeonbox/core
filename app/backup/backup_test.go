@@ -45,6 +45,11 @@ func (f *fakeStore) GetFileReader(ctx context.Context, p string) (io.ReadCloser,
 
 func (f *fakeStore) EffectiveType() string { return "local" }
 
+func (f *fakeStore) FileExists(ctx context.Context, p string) bool {
+	_, ok := f.data[p]
+	return ok
+}
+
 func (f *fakeStore) SaveStream(ctx context.Context, p string, r io.Reader, size int64) (int64, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {
@@ -133,6 +138,34 @@ func TestExport_PackageShape(t *testing.T) {
 	require.NoError(t, json.Unmarshal(names[FileListName], &fl))
 	assert.Equal(t, 2, fl.Count)
 	assert.Equal(t, "ABCD12", fl.Files[0].Code)
+}
+
+// TestExport_MissingObjectTolerated 存量缺失（DB 有引用、磁盘已无）⇒ 导出**不整体失败**，
+// 且缺失对象被**如实记账**。
+//
+// 真机实录（2026-10-31，10.10.10.3）：这台实例的 DB 有 300+ 条分享记录，其中若干对象
+// 文件早被清理 ⇒ 原实现「读不到就整体失败」⇒ **备份包在这台实例上根本导不出来**
+// ⇒ 灾备能力在最需要它的机器上失效。
+func TestExport_MissingObjectTolerated(t *testing.T) {
+	dir := t.TempDir()
+	db := newTestDB(t, dir)
+	seedFileCodes(t, db, model.FileCode{Code: "GONE01", FilePath: "uploads/gone.txt", Size: 3, Status: "normal"})
+
+	store := newFakeStore()
+	// 清单里有 uploads/gone.txt，但 store 里没有它 ⇒ 存量缺失
+	svc := NewService(db, fakeLister{paths: []string{"uploads/gone.txt"}}, store)
+
+	var buf bytes.Buffer
+	manifest, err := svc.Export(context.Background(), &buf)
+	require.NoError(t, err, "存量缺失不得让整个导出失败")
+	assert.Equal(t, int64(0), manifest.ObjectCount)
+	require.Len(t, manifest.MissingObjects, 1)
+	assert.Equal(t, "uploads/gone.txt", manifest.MissingObjects[0])
+
+	// 包本身仍可用（manifest 在、DB 快照在）
+	entries := readEntries(t, buf.Bytes())
+	require.Contains(t, entries, ManifestName)
+	require.Contains(t, entries, DBEntryName)
 }
 
 // TestExport_NonSQLite 非 SQLite 库明确报错（不产半成品包）。

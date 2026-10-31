@@ -42,6 +42,9 @@ type ObjectStore interface {
 	EffectiveType() string
 	// SaveStream 把 reader 写入相对路径（路径逃逸由存储层自防）。
 	SaveStream(ctx context.Context, savePath string, r io.Reader, expectedSize int64) (int64, error)
+	// FileExists 对象是否已存在（**存量数据缺失**的判定：读之前先问一句，
+	// 免得把「文件本来就没了」与「存储后端出故障」混为一谈）。
+	FileExists(ctx context.Context, filePath string) bool
 }
 
 // Service 备份包服务。
@@ -102,6 +105,16 @@ func (s *Service) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 
 	// 1) 对象：边写边算 sha256（只读一遍）。
 	for _, p := range paths {
+		// 存量缺失（DB 有引用、磁盘上已没有）⇒ 跳过并**如实记账**。
+		//
+		// 为什么不能整体失败：真机实录（2026-10-31，10.10.10.3）里这台实例的 DB
+		// 有 300+ 条分享记录，其中若干对象文件早被清理 ⇒ 「读不到就整体失败」⇒
+		// **备份包在这台实例上根本导不出来** ⇒ 灾备能力在最需要它的机器上失效。
+		// 而「存储后端真出故障」仍会报错（下面的读失败分支）⇒ 不吞真故障。
+		if !s.store.FileExists(ctx, p) {
+			manifest.MissingObjects = append(manifest.MissingObjects, p)
+			continue
+		}
 		entry, err := s.writeObject(ctx, tw, p)
 		if err != nil {
 			return nil, err

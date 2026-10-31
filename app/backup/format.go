@@ -84,6 +84,14 @@ type Manifest struct {
 	FileCount int64 `json:"file_count"`
 	// Objects 对象清单（逐个 sha256）。
 	Objects []ObjectEntry `json:"objects"`
+	// MissingObjects **DB 引用了但磁盘上已经没有**的对象（存量数据本身缺失）。
+	//
+	// 为什么要单独记：真机实录（2026-10-31，10.10.10.3）——DB 里有 300+ 条分享记录，
+	// 其中若干对象文件早被清理 ⇒ 若「读不到就整体失败」，**备份包在这台实例上根本导不出来**
+	// ⇒ 灾备能力在最需要它的机器上反而不可用。
+	// ⇒ 改成：缺失对象**跳过并如实记账**（不是静默吞掉）；其余故障（权限/网络/驱动错）
+	// 仍然整体报错 —— 真故障不能吞。
+	MissingObjects []string `json:"missing_objects"`
 }
 
 // ObjectEntry 备份包内的一个存储对象。

@@ -82,3 +82,7 @@ func (a storageTypeAdapter) SaveStream(ctx context.Context, p string, r io.Reade
 }
 
 func (a storageTypeAdapter) EffectiveType() string { return string(a.svc.EffectiveType()) }
+
+func (a storageTypeAdapter) FileExists(ctx context.Context, p string) bool {
+	return a.svc.FileExists(ctx, p)
+}
