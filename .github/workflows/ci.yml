@@ -114,38 +114,44 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GOTOOLCHAIN: auto
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: pigeonbox
-          POSTGRES_PASSWORD: pbtest
-          POSTGRES_DB: pigeonbox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U pigeonbox"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-      mysql:
-        image: mysql:8
-        env:
-          MYSQL_ROOT_PASSWORD: pbtest
-          MYSQL_DATABASE: pigeonbox_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd "mysqladmin ping -uroot -ppbtest"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 20
     steps:
       - uses: actions/checkout@3d3d42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@40f1582b2485089dde7abd71c1524aa768e1baff # v5
         with:
           go-version: "1.26.10"
           cache-dependency-path: go.sum
+
+      # ⚠️ 这里用**步骤内 docker run**而不是 job 级 `services:`。
+      #
+      # 实录（2026-10-31）：带 `services:` 的 job 在本仓**连续三次**在
+      # 「Set up job」阶段就红 —— 报错是「Unable to resolve action
+      # actions/checkout@<与 main 逐字相同的 SHA>」⇒ **action 解析失败**，
+      # 且同一 run 里无 services 的 `test` job 解析正常 ⇒ 差异在 service 容器
+      # 这条路径（不是 SHA 写错：同样的 SHA 在别的 job 绿）。
+      # ⇒ 改成步骤内起容器：**就绪等待自己控**（不靠 health-cmd 的隐式等待），
+      # 也不依赖 service 容器的行为。
+      - name: 起 PG / MySQL 容器并等就绪
+        run: |
+          set -euo pipefail
+          docker run -d --name pb-pg -e POSTGRES_USER=pigeonbox -e POSTGRES_PASSWORD=pbtest \
+            -e POSTGRES_DB=pigeonbox_test -p 5432:5432 postgres:16-alpine
+          docker run -d --name pb-mysql -e MYSQL_ROOT_PASSWORD=pbtest \
+            -e MYSQL_DATABASE=pigeonbox_test -p 3306:3306 mysql:8
+
+          echo "等待 PG 就绪…"
+          for i in $(seq 1 60); do
+            if docker exec pb-pg pg_isready -U pigeonbox >/dev/null 2>&1; then echo "PG 就绪"; break; fi
+            [ "$i" = "60" ] && { echo "PG 启动超时"; exit 1; }
+            sleep 2
+          done
+
+          echo "等待 MySQL 就绪…"
+          for i in $(seq 1 90); do
+            if docker exec pb-mysql mysqladmin ping -uroot -ppbtest >/dev/null 2>&1; then echo "MySQL 就绪"; break; fi
+            [ "$i" = "90" ] && { echo "MySQL 启动超时"; exit 1; }
+            sleep 2
+          done
+
       - name: 换库真库验收（SQLite → PG / MySQL）
         env:
           PB_TEST_PG_DSN: "host=127.0.0.1 port=5432 user=pigeonbox password=pbtest dbname=pigeonbox_test sslmode=disable"
