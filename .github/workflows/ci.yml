@@ -94,3 +94,61 @@ jobs:
           ../contracts/scripts/install-tools.sh
       - name: Gen drift check (CHECK=1, 不落盘)
         run: CHECK=1 ./scripts/gen-router.sh
+
+  # ── 换库真库验收（SQLite → Postgres / MySQL）──
+  #
+  # # 为什么必须是真库（不是 SQLite 替身）
+  #
+  # 换库最核心的断言是「**导入后新建一行不撞主键**」：
+  # 导入是**显式写 ID**（主键与外键才保持不变）⇒ 而
+  #   · PG 的 `bigserial` **序列不会**因显式插入而前进
+  #   · MySQL 的 `AUTO_INCREMENT` **通常**会自己抬（但行为不保证）
+  # ⇒ 不对齐的话，迁移完**第一次新建分享**就撞主键（duplicate key）。
+  #
+  # SQLite 的 rowid 分配天然是 max(rowid)+1 ⇒ **测不出这个问题**
+  # ⇒ 必须用 service 容器起真 PG / 真 MySQL 跑。
+  #
+  # 本 job 同时带**负对照**（把 PG 序列推回 1 ⇒ 必须撞主键）
+  # ⇒ 证明「对齐有效」那条不是「本来就绿」。
+  db-migrate:
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: auto
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pigeonbox
+          POSTGRES_PASSWORD: pbtest
+          POSTGRES_DB: pigeonbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pigeonbox"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: pbtest
+          MYSQL_DATABASE: pigeonbox_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -uroot -ppbtest"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3d42e5aac3ba80582576410c181273ba90b1 # v7
+      - uses: actions/setup-go@40f1885b2485089dde7abd71c1524aa768e1baff # v5
+        with:
+          go-version: "1.26.10"
+          cache-dependency-path: go.sum
+      - name: 换库真库验收（SQLite → PG / MySQL）
+        env:
+          PB_TEST_PG_DSN: "host=127.0.0.1 port=5432 user=pigeonbox password=pbtest dbname=pigeonbox_test sslmode=disable"
+          PB_TEST_MYSQL_DSN: "root:pbtest@tcp(127.0.0.1:3306)/pigeonbox_test?charset=utf8mb4&parseTime=True&loc=Local"
+        run: |
+          go test ./app/dbmigrate/... -run 'TestPG|TestMySQL' -v -count=1
