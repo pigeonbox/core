@@ -129,6 +129,32 @@ jobs:
 
           go test ./app/dbmigrate/... -run 'TestPG|TestMySQL' -v -count=1
 
+      # ── 存储驱动真机验收（Azure Blob + HDFS）──
+      #
+      # # 为什么必须有真服务（不是 mock）
+      #
+      # Azure Blob 驱动是**手写 REST + 手写 SharedKey 签名**，HDFS 驱动是**手写
+      # WebHDFS 客户端** ⇒ 两者都只有「单测验签名字符串形态」的覆盖，验不出
+      # 「服务端认不认这个请求」。2026-11-02 真机联调（core#36）实测出 **4 个**
+      # 真实缺陷，**全部**是「单测全绿、真机不可用」：
+      #   · azblob 容器级 URL 缺 "?" ⇒ Probe/List/RemoveAll 全线 400；
+      #   · canonicalized resource 查询参数用 name=value ⇒ 403；
+      #   · listAll 不查状态码 ⇒ 鉴权失败伪装成「空列表」；
+      #   · HDFS List 对缺失目录报错（≠ S3 的空列表）⇒ janitor 孤儿清理不可用。
+      #
+      # # 为什么并进 test job 而不是另开一个 job
+      #
+      # 沿用上面「换库真库验收」的既有结论：独立 job 连续多次在「Set up job」
+      # 阶段就红（action 解析抖动），而 test job 解析稳定 ⇒ 不新增 action 解析路径。
+      #
+      # # 真服务不可达 ⇒ **红**（不是跳过）
+      #
+      # 跳过 = 假绿 = 真机验收形同虚设（同上一道门禁的纪律）。
+      # 门禁脚本自身还额外断言「用例不许走 SKIP 分支」。
+      - name: 存储驱动真机验收（Azure Blob + HDFS）
+        if: always()
+        run: bash scripts/live-storage-gate.sh
+
   # 生成物对账（CHECK=1）：沙箱里从 IDL 再生成 gen/ 并与提交物比对，IDL 改了没跑
   # gen-router.sh（或生成物被手改/多出杂散文件）即红。IDL 真相源=contracts，按
   # core go.mod 钉版检出（不用 main，避免 contracts 领先造成假红）；目录布局对齐

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -75,6 +76,12 @@ func (d *azblobDriver) blobURL(key string) string {
 }
 
 // containerURL 容器级操作 URL（List），含 SAS
+//
+// ⚠️ **共享密钥模式下必须自己补 "?"**（2026-11-02 真机实测修）：
+// 原实现只在「有 SAS」时拼 "?"，无 SAS 时把查询串直接黏在路径后面 ⇒
+// `.../pbproberestype=container&comp=list` ⇒ 服务端 400 InvalidResourceName。
+// ⇒ **SharedKey 认证下 Probe / List / RemoveAll 全线不可用**（blob 级操作用
+// blobURL，不带查询串，所以读写看起来正常 ⇒ 缺陷极难从表面症状发现）。
 func (d *azblobDriver) containerURL(query string) string {
 	u := fmt.Sprintf("%s/%s", d.endpoint, d.container)
 	if d.sas != "" {
@@ -83,6 +90,8 @@ func (d *azblobDriver) containerURL(query string) string {
 		}
 		u += d.sas
 		u += "&"
+	} else {
+		u += "?"
 	}
 	return u + query
 }
@@ -96,6 +105,45 @@ func blobJoin(parts ...string) string {
 		}
 	}
 	return strings.Join(nonEmpty, "/")
+}
+
+// canonicalizedResource 组装 SharedKey 签名的 CanonicalizedResource 段。
+//
+// 规范（https://learn.microsoft.com/rest/api/storageservices/authorization-for-the-azure-storage-services）：
+//
+//	· 路径："/" + account + urlPath。
+//	  账号出现几次取决于端点形态，规范两种都认可：
+//	  host-style（真 Azure：https://acct.blob.core.windows.net/container/blob）⇒ 账号一次；
+//	  path-style（Azurite/模拟器：.../<account>/container/blob）⇒ 账号两次
+//	  （"If you are authorizing against the storage emulator, the account name
+//	  will appear twice in the CanonicalizedResource string. This is expected."）。
+//	  本实现统一用 "/"+account+url.Path ⇒ host-style 一次、path-style 两次 ⇒ 两态皆合规。
+//
+//	· 查询参数：按名称排序，每行 "name:value"（**冒号**分隔，**不是** URL 的 name=value）。
+//	  此前实现直接拼 URL 的 "name=value" ⇒ 含查询参数的请求（Probe 的 comp=list、
+//	  listAll 的 restype/comp/prefix）签名与规范不符 ⇒ 真机 403 AuthorizationFailure；
+//	  而单测只验「签名字符串长什么样」⇒ 恒绿 ⇒ 缺陷零阻力溜过（2026-11-02 真机实测）。
+func canonicalizedResource(u *url.URL, account string) string {
+	cr := "/" + account + u.Path
+	if u.RawQuery == "" {
+		return cr
+	}
+	pairs := make([]string, 0, strings.Count(u.RawQuery, "&")+1)
+	for _, kv := range strings.Split(u.RawQuery, "&") {
+		if kv == "" {
+			continue
+		}
+		// name=value ⇒ name:value（规范形态）
+		if i := strings.Index(kv, "="); i >= 0 {
+			kv = kv[:i] + ":" + kv[i+1:]
+		}
+		pairs = append(pairs, kv)
+	}
+	sort.Strings(pairs)
+	for _, kv := range pairs {
+		cr += "\n" + kv
+	}
+	return cr
 }
 
 // sign 组装 SharedKey 授权头（SAS 模式返回空）。
@@ -119,21 +167,8 @@ func (d *azblobDriver) sign(req *http.Request, contentLength int64) {
 	sort.Strings(xms)
 	canonicalHeaders := strings.Join(xms, "\n")
 
-	// canonicalized resource：/account/container/blob + 排序的子资源查询参数
-	u := req.URL
-	cr := "/" + d.account + u.Path
-	if u.RawQuery != "" {
-		var pairs []string
-		for _, kv := range strings.Split(u.RawQuery, "&") {
-			if kv != "" {
-				pairs = append(pairs, kv)
-			}
-		}
-		sort.Strings(pairs)
-		for _, kv := range pairs {
-			cr += "\n" + kv
-		}
-	}
+	// canonicalized resource：/account/container/blob + 排序的子资源查询参数。
+	cr := canonicalizedResource(req.URL, d.account)
 
 	cl := ""
 	if contentLength > 0 {
@@ -315,6 +350,14 @@ func (d *azblobDriver) listAll(ctx context.Context, prefix string) ([]string, er
 		_ = resp.Body.Close()
 		if err != nil {
 			return nil, err
+		}
+		// ⚠️ **必须查状态码**（2026-11-02 真机实测修）：错误响应体也是合法 XML
+		// （`<Error><Code>…`），能被上面的 Decoder「成功」解析成空 Blobs ⇒
+		// 原实现把 403/404 当成「空列表」返回 ⇒ **鉴权失败伪装成「没有对象」**
+		// ⇒ List/RemoveAll 静默返回空集，调用方无从察觉后端已坏。
+		// 同一缺陷也让「Azure Blob 后端在 SharedKey 下完全不可用」被吞掉。
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("azblob 列举 %s: %d", prefix, resp.StatusCode)
 		}
 		for _, b := range parsed.Blobs.Blob {
 			out = append(out, b.Name)
