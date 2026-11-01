@@ -241,6 +241,16 @@ func (d *hdfsDriver) List(ctx context.Context, key string) ([]*Metadata, error) 
 	}
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<22))
 	_ = resp.Body.Close()
+	// ⚠️ **不存在的目录 ⇒ 空列表，而非错误**（2026-11-02 真机实测修）：
+	// WebHDFS 对不存在的路径返回 404 FileNotFoundException，而 S3/Azure 对
+	// 「前缀不存在」的语义是**空列表**（对象存储无真目录）⇒ 同一条 List 调用
+	// 在 S3 与 HDFS 上行为不一致。
+	// 影响面是实的：后台 janitor 用 ListRemoteObjects("uploads/") 清理 presign
+	// 孤儿 ⇒ HDFS 后端下「uploads/ 尚不存在」会让整个清理任务报错退出
+	// （而 S3 后端正常返回空集、无事可做）⇒ 孤儿清理在 HDFS 上不可用。
+	if resp.StatusCode == http.StatusNotFound {
+		return []*Metadata{}, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, d.remoteError(key, resp.StatusCode, b)
 	}

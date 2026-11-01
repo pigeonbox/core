@@ -34,3 +34,20 @@ regexes = [
   '''test-presign-signing-key-0123456789''',
   '''test-signing-key-0123456789''',
 ]
+
+# Azurite 的**公开开发密钥**（真机联调用）。
+#
+# 为什么需要（2026-11-02 core#36 实录）：Azurite 是微软官方的 Azure Blob 模拟器，
+# 其默认开发账号/密钥是**公开文档常量**
+# （https://learn.microsoft.com/azure/storage/common/storage-use-azurite）⇒
+# 真机联调用例必须用它 ⇒ `generic-api-key` 规则按「像密钥的高熵串」判定
+# ⇒ Secret Scan 报 "leaks found: 1" ⇒ core 的 Secret Scan 红（实测）。
+#
+# 为什么用**值正则**而不是文件路径：路径豁免会放过该文件里的**任何**密钥
+# （包括未来误粘贴的真凭据）⇒ 值正则只豁免这一个**确认是公开常量**的字面量。
+# 该密钥**只能连本机 Azurite**，对任何真实 Azure 账户无效 ⇒ 泄露面为零。
+[[allowlists]]
+description = "Azurite 公开开发密钥（真机联调用，公开文档常量，对真实 Azure 无效）"
+regexes = [
+  '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==''',
+]
