@@ -399,6 +399,9 @@ func initThriftIDLServices(database *gorm.DB) {
 		async.GoSafe(startAPIKeyExpiryNotify)
 		// 存储对账 + 日志保留（治理 2026-10-03）：24h 周期，启动 10 分钟后首跑
 		async.GoSafe(startMaintenanceJanitor)
+		// 联邦邀请定时同步（core#32）：周期把待推口令送给已配置对端。
+		// 零行为前提：p2p.federation.sync.enabled=false ⇒ 不起跑（函数内自检）。
+		async.GoSafe(func() { startFederationSync(inviteMailbox, config.App.Name) })
 	}
 
 	// 8. 多副本：admin 实例持久化配置后发布变更广播（public 副本订阅热应用）

@@ -258,6 +258,18 @@ func validateSystemConfig(cfg *SystemConfig) error {
 				return fmt.Errorf("p2p.federation.delivery_peers[%d].url 校验失败: %w", i, err)
 			}
 		}
+		// p2p.federation.sync 段校验（core#32）：出站目标走 SSRF 基线
+		// （与 notify.webhook_url / federation.registry_url 同一策略）；
+		// 周期下界由 app/federation 的 SyncConfig.Interval 兜底夹取。
+		for i, t := range f.Sync.Targets {
+			one := strings.TrimSpace(t)
+			if one == "" {
+				continue
+			}
+			if err := security.ValidateEndpointURL(one); err != nil {
+				return fmt.Errorf("p2p.federation.sync.targets[%d] 校验失败: %w", i, err)
+			}
+		}
 	}
 	return nil
 }
