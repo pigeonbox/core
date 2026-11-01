@@ -91,9 +91,26 @@ func GuestSubmitFiles(ctx context.Context, c *app.RequestContext) {
 		Username: middleware.UsernameFromContext(ctx), IP: guestIP,
 	})
 
+	// data.pickup_code：落成分享的 6 位取件码（2026-11-01 跨站投递增量）。
+	//
+	// 由本站 share 域铸造 ⇒ **归属 = 本站**（取件人在本站取件）。跨站投递时，
+	// 发起柜（A 柜）转发到本站（B 柜）后从本字段取码透传给访客 ⇒ 访客拿到的
+	// 码在**对方柜**真的能用。
 	c.JSON(consts.StatusOK, map[string]interface{}{
 		"code":    0,
 		"message": "投递成功",
-		"data":    map[string]interface{}{"file_count": len(stored)},
+		"data":    guestUploadData(len(stored), shareResult.PickupCode),
 	})
+}
+
+// guestUploadData 访客投递响应的 data 段。
+//
+// ⚠️ pickup_code 只在**铸出码**时出现（optional 语义：缺字段 ≠ 空串）——
+// 空串会让对端（A 柜）误判成「有码但码为空」，前端也会显示一个空白码框。
+func guestUploadData(fileCount int, pickupCode string) map[string]interface{} {
+	data := map[string]interface{}{"file_count": fileCount}
+	if pickupCode != "" {
+		data["pickup_code"] = pickupCode
+	}
+	return data
 }

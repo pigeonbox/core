@@ -120,9 +120,9 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		"background":  safeImageURL(config.UI.Background),
 		"accentColor": safeHexColor(config.UI.AccentColor),
 		// 能力自描述（2026-10-30）：「本面支持什么」的一份真相源。
-		// 公开面只放匿名可见也无害的三项（部署模式 / 站点地址是否配置 /
-		// 首启是否要令牌）；存储后端、Redis 模式等管理面事实走
-		// GET /admin/diagnostics（见 bootstrap/diagnostics.go）。
+		// 公开面只放匿名可见也无害的四项（部署模式 / 站点地址是否配置 /
+		// 首启是否要令牌 / 跨站投递是否可用）；存储后端、Redis 模式等管理面
+		// 事实走 GET /admin/diagnostics（见 bootstrap/diagnostics.go）。
 		// ⚠️ 客户端事实（WebCrypto 是否可用、Beam 是否挂载）**不在这里**——
 		// 服务端无从得知，由前端探测（utils/e2e.ts、components/share/deliveryPath.ts）。
 		"capabilities": publicCapabilitySnapshot(ctx),

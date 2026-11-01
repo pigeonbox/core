@@ -78,6 +78,10 @@ var idlizedRouteVisibility = map[string]routeVisibility{
 	"POST /api/v1/share/multi-bind":         {standalone: true, public: true, admin: false},
 	"POST /api/v1/user/shares/import-local": {standalone: true, public: true, admin: false},
 	"GET /api/v1/federation/resolve":        {standalone: true, public: true, admin: false},
+	// 跨站投递（联邦前台化，2026-11-01）：与 resolve 同面（publicapi 域 ⇒
+	// 只在公开副本注册）——投递面是**访客功能**，公开副本才有意义。
+	"POST /api/v1/federation/delivery-slot": {standalone: true, public: true, admin: false},
+	"POST /api/v1/federation/deliver":       {standalone: true, public: true, admin: false},
 
 	// ===== 两面都有（收敛前是无条件注册）=====
 	"POST /api/v1/user/refresh":      {standalone: true, public: true, admin: true},

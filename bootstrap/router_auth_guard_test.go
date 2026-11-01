@@ -172,6 +172,10 @@ var publicRoutes = map[string]string{
 	"POST /api/v1/share/multi-bind":   "多文件绑定（可选身份：匿名可用）",
 	"GET /api/v1/federation/resolve":  "联邦节点解析（公开）",
 
+	// —— 跨站投递（联邦前台化，2026-11-01；公开面，口令 bearer 在 handler 内校验）——
+	"POST /api/v1/federation/delivery-slot": "跨站投递槽位（公开端点；共享口令 bearer 授权）",
+	"POST /api/v1/federation/deliver":       "跨站投递（公开端点；目标须在管理员登记的对端名单内）",
+
 	// —— 直传/分片（可选身份：匿名可用）——
 	"POST /api/v1/presign/upload":                      "预签名直传",
 	"POST /api/v1/presign/complete":                    "预签名直传完成",
@@ -219,6 +223,10 @@ var idlizedRoutes = map[string]idlizedRouteContract{
 	"POST /api/v1/share/multi-direct":       {domain: "publicapi", kinds: []string{"OptionalIdentity"}},
 	"POST /api/v1/share/multi-bind":         {domain: "publicapi", kinds: []string{"OptionalIdentity"}},
 	"POST /api/v1/user/shares/import-local": {domain: "publicapi", kinds: []string{"UserOrAPIKey"}},
+	// 跨站投递（联邦前台化，2026-11-01）：公开面（口令 bearer 在 handler 内校验
+	// ⇒ 中间件层不设门槛，与 /api/v1/p2p/invite 同款）。
+	"POST /api/v1/federation/delivery-slot": {domain: "publicapi", kinds: nil},
+	"POST /api/v1/federation/deliver":       {domain: "publicapi", kinds: nil},
 	// 两面都注册（收编前是无条件注册）
 	"POST /api/v1/user/refresh":      {domain: "common", kinds: nil},
 	"POST /api/v1/user/logout":       {domain: "common", kinds: nil},
@@ -658,6 +666,10 @@ func TestGeneratedRouteAuthEnforcedAtRuntime(t *testing.T) {
 		{"GET", "/share/metadata/ABCD12"},
 		{"POST", "/api/v1/share/multi-direct"},
 		{"POST", "/api/v1/share/multi-bind"},
+		// 跨站投递（联邦前台化，2026-11-01）：公开面（共享口令在 handler 内校验
+		// ⇒ 匿名可达；未带口令时**由 handler 拒绝**，不是被鉴权中间件挡）。
+		{"POST", "/api/v1/federation/delivery-slot"},
+		{"POST", "/api/v1/federation/deliver"},
 	}
 	for _, c := range mustReject {
 		resp := ut.PerformRequest(h.Engine, c.method, c.path, nil)

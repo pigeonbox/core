@@ -49,3 +49,19 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 	// 原手写实现，逐字保留。
 	customHandler.MultiShareBind(ctx, c)
 }
+
+// FederationDeliverySlot .
+// @router /api/v1/federation/delivery-slot [POST]
+func FederationDeliverySlot(ctx context.Context, c *app.RequestContext) {
+	// 跨站投递（联邦前台化，2026-11-01）：对方柜侧铸访客投递槽位。
+	// 原手写实现（transport/http/handler/federation_delivery.go），逐字保留。
+	customHandler.FederationDeliverySlot(ctx, c)
+}
+
+// FederationDeliver .
+// @router /api/v1/federation/deliver [POST]
+func FederationDeliver(ctx context.Context, c *app.RequestContext) {
+	// 跨站投递（联邦前台化，2026-11-01）：发起柜侧访客跨站投递（流式转发）。
+	// 原手写实现（transport/http/handler/federation_delivery.go），逐字保留。
+	customHandler.FederationDeliver(ctx, c)
+}

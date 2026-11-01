@@ -36,6 +36,9 @@ func rateLimitBucket(path string) string {
 		strings.HasPrefix(path, "/api/v1/presign"),
 		strings.HasPrefix(path, "/api/v1/share/multi"),
 		strings.HasPrefix(path, "/api/v1/request/"),
+		// 跨站投递（联邦前台化，2026-11-01）：访客经本柜把文件转发到对方柜
+		// ⇒ 与其它上传通道同桶（写入类：限流维度对齐）。
+		path == "/api/v1/federation/deliver",
 		path == "/api/v1/mcp",
 		strings.HasPrefix(path, "/share/text"),
 		strings.HasPrefix(path, "/share/file"):
@@ -54,6 +57,9 @@ func rateLimitBucket(path string) string {
 		strings.HasPrefix(path, "/qrcode/"),
 		strings.HasPrefix(path, "/openapi.json"),
 		strings.HasPrefix(path, "/api/v1/federation/resolve"),
+		// 跨站投递槽位（联邦前台化，2026-11-01）：公开铸槽位端点 ⇒ 与
+		// /api/v1/p2p/invite 同款（防被人无限铸槽位耗资源）。
+		path == "/api/v1/federation/delivery-slot",
 		strings.HasPrefix(path, "/api/v1/p2p/invite"):
 		return "download"
 	}

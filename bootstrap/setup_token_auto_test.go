@@ -82,6 +82,20 @@ func withTestConfig(t *testing.T, cfg *conf.AppConfiguration) {
 	t.Cleanup(func() { config = old })
 }
 
+// withGlobalTestConfig 临时替换**全局 conf**（copy-on-write 快照的真相源）
+// 与包级 config（测试隔离用）。
+//
+// 两者都要换：能力快照里的联邦段读的是全局 conf 快照（管理台保存配置后
+// DB overlay 更新的是它），而部署模式等读包级 config ⇒ 只换一半会读到
+// 上一个测试残留的值。
+func withGlobalTestConfig(t *testing.T, cfg *conf.AppConfiguration) {
+	t.Helper()
+	old := conf.GetGlobalConfig()
+	conf.SetGlobalConfig(cfg)
+	t.Cleanup(func() { conf.SetGlobalConfig(old) })
+	withTestConfig(t, cfg)
+}
+
 func TestEnsureSetupToken_GeneratesWhenUninitialized(t *testing.T) {
 	resetSetupAutoToken(t)
 	t.Setenv(setupTokenEnv, "")

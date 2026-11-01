@@ -55,6 +55,9 @@ func TestRateLimitBucketCoversRoutes(t *testing.T) {
 		// download
 		"/anonymous/search/", "/share/metadata/", "/share/select",
 		"/api/v1/p2p/invite",
+		// 跨站投递（联邦前台化，2026-11-01）：铸槽位 = 公开资源消耗面（download 桶），
+		// 投递 = 写入面（upload 桶）
+		"/api/v1/federation/delivery-slot", "/api/v1/federation/deliver",
 		"/request/", "/preview/", "/qrcode/", "/api/v1/federation/resolve",
 	}
 	for _, p := range prefixes {
@@ -116,6 +119,14 @@ func TestRateLimitBucketCoversRoutes(t *testing.T) {
 	}
 	if got := rateLimitBucket("/request/abc"); got != "download" {
 		t.Errorf("寄件码 token 探测必须进 download 桶，got %q", got)
+	}
+	// 跨站投递（联邦前台化，2026-11-01）：铸槽位与投递必须分桶
+	// （铸槽位 = 公开资源消耗面 ⇒ download；投递 = 写入面 ⇒ upload）。
+	if got := rateLimitBucket("/api/v1/federation/delivery-slot"); got != "download" {
+		t.Errorf("跨站投递铸槽位必须进 download 桶（同 /api/v1/p2p/invite），got %q", got)
+	}
+	if got := rateLimitBucket("/api/v1/federation/deliver"); got != "upload" {
+		t.Errorf("跨站投递必须进 upload 桶（写入面），got %q", got)
 	}
 
 	// ---- 全局兜底桶豁免清单断言（2026-10-08 GlobalMiddleware 接线配套）----

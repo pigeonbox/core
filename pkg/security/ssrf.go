@@ -60,6 +60,26 @@ type dnsCacheEntry struct {
 // allowPrivate 未配置（默认 false）时拒绝环回/私网/链路本地地址。
 // 局域网 MinIO/WebDAV（飞牛 NAS）部署需显式 security.ssrf.allow_private_networks=true。
 func ValidateEndpointURL(rawURL string) error {
+	return validateEndpointURL(rawURL, false)
+}
+
+// ValidateEndpointURLAllowPrivate 校验 URL 形态（scheme/host）但**放行私网**。
+//
+// 用途（2026-11-01 联邦前台化）：跨站投递的「可投递对端」按**对端粒度**开
+// allow_private（自托管场景对方柜常在局域网）⇒ 不能要求管理员去开全局
+// security.ssrf.allow_private_networks（一开就是所有出站点位都放行私网，面太大）。
+//
+// ⚠️ 本函数**只**放行私网判定，不放松 scheme/host 校验（javascript:/data:
+// 这类可执行 scheme 与空 host 照样拒）。
+func ValidateEndpointURLAllowPrivate(rawURL string) error {
+	return validateEndpointURL(rawURL, true)
+}
+
+// validateEndpointURL 端点 URL 校验本体。
+//
+// allowPrivatePeer=true = 放行私网判定（**按对端粒度**的显式放行）；
+// 全局开关 security.ssrf.allow_private_networks 仍然独立生效（它一开就全放行）。
+func validateEndpointURL(rawURL string, allowPrivatePeer bool) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrEndpointURL, err)
@@ -72,9 +92,9 @@ func ValidateEndpointURL(rawURL string) error {
 		return fmt.Errorf("%w: 缺少 host", ErrEndpointURL)
 	}
 
-	allowPrivate := false
-	if cfg := conf.GetGlobalConfig(); cfg != nil {
-		allowPrivate = cfg.Security.SSRF.AllowPrivateNetworks
+	allowPrivate := allowPrivatePeer
+	if cfg := conf.GetGlobalConfig(); cfg != nil && cfg.Security.SSRF.AllowPrivateNetworks {
+		allowPrivate = true
 	}
 	if allowPrivate {
 		return nil

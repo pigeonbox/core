@@ -163,6 +163,36 @@ type FederationConfig struct {
 	// （6 位数字取件码默认只在本站有效，防 registry 侧枚举）。0=默认 40。
 	// json 标签随 SystemConfig.p2p 段在线读写（2026-10-14 对称节点 P1）。
 	AnnounceMinEntropyBits int `mapstructure:"announce_min_entropy_bits" json:"announce_min_entropy_bits"`
+	// DeliveryPeers 可投递对端（联邦前台化，2026-11-01；跨站投递）。
+	//
+	// 双向登记才允许投递：A 柜登记 B ⇒ A 能往 B 投；B 柜登记 A ⇒ B 才认 A
+	// 的铸槽位请求（口令即权限）。
+	//
+	// ⚠️ 段内含**共享口令明文** ⇒ 管理台不回显（只显示是否已配 + 名称）；
+	// json 标签随 SystemConfig.p2p 段在线读写（同 AnnounceMinEntropyBits）。
+	DeliveryPeers []FederationDeliveryPeer `mapstructure:"delivery_peers" json:"delivery_peers"`
+}
+
+// FederationDeliveryPeer 可投递对端（联邦前台化，2026-11-01）。
+//
+// 寻址口径 = **对方站点基址 URL**（用户 2026-11-01 拍板）：访客在 A 柜前台
+// 填 B 柜的基址，A 柜只认**管理员登记过的**基址 ⇒ 误投面与 SSRF 面同时收窄
+// （出站 URL 只来自 admin 配置，不是访客任意输入）。
+//
+// 信任模型沿用现有联邦的「口令 bearer」（口令即权限，同手工交接信任级）⇒
+// 不引入新的认证机制，也**不复用**管理员口令。
+type FederationDeliveryPeer struct {
+	// URL 对方柜基址（如 http://10.10.30.253:12345）。scheme 限 http/https。
+	URL string `mapstructure:"url" json:"url"`
+	// Token 共享口令 bearer（A 柜调 B 柜铸槽位时带上；B 柜比对登记对端的口令）。
+	Token string `mapstructure:"token" json:"token"`
+	// Name 前台展示名（如「张三的柜子」；访客在投递结果里看到）。
+	Name string `mapstructure:"name" json:"name"`
+	// AllowPrivate 允许该对端落在私网（自托管常态：对方柜常在局域网）。
+	//
+	// ⚠️ **按对端粒度**开，**不动**全局 security.ssrf.allow_private_networks
+	//（全局开关一开 = 所有出站点位都放行私网 ⇒ 面太大）。
+	AllowPrivate bool `mapstructure:"allow_private" json:"allow_private"`
 }
 
 // MCPConfig Model Context Protocol server（AI 客户端集成；上游没有的差异化能力）。
