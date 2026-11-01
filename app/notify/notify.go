@@ -691,14 +691,18 @@ func (s *Service) sendTelegram(ctx context.Context, cfg *TelegramConfig, title, 
 	if err != nil {
 		return err
 	}
-	return doPush(ctx, httpjson.Request{
+	if err := doPush(ctx, httpjson.Request{
 		Method: http.MethodPost,
 		URL:    target,
 		Body:   body,
 		Header: func(h http.Header) {
 			h.Set("Content-Type", "application/json")
 		},
-	})
+	}); err != nil {
+		// ⚠️ 必须净化：错误里带着目标 URL（内嵌 bot token）⇒ 原样落日志 = 明文凭据泄漏。
+		return fmt.Errorf("telegram 推送失败: %w", sanitizePushErr(err, cfg.BotToken))
+	}
+	return nil
 }
 
 // sendBark 发送 Bark 推送（POST <server_url>/<device_key>，JSON {title, body}）。
@@ -722,14 +726,46 @@ func (s *Service) sendBark(ctx context.Context, cfg *BarkConfig, title, content 
 	if err != nil {
 		return err
 	}
-	return doPush(ctx, httpjson.Request{
+	if err := doPush(ctx, httpjson.Request{
 		Method: http.MethodPost,
 		URL:    target,
 		Body:   body,
 		Header: func(h http.Header) {
 			h.Set("Content-Type", "application/json")
 		},
-	})
+	}); err != nil {
+		// ⚠️ 必须净化：目标 URL 末段就是 device key ⇒ 原样落日志 = 明文凭据泄漏。
+		return fmt.Errorf("bark 推送失败: %w", sanitizePushErr(err, cfg.DeviceKey))
+	}
+	return nil
+}
+
+// sanitizePushErr 把推送错误转成**可安全落日志**的形式。
+//
+// 为什么需要（2026-11-02 实测，core#31 验收项「凭据不出现在日志里」）：
+// 推送目标 URL **内嵌凭据**——Telegram 的 bot token 在 /bot<token>/ 路径里，
+// Bark 的 device key 在路径末段 ⇒ 传输层失败是 *url.Error，而它的 Error()
+// 是 `Post "https://api.telegram.org/bot<token>/sendMessage": dial tcp …`
+// ⇒ 原样落进 dispatchExternal 的 "err" 字段 = **明文凭据进日志**。
+//
+// ⇒ 这里剥掉 URL：取 url.Error 的 Op + 内层错误（内层是传输层原因，如
+// "dial tcp …: connect: connection refused"，**不含 URL**）；再对残留的
+// 凭据串做兜底打码（非 url.Error 路径，如服务端错误体里恰好带凭据）。
+//
+// ⚠️ 剥 URL 后仍保留错误链（%w 包内层错误）⇒ 调用方的 errors.Is/As 语义不丢。
+func sanitizePushErr(err error, secret string) error {
+	if err == nil {
+		return nil
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		// url.Error.Error() 带完整 URL ⇒ 只留 Op 与内层错误
+		err = fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	if secret != "" && strings.Contains(err.Error(), secret) {
+		return errors.New(strings.ReplaceAll(err.Error(), secret, "***"))
+	}
+	return err
 }
 
 // dispatchExternal 外部推送统一出口（2026-11-01 渠道扩展）：向**所有已启用渠道**

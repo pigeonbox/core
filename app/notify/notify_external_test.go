@@ -335,3 +335,60 @@ func allowPrivatePush(t *testing.T) {
 	})
 	t.Cleanup(func() { conf.SetGlobalConfig(prev) })
 }
+
+// ============ ④ 凭据不落日志 ============
+
+// TestExternal_CredentialNotLeakedInPushError 推送失败时，错误文案**不得**含凭据。
+//
+// 判据（core#31 验收项「凭据不出现在日志里」）：推送目标 URL **内嵌凭据**
+// ——Telegram 的 bot token 在 /bot<token>/ 路径里，Bark 的 device key 在路径
+// 末段 ⇒ 传输层失败是 *url.Error，其 Error() 带**完整 URL**
+// ⇒ 原样落进 dispatchExternal 的 "err" 字段 = **明文凭据泄漏进日志**。
+//
+// 负对照：去掉错误净化 ⇒ 错误串含 token / device_key ⇒ 本用例转红。
+func TestExternal_CredentialNotLeakedInPushError(t *testing.T) {
+	// 放行私网 ⇒ 失败点落在**传输层**（而不是被 SSRF 层先拒），才能造出
+	// 真正带 URL 的 *url.Error。
+	allowPrivatePush(t)
+
+	// 起一个 server 再关掉 ⇒ 端口无人监听 ⇒ connection refused（*url.Error）
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+
+	const botToken = "test-bot-token"
+	const deviceKey = "test-device-key"
+
+	svc := NewService(nil)
+
+	tgErr := svc.sendTelegram(context.Background(),
+		&TelegramConfig{BotToken: botToken, ChatID: "42", apiBase: deadURL}, "标题", "内容")
+	require.Error(t, tgErr, "目标不可达 ⇒ 必须报错（有可读错误面，不是静默吞掉）")
+	assert.Contains(t, tgErr.Error(), "telegram", "错误文案要能看出是哪个渠道")
+	assert.NotContains(t, tgErr.Error(), botToken, "telegram 错误文案不得含 bot token")
+	assert.NotContains(t, tgErr.Error(), deadURL, "telegram 错误文案不得含完整目标 URL")
+
+	barkErr := svc.sendBark(context.Background(),
+		&BarkConfig{ServerURL: deadURL, DeviceKey: deviceKey}, "标题", "内容")
+	require.Error(t, barkErr, "目标不可达 ⇒ 必须报错")
+	assert.Contains(t, barkErr.Error(), "bark", "错误文案要能看出是哪个渠道")
+	assert.NotContains(t, barkErr.Error(), deviceKey, "bark 错误文案不得含 device key")
+	assert.NotContains(t, barkErr.Error(), deadURL, "bark 错误文案不得含完整目标 URL")
+}
+
+// TestExternal_CredentialNotLeakedOnStatusError 非 2xx 的失败面同样不得含凭据
+// （负对照：StatusError 的 Body 是服务端响应体，理论上不含凭据；但若有人
+// 把目标 URL 拼进错误体，也必须被打码）。
+func TestExternal_CredentialNotLeakedOnStatusError(t *testing.T) {
+	allowPrivatePush(t)
+
+	srv, _ := newRecordingServer(t, http.StatusInternalServerError)
+	svc := NewService(nil)
+
+	err := svc.sendTelegram(context.Background(),
+		&TelegramConfig{BotToken: "test-bot-token", ChatID: "42", apiBase: srv.URL},
+		"标题", "内容")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "test-bot-token",
+		"HTTP 失败面也不得含凭据")
+}
