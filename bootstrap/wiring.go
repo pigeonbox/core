@@ -177,6 +177,10 @@ func initThriftIDLServices(database *gorm.DB) {
 			if f == nil {
 				return nil
 			}
+			// 联邦邀请定时同步的热启停与联邦配置同一触发语义（提交
+			// p2p.federation 段即触发）：管理台开/关同步、改周期即时生效，
+			// 无需重启进程（core#32 定时调度面）。
+			federationSyncApplyFromConf(*f)
 			// 错误必须透传到 admin（断链响亮）：apply 失败=联邦维持原状，
 			// 配置值与运行态分叉不可静默（评审 P1-1/P1-2）
 			return fedRT.apply(*f)

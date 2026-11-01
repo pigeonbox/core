@@ -191,10 +191,23 @@ type FederationSyncConfig struct {
 	Enabled bool `mapstructure:"enabled" json:"enabled"`
 	// IntervalSeconds 同步周期（秒）。0 = 缺省 10min；小于 60 按 60 夹。
 	IntervalSeconds int `mapstructure:"interval_seconds" json:"interval_seconds"`
-	// Targets 已配置的对端站点基址（如 https://box.example.com）。
-	Targets []string `mapstructure:"targets" json:"targets"`
+	// Targets 已配置的对端站点（条目形状见 FederationSyncTarget）。
+	Targets []FederationSyncTarget `mapstructure:"targets" json:"targets"`
 	// Codes 待推送的邀请口令（XXXX-XXXX-XXXX）。
 	Codes []string `mapstructure:"codes" json:"codes"`
+}
+
+// FederationSyncTarget 联邦邀请定时同步的对端条目（core#32）。
+//
+// 形状对齐 FederationDeliveryPeer 的**对端粒度**私网语义：URL 是管理员
+// 登记的对端基址；AllowPrivate 允许该对端落在私网（自托管常态：对方柜常在
+// 局域网）——**按对端粒度**开，不动全局 security.ssrf.allow_private_networks
+// （全局一开 = 所有出站点位都放行私网 ⇒ 面太大；也不该为便利开全局后门）。
+type FederationSyncTarget struct {
+	// URL 对端站基址（如 https://box.example.com）。scheme 限 http/https。
+	URL string `mapstructure:"url" json:"url"`
+	// AllowPrivate 允许该对端落在私网（按对端粒度；见类型注释）。
+	AllowPrivate bool `mapstructure:"allow_private" json:"allow_private"`
 }
 
 // FederationDeliveryPeer 可投递对端（联邦前台化，2026-11-01）。

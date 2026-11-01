@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeonbox/core/conf"
 )
 
 func TestSyncConfigInterval(t *testing.T) {
@@ -40,16 +42,16 @@ func TestSyncConfigInterval(t *testing.T) {
 }
 
 func TestSyncConfigNormalizedTargets(t *testing.T) {
-	cfg := SyncConfig{Targets: []string{
-		" https://a.example.com/ ", "https://a.example.com", "", "  ", "https://b.example.com//",
+	cfg := SyncConfig{Targets: []conf.FederationSyncTarget{
+		{URL: " https://a.example.com/ "}, {URL: "https://a.example.com"}, {URL: ""}, {URL: "  "}, {URL: "https://b.example.com//"},
 	}}
 	got := cfg.NormalizedTargets()
-	want := []string{"https://a.example.com", "https://b.example.com"}
+	want := []string{"https://a.example.com", "https://b.example.com"} // 按 URL 归一去重
 	if len(got) != len(want) {
 		t.Fatalf("目标归一 = %v，期望 %v", got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if got[i].URL != want[i] {
 			t.Fatalf("目标归一 = %v，期望 %v", got, want)
 		}
 	}
@@ -72,14 +74,14 @@ func TestSyncConfigNormalizedCodes(t *testing.T) {
 // TestSyncRunDisabled 关掉就不跑（不产生任何出站调用）。
 func TestSyncRunDisabled(t *testing.T) {
 	calls := 0
-	s := NewSyncer(func(context.Context, string, string, string, string) error {
+	s := NewSyncer(func(context.Context, conf.FederationSyncTarget, string, string, string) error {
 		calls++
 		return nil
 	}, nil)
 
 	cfg := SyncConfig{
 		Enabled: false,
-		Targets: []string{"https://a.example.com"},
+		Targets: []conf.FederationSyncTarget{{URL: "https://a.example.com"}},
 		Codes:   []string{"AAAA-BBBB-CCCC"},
 	}
 	if n := s.Run(context.Background(), cfg, "site", ""); n != 0 {
@@ -93,7 +95,7 @@ func TestSyncRunDisabled(t *testing.T) {
 // TestSyncRunNoTargetsOrCodes 无目标或无口令时不推送。
 func TestSyncRunNoTargetsOrCodes(t *testing.T) {
 	calls := 0
-	s := NewSyncer(func(context.Context, string, string, string, string) error {
+	s := NewSyncer(func(context.Context, conf.FederationSyncTarget, string, string, string) error {
 		calls++
 		return nil
 	}, nil)
@@ -101,7 +103,7 @@ func TestSyncRunNoTargetsOrCodes(t *testing.T) {
 	if n := s.Run(context.Background(), SyncConfig{Enabled: true, Codes: []string{"A"}}, "s", ""); n != 0 {
 		t.Fatalf("无目标时推送数 = %d，期望 0", n)
 	}
-	if n := s.Run(context.Background(), SyncConfig{Enabled: true, Targets: []string{"https://a"}}, "s", ""); n != 0 {
+	if n := s.Run(context.Background(), SyncConfig{Enabled: true, Targets: []conf.FederationSyncTarget{{URL: "https://a"}}}, "s", ""); n != 0 {
 		t.Fatalf("无口令时推送数 = %d，期望 0", n)
 	}
 	if calls != 0 {
@@ -113,14 +115,14 @@ func TestSyncRunNoTargetsOrCodes(t *testing.T) {
 func TestSyncerRunIdempotent(t *testing.T) {
 	type call struct{ target, code string }
 	var calls []call
-	s := NewSyncer(func(_ context.Context, target, code, _, _ string) error {
-		calls = append(calls, call{target, code})
+	s := NewSyncer(func(_ context.Context, target conf.FederationSyncTarget, code, _, _ string) error {
+		calls = append(calls, call{target.URL, code})
 		return nil
 	}, nil)
 
 	cfg := SyncConfig{
 		Enabled: true,
-		Targets: []string{"https://a.example.com"},
+		Targets: []conf.FederationSyncTarget{{URL: "https://a.example.com"}},
 		Codes:   []string{"AAAA-BBBB-CCCC"},
 	}
 	if n := s.Run(context.Background(), cfg, "site", ""); n != 1 {
@@ -140,8 +142,8 @@ func TestSyncerRunIdempotent(t *testing.T) {
 func TestSyncerRunPushErrorSurfaces(t *testing.T) {
 	boom := errors.New("对端返回 500")
 	var okCalls, failCalls int
-	s := NewSyncer(func(_ context.Context, target, _, _, _ string) error {
-		if target == "https://bad.example.com" {
+	s := NewSyncer(func(_ context.Context, target conf.FederationSyncTarget, _, _, _ string) error {
+		if target.URL == "https://bad.example.com" {
 			failCalls++
 			return boom
 		}
@@ -151,7 +153,7 @@ func TestSyncerRunPushErrorSurfaces(t *testing.T) {
 
 	cfg := SyncConfig{
 		Enabled: true,
-		Targets: []string{"https://bad.example.com", "https://good.example.com"},
+		Targets: []conf.FederationSyncTarget{{URL: "https://bad.example.com"}, {URL: "https://good.example.com"}},
 		Codes:   []string{"AAAA-BBBB-CCCC"},
 	}
 	n := s.Run(context.Background(), cfg, "site", "")
@@ -171,7 +173,7 @@ func TestSyncerRunPushErrorSurfaces(t *testing.T) {
 func TestSyncerRunRespectsContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := 0
-	s := NewSyncer(func(context.Context, string, string, string, string) error {
+	s := NewSyncer(func(context.Context, conf.FederationSyncTarget, string, string, string) error {
 		calls++
 		cancel() // 第一轮内取消
 		return nil
@@ -179,7 +181,7 @@ func TestSyncerRunRespectsContextCancel(t *testing.T) {
 
 	cfg := SyncConfig{
 		Enabled: true,
-		Targets: []string{"https://a.example.com", "https://b.example.com"},
+		Targets: []conf.FederationSyncTarget{{URL: "https://a.example.com"}, {URL: "https://b.example.com"}},
 		Codes:   []string{"AAAA-BBBB-CCCC", "DDDD-EEEE-FFFF"},
 	}
 	n := s.Run(ctx, cfg, "site", "")
@@ -239,5 +241,25 @@ func TestSyncerReceiveRejectsInvalidCode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "口令格式非法") {
 		t.Fatalf("错误信息不可读: %v", err)
+	}
+}
+
+// TestSyncConfigNormalizedTargetsAllowPrivate 目标归一带出 allow_private
+// （对端粒度私网放行随条目走）；同 URL 重复登记时首个条目为准。
+func TestSyncConfigNormalizedTargetsAllowPrivate(t *testing.T) {
+	cfg := SyncConfig{Targets: []conf.FederationSyncTarget{
+		{URL: "http://10.0.0.5:5006", AllowPrivate: true},
+		{URL: "http://10.0.0.5:5006", AllowPrivate: false}, // 同 URL 重复：首个为准
+		{URL: "https://pub.example.com"},
+	}}
+	got := cfg.NormalizedTargets()
+	if len(got) != 2 {
+		t.Fatalf("目标归一数量 = %d，期望 2（同 URL 去重）", len(got))
+	}
+	if !got[0].AllowPrivate {
+		t.Fatal("首个条目的 allow_private 应随条目保留（对端粒度私网放行）")
+	}
+	if got[1].AllowPrivate {
+		t.Fatal("未标注的公网对端不应带 allow_private")
 	}
 }

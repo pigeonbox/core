@@ -258,16 +258,24 @@ func validateSystemConfig(cfg *SystemConfig) error {
 				return fmt.Errorf("p2p.federation.delivery_peers[%d].url 校验失败: %w", i, err)
 			}
 		}
-		// p2p.federation.sync 段校验（core#32）：出站目标走 SSRF 基线
-		// （与 notify.webhook_url / federation.registry_url 同一策略）；
+		// p2p.federation.sync 段校验（core#32）：出站目标走 SSRF 基线，
+		// 私网**按对端粒度**放行（allow_private=true 的对端跳过私网判定，
+		// 与 delivery_peers 同口径；scheme/host 照样校验）——不为便利开
+		// 全局 security.ssrf.allow_private_networks 后门。
 		// 周期下界由 app/federation 的 SyncConfig.Interval 兜底夹取。
 		for i, t := range f.Sync.Targets {
-			one := strings.TrimSpace(t)
+			one := strings.TrimSpace(t.URL)
 			if one == "" {
+				return fmt.Errorf("p2p.federation.sync.targets[%d].url 不能为空", i)
+			}
+			if t.AllowPrivate {
+				if err := security.ValidateEndpointURLAllowPrivate(one); err != nil {
+					return fmt.Errorf("p2p.federation.sync.targets[%d].url 校验失败: %w", i, err)
+				}
 				continue
 			}
 			if err := security.ValidateEndpointURL(one); err != nil {
-				return fmt.Errorf("p2p.federation.sync.targets[%d] 校验失败: %w", i, err)
+				return fmt.Errorf("p2p.federation.sync.targets[%d].url 校验失败: %w", i, err)
 			}
 		}
 	}
