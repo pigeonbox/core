@@ -171,6 +171,30 @@ type FederationConfig struct {
 	// ⚠️ 段内含**共享口令明文** ⇒ 管理台不回显（只显示是否已配 + 名称）；
 	// json 标签随 SystemConfig.p2p 段在线读写（同 AnnounceMinEntropyBits）。
 	DeliveryPeers []FederationDeliveryPeer `mapstructure:"delivery_peers" json:"delivery_peers"`
+	// Sync 联邦邀请定时同步（core#32）：周期把待推口令送给已配置对端。
+	//
+	// 默认零行为（Enabled=false ⇒ 不跑）——定时是手动推送的补充，不是替代。
+	// 字段形状与 app/config 的 p2p 段一致（同一段在线读写）。
+	Sync FederationSyncConfig `mapstructure:"sync" json:"sync"`
+}
+
+// FederationSyncConfig 联邦邀请的定时同步配置（core#32）。
+//
+// 语义：周期把 Codes 里的取件码推给 Targets 里的每个对端站 ⇒ 对端访客用
+// 该码到对端柜取件（口令 bearer 即授权，信任级同手工交接）。
+//
+// 出站 URL **只来自管理员显式登记的 Targets**，不是调用方任意输入 ⇒
+// SSRF 面从「任意 URL」收窄到「admin 配的 URL」；每个目标发请求前仍复跑
+// SSRF 校验（与 core/app/notify 的 webhook 渠道同一基线）。
+type FederationSyncConfig struct {
+	// Enabled 是否启用定时同步（默认 false ⇒ 零行为）。
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
+	// IntervalSeconds 同步周期（秒）。0 = 缺省 10min；小于 60 按 60 夹。
+	IntervalSeconds int `mapstructure:"interval_seconds" json:"interval_seconds"`
+	// Targets 已配置的对端站点基址（如 https://box.example.com）。
+	Targets []string `mapstructure:"targets" json:"targets"`
+	// Codes 待推送的邀请口令（XXXX-XXXX-XXXX）。
+	Codes []string `mapstructure:"codes" json:"codes"`
 }
 
 // FederationDeliveryPeer 可投递对端（联邦前台化，2026-11-01）。
