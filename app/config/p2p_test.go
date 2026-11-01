@@ -252,3 +252,45 @@ func TestValidateSystemConfigDeliveryPeers(t *testing.T) {
 		t.Fatalf("allow_private 的私网对端应被放行: %v", err)
 	}
 }
+
+// TestValidateSystemConfigFederationSyncTargets 同步对端的保存期 SSRF 校验
+// （core#32）：出站 URL 只来自管理员登记的对端；私网默认拒，**按对端粒度**
+// 放行（allow_private=true 的条目跳过私网判定），不开全局私网后门；
+// 空 URL 条目拒（不静默忽略）。
+//
+// ⚠️ 负对照（改错转红，PR 实测）：删掉 sync.targets 的保存期校验 ⇒ 私网档
+// 转红；把 allow_private 判定改成无条件严格 ⇒ 放行档转红。
+func TestValidateSystemConfigFederationSyncTargets(t *testing.T) {
+	withGlobalConf(t) // 全局 allow_private_networks=false（判据前提）
+	ok := func(targets []conf.FederationSyncTarget) *SystemConfig {
+		return &SystemConfig{P2P: &P2PSection{Federation: &conf.FederationConfig{
+			Enabled:     true,
+			RegistryURL: "http://p2p:12346",
+			Sync:        conf.FederationSyncConfig{Enabled: true, Targets: targets},
+		}}}
+	}
+
+	// 公网形态通过
+	require.NoError(t, validateSystemConfig(ok([]conf.FederationSyncTarget{
+		{URL: "https://box.example.com"},
+	})))
+
+	// 私网目标默认拒（SSRF 拒私网目标）
+	err := validateSystemConfig(ok([]conf.FederationSyncTarget{
+		{URL: "http://10.0.0.5:5006"},
+	}))
+	require.Error(t, err, "私网同步目标未放行应被拒")
+	require.Contains(t, err.Error(), "p2p.federation.sync.targets[0]")
+
+	// 对端粒度放行（allow_private=true ⇒ 跳过私网判定，scheme/host 照样校验）
+	require.NoError(t, validateSystemConfig(ok([]conf.FederationSyncTarget{
+		{URL: "http://10.0.0.5:5006", AllowPrivate: true},
+	})))
+	badScheme := ok([]conf.FederationSyncTarget{{URL: "ftp://10.0.0.5", AllowPrivate: true}})
+	require.Error(t, validateSystemConfig(badScheme), "allow_private 不放松 scheme 校验")
+
+	// 空 URL 条目拒（不静默忽略）
+	err = validateSystemConfig(ok([]conf.FederationSyncTarget{{AllowPrivate: true}}))
+	require.Error(t, err, "空 url 条目应被拒")
+	require.Contains(t, err.Error(), "不能为空")
+}

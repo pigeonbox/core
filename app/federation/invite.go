@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/paircode"
 	"github.com/pigeonbox/core/pkg/security"
 )
@@ -209,13 +210,35 @@ func newEnvelopeID() string {
 // PushInvite 把口令推送到目标实例的邀请收件端点（P3 免口令交接）。
 // targetURL = 目标实例基址（如 https://b.example.com）；
 // 实际 POST <target>/api/v1/p2p/invite，10s 超时。
+//
+// SSRF 基线（严格版）：目标按公网口径校验（私网目标需全局
+// security.ssrf.allow_private_networks 放行）——手动推送的目标是**调用方
+// 当场输入**的 URL，不是管理员登记项，没有可依的对端粒度授权。
 func PushInvite(ctx context.Context, targetURL, code, fromName, note string) error {
+	return pushInvite(ctx, targetURL, code, fromName, note, false)
+}
+
+// PushInviteToTarget 把口令推送到**管理员登记的同步对端**（core#32 定时
+// 同步用）。SSRF 按**对端粒度**校验：allow_private=true 的对端跳过私网
+// 判定（与 delivery_peers 同口径；scheme/host 照样校验），**不开**全局
+// security.ssrf.allow_private_networks 后门。
+func PushInviteToTarget(ctx context.Context, target conf.FederationSyncTarget, code, fromName, note string) error {
+	return pushInvite(ctx, target.URL, code, fromName, note, target.AllowPrivate)
+}
+
+// pushInvite 推送本体（发送前复跑 SSRF 校验；allowPrivate=对端粒度放行）。
+func pushInvite(ctx context.Context, targetURL, code, fromName, note string, allowPrivate bool) error {
 	base := strings.TrimRight(strings.TrimSpace(targetURL), "/")
 	if base == "" {
 		return errors.New("目标实例地址不能为空")
 	}
-	// SSRF 守卫（与 registry_url 同策略：私网目标需 allow_private_networks）
-	if err := security.ValidateEndpointURL(base); err != nil {
+	// SSRF 守卫（与 registry_url 同策略；对端粒度 allow_private 时走放行版，
+	// 私网对端仅限管理员显式登记的那几个）
+	validate := security.ValidateEndpointURL
+	if allowPrivate {
+		validate = security.ValidateEndpointURLAllowPrivate
+	}
+	if err := validate(base); err != nil {
 		return fmt.Errorf("目标地址校验失败: %w", err)
 	}
 	payload, _ := json.Marshal(map[string]string{

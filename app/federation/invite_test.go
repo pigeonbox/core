@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -221,4 +222,48 @@ func allowPrivateNetworks(t *testing.T, allow bool) func() {
 	cfg.Security.SSRF.AllowPrivateNetworks = allow
 	conf.SetGlobalConfig(cfg)
 	return func() { conf.SetGlobalConfig(old) }
+}
+
+// TestPushInviteToTarget_PrivatePeerPerPeerGranularity 同步对端的 SSRF 是
+// **对端粒度**（core#32）：私网对端仅当该条目 allow_private=true 才放行，
+// 不开全局 security.ssrf.allow_private_networks 后门。
+//
+// 判据形状：
+//  1. allow_private=false ⇒ SSRF 拒，且**一个出站请求都不发**（拒在请求前）；
+//  2. allow_private=true ⇒ 放行并成功送达（私网自托管对端的正常形态）；
+//  3. 全局开关全程保持关闭（开了就等于全局后门，本测试的判据会失去意义）。
+//
+// ⚠️ 负对照（改错转红）：把 ② 的放行判据改成无条件 ValidateEndpointURL
+// （即丢掉对端粒度）⇒ ② 转红；把 ① 改成无条件放行 ⇒ ① 的拦截断言转红。
+func TestPushInviteToTarget_PrivatePeerPerPeerGranularity(t *testing.T) {
+	restore := allowPrivateNetworks(t, false)
+	defer restore()
+
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// ① 未放行的私网对端：拒，且不出站
+	err := PushInviteToTarget(context.Background(),
+		conf.FederationSyncTarget{URL: srv.URL, AllowPrivate: false},
+		"AAAA-AAAA-AAAA", "", "")
+	if err == nil || !strings.Contains(err.Error(), "目标地址校验失败") {
+		t.Fatalf("私网对端未放行应被 SSRF 拦截: %v", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("被拒后仍有出站请求: hits=%d，期望 0（拒在请求前）", got)
+	}
+
+	// ② 对端粒度放行：成功送达
+	if err := PushInviteToTarget(context.Background(),
+		conf.FederationSyncTarget{URL: srv.URL, AllowPrivate: true},
+		"AAAA-AAAA-AAAA", "发送站A", ""); err != nil {
+		t.Fatalf("allow_private=true 的私网对端应放行: %v", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("放行后应恰好送达一次: hits=%d", got)
+	}
 }

@@ -9,12 +9,16 @@ package bootstrap
 //   - **只在 admin 面跑**（config.ServesAdminPlane()）：public 副本不跑 ⇒
 //     多副本部署里只有 admin/standalone 实例驱动同步，N 个 public 副本不会
 //     重复推送。
-//   - **优雅退出**：复用 backgroundContext() 根 ctx（Cleanup 的 teardown 阶段
-//     取消）+ trackBackgroundLoop（排水预算内等在飞轮次收尾）⇒ 进程关闭时
-//     不留半截状态。
+//   - **热启停**（对齐联邦运行时的热切换语义）：OnP2PFederationChanged 钩子
+//     触发即按新配置起/停/换周期——管理台开启同步不用等重启进程，关闭即时停。
+//   - **优雅退出**：循环挂在 backgroundContext() 根 ctx（Cleanup 的 teardown
+//     阶段取消）+ trackBackgroundLoop（排水预算内等在飞轮次收尾）⇒ 进程关闭时
+//     不留半截状态；热停走同一取消路径（在飞轮次感知 ctx 自行收尾）。
 
 import (
 	"context"
+	"sync"
+	"time"
 
 	"github.com/oekit/concurrency/loop"
 	"go.uber.org/zap"
@@ -44,11 +48,16 @@ func federationSyncConfig(ctx context.Context) federationApp.SyncConfig {
 	if err != nil || cfg == nil || cfg.P2P == nil || cfg.P2P.Federation == nil {
 		return federationApp.SyncConfig{}
 	}
+	return syncConfigFromConf(cfg.P2P.Federation.Sync)
+}
+
+// syncConfigFromConf conf 段 → app 域同步配置（热路径与读库路径共用）。
+func syncConfigFromConf(f conf.FederationSyncConfig) federationApp.SyncConfig {
 	return federationApp.SyncConfig{
-		Enabled:         cfg.P2P.Federation.Sync.Enabled,
-		IntervalSeconds: cfg.P2P.Federation.Sync.IntervalSeconds,
-		Targets:         cfg.P2P.Federation.Sync.Targets,
-		Codes:           cfg.P2P.Federation.Sync.Codes,
+		Enabled:         f.Enabled,
+		IntervalSeconds: f.IntervalSeconds,
+		Targets:         f.Targets,
+		Codes:           f.Codes,
 	}
 }
 
@@ -76,38 +85,83 @@ func federationSyncShouldRun(cfg *conf.AppConfiguration, enabled bool) bool {
 	return enabled
 }
 
-// startFederationSync 起跑联邦邀请的周期同步。
+// federationSyncScheduler 周期循环的生命周期管理（热启停）。
 //
-// 零行为前提：配置未启用（Enabled=false）⇒ 不起跑任何循环（不占资源、
-// 不发任何出站请求）⇒ 与升级前行为完全一致。
-func startFederationSync(mailbox *federationApp.InviteMailbox, siteName string) {
-	// 只在 admin 面跑（standalone 与 admin 皆可；public 副本不跑），
-	// 且配置已启用——判定集中在 federationSyncShouldRun（单一真相源，
-	// 可单测判红）。
-	if !federationSyncShouldRun(config, federationSyncConfig(context.Background()).Enabled) {
-		return
-	}
-	// 首跑读配置：拿周期等参数（Enabled 已由上面的判定保证为 true）。
-	initial := federationSyncConfig(context.Background())
-	if !initial.Enabled {
-		return
-	}
+// 语义对齐联邦运行时的热切换（fedRT.apply）：enabled=false ⇒ 停；
+// enabled=true ⇒ 未跑则起、周期变了则重启换周期；已在跑且周期未变 ⇒ 不动
+// （轮次内每轮自读配置，改动下一轮即见）。
+//
+// 测试缝：round 为每轮动作（生产 = 读配置 + Syncer.Run；测试注入计数器），
+// interval 由调用方给（生产传 SyncConfig.Interval() 的夹取值，测试传毫秒级）。
+type federationSyncScheduler struct {
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	loop     *loop.Loop
+	interval time.Duration
+	running  bool
+	round    func(ctx context.Context)
+}
 
+// fedSyncSched 包级单例（initThriftIDLServices 装配；停机随 backgroundContext
+// teardown——循环是其子 ctx，取消即优雅退出）。
+var fedSyncSched = &federationSyncScheduler{}
+
+// apply 按新配置起/停/重启周期循环（热启停；串行化）。
+func (s *federationSyncScheduler) apply(enabled bool, interval time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !enabled || s.round == nil {
+		s.stopLocked()
+		return
+	}
+	if s.running && s.interval == interval {
+		return // 已在跑且周期未变：不动（轮次内每轮自读配置）
+	}
+	s.stopLocked()
+	ctx, cancel := context.WithCancel(backgroundContext())
+	l := loop.Run(ctx, loop.Config{
+		Name:       "federation-invite-sync",
+		Interval:   interval,
+		FirstDelay: interval,
+	}, s.round)
+	s.cancel, s.loop = cancel, l
+	s.interval, s.running = interval, true
+	// 挂进排水 WaitGroup：进程停机时在飞轮次收尾后再退出（优雅停）。
+	trackBackgroundLoop(l)
+}
+
+// stop 热停（取消循环 ctx；在飞轮次感知取消自行收尾，排水由
+// trackBackgroundLoop 兜底）。
+func (s *federationSyncScheduler) stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopLocked()
+}
+
+func (s *federationSyncScheduler) stopLocked() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	s.loop = nil
+	s.running = false
+}
+
+// startFederationSync 装配每轮动作并按当前配置起跑（零行为前提：配置未启用
+// ⇒ 不起跑任何循环、不发任何出站请求，与升级前行为一致）。
+func startFederationSync(mailbox *federationApp.InviteMailbox, siteName string) {
 	syncer := federationApp.NewSyncer(
-		// 出站：复用既有推送实现（与手动 invite-push 同一链路 ⇒ 语义一致）。
-		federationApp.PushInvite,
+		// 出站：按对端粒度 SSRF 校验的推送（与手动 invite-push 同一链路
+		// ⇒ 语义一致；私网放行仅限登记对端的 allow_private）。
+		federationApp.PushInviteToTarget,
 		// 入站：收进待收列表（收件箱同码去重 ⇒ 幂等）。
 		func(code, fromName, note string) error {
 			_, err := mailbox.AddInvite(code, fromName, note)
 			return err
 		},
 	)
-
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
-		Name:       "federation-invite-sync",
-		Interval:   initial.Interval(),
-		FirstDelay: initial.Interval(),
-	}, func(ctx context.Context) {
+	fedSyncSched.mu.Lock()
+	fedSyncSched.round = func(ctx context.Context) {
 		// 每轮重读配置（周期可配 + 可关都是运行期语义：管理台改配置后
 		// 下一轮即生效，无需重启）。
 		cfg := federationSyncConfig(ctx)
@@ -120,5 +174,23 @@ func startFederationSync(mailbox *federationApp.InviteMailbox, siteName string) 
 				zap.Int("count", n),
 				zap.Int("targets", len(cfg.NormalizedTargets())))
 		}
-	}))
+	}
+	fedSyncSched.mu.Unlock()
+	federationSyncApply(federationSyncConfig(context.Background()))
+}
+
+// federationSyncApply 按同步配置热启停（启动路径与热路径共用；判定集中在
+// federationSyncShouldRun 单一真相源）。
+func federationSyncApply(cfg federationApp.SyncConfig) {
+	if !federationSyncShouldRun(config, cfg.Enabled) {
+		fedSyncSched.stop()
+		return
+	}
+	fedSyncSched.apply(cfg.Enabled, cfg.Interval())
+}
+
+// federationSyncApplyFromConf 热路径入口（OnP2PFederationChanged 钩子）：
+// 管理台保存 p2p.federation 段（含 sync 子段）即起/停/换周期，无需重启进程。
+func federationSyncApplyFromConf(f conf.FederationConfig) {
+	federationSyncApply(syncConfigFromConf(f.Sync))
 }

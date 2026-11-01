@@ -47,6 +47,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
 )
 
@@ -72,12 +73,14 @@ type SyncConfig struct {
 	// 小于 60 按 60 夹（minSyncInterval）。
 	IntervalSeconds int `mapstructure:"interval_seconds" json:"interval_seconds"`
 
-	// Targets 已配置的对端站点（每项一个基址，如 https://box.example.com）。
+	// Targets 已配置的对端站点（每项一个条目：基址 + 私网粒度，见
+	// conf.FederationSyncTarget）。
 	//
 	// 出站 URL **只来自本配置**（管理员显式登记），不是访客/调用方任意输入
 	// ⇒ SSRF 面从「任意 URL」收窄到「admin 配的 URL」（与 core#29 跨站投递
-	// 的信任模型同口径）。每个目标发请求前仍复跑 SSRF 校验。
-	Targets []string `mapstructure:"targets" json:"targets"`
+	// 的信任模型同口径）。每个目标发请求前仍复跑 SSRF 校验，私网放行**按
+	// 对端粒度**（条目 allow_private），不开全局私网后门。
+	Targets []conf.FederationSyncTarget `mapstructure:"targets" json:"targets"`
 
 	// Codes 待推送的邀请口令（12 位字符 + 2 连字符，XXXX-XXXX-XXXX）。
 	//
@@ -103,19 +106,23 @@ func (c SyncConfig) Interval() time.Duration {
 	return d
 }
 
-// NormalizedTargets 归一后的目标基址列表（去空白、去尾斜杠、去重、保序）。
-func (c SyncConfig) NormalizedTargets() []string {
+// NormalizedTargets 归一后的目标列表（URL 去空白、去尾斜杠、去重、保序；
+// 同 URL 重复登记时**首个条目**的 allow_private 为准）。
+func (c SyncConfig) NormalizedTargets() []conf.FederationSyncTarget {
 	seen := make(map[string]struct{}, len(c.Targets))
-	out := make([]string, 0, len(c.Targets))
+	out := make([]conf.FederationSyncTarget, 0, len(c.Targets))
 	for _, raw := range c.Targets {
-		t := strings.TrimRight(strings.TrimSpace(raw), "/")
-		if t == "" {
+		t := conf.FederationSyncTarget{
+			URL:          strings.TrimRight(strings.TrimSpace(raw.URL), "/"),
+			AllowPrivate: raw.AllowPrivate,
+		}
+		if t.URL == "" {
 			continue
 		}
-		if _, dup := seen[t]; dup {
+		if _, dup := seen[t.URL]; dup {
 			continue
 		}
-		seen[t] = struct{}{}
+		seen[t.URL] = struct{}{}
 		out = append(out, t)
 	}
 	return out
@@ -142,12 +149,13 @@ func (c SyncConfig) NormalizedCodes() []string {
 // Syncer 联邦邀请的周期同步器。
 //
 // 依赖注入（便于测试与装配解耦）：
-//   - push：把一个口令推到某个对端基址（生产用 PushInvite）。
+//   - push：把一个口令推到某个对端（生产用 PushInviteToTarget——按对端粒度
+//     做 SSRF 校验）。
 //   - receive：把对端推来的口令收进待收列表（生产用 InviteMailbox.AddInvite）。
 //
 // 幂等：已推送的 (target, code) 组合记在 sent 集合里，同进程内不重复推送。
 type Syncer struct {
-	push    func(ctx context.Context, target, code, fromName, note string) error
+	push    func(ctx context.Context, target conf.FederationSyncTarget, code, fromName, note string) error
 	receive func(code, fromName, note string) error
 
 	mu   sync.Mutex
@@ -156,7 +164,7 @@ type Syncer struct {
 
 // NewSyncer 构造同步器（push/receive 任一为 nil ⇒ 该方向短路）。
 func NewSyncer(
-	push func(ctx context.Context, target, code, fromName, note string) error,
+	push func(ctx context.Context, target conf.FederationSyncTarget, code, fromName, note string) error,
 	receive func(code, fromName, note string) error,
 ) *Syncer {
 	return &Syncer{
@@ -187,7 +195,7 @@ func (s *Syncer) Run(ctx context.Context, cfg SyncConfig, fromName, note string)
 			if ctx.Err() != nil {
 				return pushed
 			}
-			key := target + "|" + code
+			key := target.URL + "|" + code
 			if s.alreadySent(key) {
 				continue
 			}
@@ -195,7 +203,7 @@ func (s *Syncer) Run(ctx context.Context, cfg SyncConfig, fromName, note string)
 				// 单个目标失败不影响其余（issue：投递失败有可读错误面，
 				// 不静默吞掉）——记日志后继续下一个组合。
 				logger.Warn("federation sync push failed",
-					zap.String("target", target),
+					zap.String("target", target.URL),
 					zap.Error(err))
 				continue
 			}
@@ -238,5 +246,5 @@ func (s *Syncer) SentCount() int {
 	return len(s.sent)
 }
 
-// PushFunc 出站推送的函数签名（生产实现 = PushInvite）。
-type PushFunc func(ctx context.Context, target, code, fromName, note string) error
+// PushFunc 出站推送的函数签名（生产实现 = PushInviteToTarget）。
+type PushFunc func(ctx context.Context, target conf.FederationSyncTarget, code, fromName, note string) error
