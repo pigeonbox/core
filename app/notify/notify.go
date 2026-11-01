@@ -10,11 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"github.com/oekit/concurrency/async"
@@ -28,12 +28,13 @@ import (
 	"sync/atomic"
 )
 
-// webhookHTTPClient webhook 推送专用客户端（5s 超时；推送失败静默记日志不重试）。
+// externalHTTPClient 外部推送共用客户端（webhook / telegram / bark；5s 超时；
+// 推送失败静默记日志不重试）。
 // 重定向防护（2026-10-05 审计 P3）：webhook URL 仅管理员可配，但保存期校验
 // 会被 302 绕过——目标服务器一跳转即可指向私网。CheckRedirect 逐跳复用
 // security.ValidateEndpointURL（respect security.ssrf.allow_private_networks），
 // 私网目标且未放行时中止。
-var webhookHTTPClient = &http.Client{
+var externalHTTPClient = &http.Client{
 	Timeout: 5 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
@@ -74,6 +75,13 @@ type Service struct {
 	//
 	// ⚠️ 同上：运行期热重建写、请求路径读，无锁 ⇒ data race。
 	mailer atomic.Pointer[SMTPMailer]
+
+	// telegramCfg / barkCfg Telegram 与 Bark 外部推送渠道配置（nil = 禁用；
+	// 2026-11-01 外部推送渠道扩展）。
+	//
+	// ⚠️ 同 webhookURL：运行期热重建写、请求路径读 ⇒ 一律 atomic.Pointer 原子持有。
+	telegramCfg atomic.Pointer[TelegramConfig]
+	barkCfg     atomic.Pointer[BarkConfig]
 }
 
 // webhookTarget 当前生效的 Webhook 地址（空串 = 禁用）。
@@ -83,6 +91,10 @@ func (s *Service) webhookTarget() string {
 	}
 	return ""
 }
+
+// telegram / bark 当前生效的渠道配置快照（nil = 禁用）。
+func (s *Service) telegram() *TelegramConfig { return s.telegramCfg.Load() }
+func (s *Service) bark() *BarkConfig         { return s.barkCfg.Load() }
 
 // NewService 创建 service（repo 构造注入，去全局化终态）
 func NewService(gormDB *gorm.DB) *Service {
@@ -456,6 +468,32 @@ func (s *Service) SetWebhookURL(url string) {
 	s.webhookURL.Store(&trimmed)
 }
 
+// doPush 执行一次外部推送 POST（fire-and-forget 语义：2xx = 送达，响应体不关心）。
+//
+// ⚠️ 为什么不直接 httpjson.DoJSON(ctx, client, req, nil)：上游 DoJSON 无条件
+// json.Unmarshal(raw, out)——out==nil 时**恒**报 "响应解析失败: json: Unmarshal(nil)"
+// （成功推送被误报失败；webhook 渠道自 2026-10 起每次成功送达都记假失败日志，
+// 真失败反而淹没其中）。且推送响应体不保证是 JSON（webhook 端点常回纯文本/空）。
+//
+// 这里以 json.RawMessage 接住响应体，仅把 **2xx 后的响应体解码失败**视为送达；
+// 真失败 = 非 2xx（httpjson.StatusError）或传输层/读响应错误。
+// 上游缺口（DoJSON 对 out==nil 应跳过解码）见 oekit/pkg issue（PR 注明）。
+func doPush(ctx context.Context, req httpjson.Request) error {
+	err := httpjson.DoJSON(ctx, externalHTTPClient, req, &json.RawMessage{})
+	if err == nil {
+		return nil
+	}
+	var se *httpjson.StatusError
+	if errors.As(err, &se) {
+		return err // 非 2xx：真失败
+	}
+	var syn *json.SyntaxError
+	if errors.As(err, &syn) {
+		return nil // 2xx 已送达，仅响应体非 JSON/为空——与推送语义无关
+	}
+	return err
+}
+
 // webhookPayload Webhook POST 的 JSON 载荷
 type webhookPayload struct {
 	Event      string `json:"event"`
@@ -480,7 +518,7 @@ func (s *Service) sendWebhook(ctx context.Context, event string, body []byte) er
 	if err := security.ValidateEndpointURL(target); err != nil {
 		return fmt.Errorf("webhook 目标被拒绝: %w", err)
 	}
-	return httpjson.DoJSON(ctx, webhookHTTPClient, httpjson.Request{
+	return doPush(ctx, httpjson.Request{
 		Method: http.MethodPost,
 		URL:    target,
 		Body:   body,
@@ -488,15 +526,13 @@ func (s *Service) sendWebhook(ctx context.Context, event string, body []byte) er
 			h.Set("Content-Type", "application/json")
 			h.Set("X-PB-Event", event)
 		},
-	}, nil)
+	})
 }
 
-// EmitShareFlagged 分享命中审核钩子事件（share.flagged）——结构化 webhook 推送，
-// 供外挂自动处置（如拉取后调管理端禁用接口）。异步推送，失败静默记日志。
+// EmitShareFlagged 分享命中审核钩子事件（share.flagged）——结构化 webhook 推送 +
+// Telegram/Bark 外部渠道广播，供外挂自动处置（如拉取后调管理端禁用接口）。
+// 异步推送，失败静默记日志。
 func (s *Service) EmitShareFlagged(code, reason, ownerIP string) {
-	if target := s.webhookTarget(); target == "" {
-		return
-	}
 	payload := map[string]interface{}{
 		"event":     "share.flagged",
 		"code":      code,
@@ -505,47 +541,34 @@ func (s *Service) EmitShareFlagged(code, reason, ownerIP string) {
 		"hint":      "share is set pending_review; approve via PUT /admin/files/:id/status",
 		"timestamp": time.Now().Unix(),
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	async.GoSafe(func() {
-		if err := s.sendWebhook(context.Background(), "share.flagged", body); err != nil {
-			logger.Warn("webhook push failed", zap.String("url", s.webhookTarget()), zap.Error(err))
-		}
-	})
+	title := "分享命中审核: " + code
+	content := fmt.Sprintf("原因: %s\n来源 IP: %s\n处置: PUT /admin/files/:id/status", reason, ownerIP)
+	s.dispatchExternal(context.Background(), "share.flagged", payload, title, content)
 }
 
-// EmitP2pInvite 设备直传邀请到达 webhook 推送（P3；best-effort，未配置 webhook 即短路）。
+// EmitP2pInvite 设备直传邀请到达外部推送（P3；best-effort，未配置任何渠道即短路）。
 // 邀请面向 admin（收件箱在管理页轮询呈现），此事件供运维侧及时感知。
 func (s *Service) EmitP2pInvite(fromName, code, note string) {
-	if target := s.webhookTarget(); target == "" {
-		return
+	codeHint := code + "-****-****"
+	if len(code) >= 4 {
+		codeHint = code[:4] + "-****-****" // 口令 bearer 不落明文
 	}
 	payload := map[string]interface{}{
 		"event":     "p2p.invite",
 		"from_name": fromName,
-		"code_hint": code[:4] + "-****-****", // 口令 bearer 不落明文
+		"code_hint": codeHint,
 		"note":      note,
 		"hint":      "incoming direct-transfer invite; review via GET /admin/p2p/invites",
 		"timestamp": time.Now().Unix(),
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	async.GoSafe(func() {
-		if err := s.sendWebhook(context.Background(), "p2p.invite", body); err != nil {
-			logger.Warn("webhook push failed", zap.String("url", s.webhookTarget()), zap.Error(err))
-		}
-	})
+	title := "设备直传邀请: " + fromName
+	content := fmt.Sprintf("口令提示: %s\n备注: %s\n查看: GET /admin/p2p/invites", codeHint, note)
+	s.dispatchExternal(context.Background(), "p2p.invite", payload, title, content)
 }
 
-// dispatchWebhook 异步推送（5s 超时，失败静默记日志）
+// dispatchWebhook 站内信创建后的外部推送（notify.created）——走 dispatchExternal
+// 向 webhook/telegram/bark 全渠道 fan-out（异步 5s 超时，失败静默记日志）。
 func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, content, notifyType, level string) {
-	if target := s.webhookTarget(); target == "" {
-		return
-	}
 	payload := webhookPayload{
 		Event:      "notify.created",
 		Title:      title,
@@ -555,15 +578,204 @@ func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, conte
 		UserID:     userID,
 		Timestamp:  time.Now().Unix(),
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
+	s.dispatchExternal(ctx, "notify.created", payload, title, content)
+}
+
+// ==================== Telegram / Bark 外部推送渠道（2026-11-01） ====================
+//
+// 设计稿：docs/specs/2026-11-01-notify-channels-telegram-bark-design.md（core#31）。
+// 渠道抽象是**渐进式 fan-out**（dispatchExternal），不做重量级 Channel 接口重构。
+
+// TelegramConfig Telegram 渠道配置（bot_token + chat_id 均非空 = 启用）。
+type TelegramConfig struct {
+	BotToken string
+	ChatID   string
+}
+
+// BarkConfig Bark 渠道配置（server_url + device_key 均非空 = 启用）。
+type BarkConfig struct {
+	ServerURL string
+	DeviceKey string
+}
+
+// telegramAPIBase Telegram Bot API 基址——目标 host **固定** api.telegram.org，
+// 不可由用户输入（token/chat_id 是配置值，不构成出站 URL 注入）；
+// 仅测试覆写指向 httptest，生产恒为默认值。
+var telegramAPIBase = "https://api.telegram.org"
+
+// SetTelegram 注入 Telegram 渠道配置（bootstrap 从 notify.telegram 段构建；
+// nil 或缺任一字段 = 禁用/卸载）。运行期热重建会调用 ⇒ 原子换指针
+// （见 Service.telegramCfg 的说明）。
+func (s *Service) SetTelegram(cfg *TelegramConfig) {
+	if cfg == nil {
+		s.telegramCfg.Store(nil)
 		return
 	}
-	async.GoSafe(func() {
-		// ValueOnlyFrom 剥离取消/超时：请求返回即取消请求 ctx,fire-and-forget
-		// webhook 若继承之会在请求尾后被掐断(间歇性推送失败);超时由 client 兜
-		if err := s.sendWebhook(contextx.ValueOnlyFrom(ctx), "notify.created", body); err != nil {
-			logger.CtxWarn(ctx, "webhook push failed", "url", s.webhookTarget(), "err", err)
-		}
+	c := TelegramConfig{
+		BotToken: strings.TrimSpace(cfg.BotToken),
+		ChatID:   strings.TrimSpace(cfg.ChatID),
+	}
+	if c.BotToken == "" || c.ChatID == "" {
+		s.telegramCfg.Store(nil) // 缺任一字段 = 未启用
+		return
+	}
+	s.telegramCfg.Store(&c)
+}
+
+// SetBark 注入 Bark 渠道配置（bootstrap 从 notify.bark 段构建；
+// nil 或缺任一字段 = 禁用/卸载）。同 SetTelegram 原子换指针。
+func (s *Service) SetBark(cfg *BarkConfig) {
+	if cfg == nil {
+		s.barkCfg.Store(nil)
+		return
+	}
+	c := BarkConfig{
+		ServerURL: strings.TrimSpace(cfg.ServerURL),
+		DeviceKey: strings.TrimSpace(cfg.DeviceKey),
+	}
+	if c.ServerURL == "" || c.DeviceKey == "" {
+		s.barkCfg.Store(nil)
+		return
+	}
+	s.barkCfg.Store(&c)
+}
+
+// telegramPushURL 拼 Telegram 推送目标（host 固定 api.telegram.org，不可由
+// 用户输入；token/chat_id 是配置值，不构成出站 URL 注入）。
+func telegramPushURL(cfg *TelegramConfig) string {
+	return fmt.Sprintf("%s/bot%s/sendMessage", telegramAPIBase, cfg.BotToken)
+}
+
+// barkPushURL 拼 Bark 推送目标（server_url + PathEscape(device_key)；
+// device_key 走 PathEscape 防路径/query 注入改变目标路径）。
+func barkPushURL(cfg *BarkConfig) string {
+	return strings.TrimRight(cfg.ServerURL, "/") + "/" + url.PathEscape(cfg.DeviceKey)
+}
+
+// telegramText Telegram 消息正文 = title + content（4096 字符硬限，截断好过
+// 整条被 Bot API 拒）。
+func telegramText(title, content string) string {
+	text := title + "\n\n" + content
+	if r := []rune(text); len(r) > 4000 {
+		text = string(r[:4000])
+	}
+	return text
+}
+
+// sendTelegram 发送 Telegram 消息（POST <base>/bot<token>/sendMessage，
+// JSON {chat_id, text}）。
+//
+// SSRF 纵深防御：host 固定 api.telegram.org，仍对拼好的 URL 复跑
+// security.ValidateEndpointURL（防配置期绕过 + DNS 重绑定；沿用 sendWebhook
+// 的 2026-10-08 加固范式）。
+//
+// ⚠️ 错误与日志**不得**携带目标 URL——URL 内嵌 bot token。
+func (s *Service) sendTelegram(ctx context.Context, cfg *TelegramConfig, title, content string) error {
+	if cfg == nil {
+		return nil
+	}
+	target := telegramPushURL(cfg)
+	if err := security.ValidateEndpointURL(target); err != nil {
+		return fmt.Errorf("telegram 目标被拒绝: %w", err)
+	}
+	body, err := json.Marshal(map[string]string{
+		"chat_id": cfg.ChatID,
+		"text":    telegramText(title, content),
 	})
+	if err != nil {
+		return err
+	}
+	return doPush(ctx, httpjson.Request{
+		Method: http.MethodPost,
+		URL:    target,
+		Body:   body,
+		Header: func(h http.Header) {
+			h.Set("Content-Type", "application/json")
+		},
+	})
+}
+
+// sendBark 发送 Bark 推送（POST <server_url>/<device_key>，JSON {title, body}）。
+//
+// SSRF：ServerURL **由用户填**（自建 Bark）⇒ 发送前必过
+// security.ValidateEndpointURL（同 webhook 加固口径），私网目标默认拒
+// （沿用全局 security.ssrf 口径，**不为 Bark 开 allow_private 后门**）；
+// device_key 走 url.PathEscape，防路径/query 注入改变目标路径。
+func (s *Service) sendBark(ctx context.Context, cfg *BarkConfig, title, content string) error {
+	if cfg == nil {
+		return nil
+	}
+	target := barkPushURL(cfg)
+	if err := security.ValidateEndpointURL(target); err != nil {
+		return fmt.Errorf("bark 目标被拒绝: %w", err)
+	}
+	body, err := json.Marshal(map[string]string{
+		"title": title,
+		"body":  content,
+	})
+	if err != nil {
+		return err
+	}
+	return doPush(ctx, httpjson.Request{
+		Method: http.MethodPost,
+		URL:    target,
+		Body:   body,
+		Header: func(h http.Header) {
+			h.Set("Content-Type", "application/json")
+		},
+	})
+}
+
+// dispatchExternal 外部推送统一出口（2026-11-01 渠道扩展）：向**所有已启用渠道**
+// （webhook / telegram / bark）fire-and-forget fan-out。
+//
+//   - 各渠道**独立 best-effort**：async.GoSafe（禁裸 go），失败只记日志，
+//     一渠道失败不影响他渠道，更不影响站内信落库主流程；
+//   - ctx 取 contextx.ValueOnlyFrom：剥离取消/超时——fire-and-forget 请求若继承
+//     请求 ctx 会在请求尾后被掐断（间歇性推送失败），超时由 client 兜；
+//   - 闭包捕获**已 Load 的配置快照**（同 mailer 的注释）：热重建换配置时，
+//     本次发送用同一个实例（不会"判空时非 nil、发送时已换掉"）。
+//
+// SMTP 不并入此 fan-out（它是「对登记邮箱补发」语义，见 CreateForUserSimple）。
+func (s *Service) dispatchExternal(ctx context.Context, event string, payload interface{}, title, content string) {
+	hookTarget := s.webhookTarget()
+	tg := s.telegram()
+	br := s.bark()
+	if hookTarget == "" && tg == nil && br == nil {
+		return // 无任何外部渠道：短路（同此前 dispatchWebhook 未配置即返回）
+	}
+	var hookBody []byte
+	if hookTarget != "" {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			logger.CtxWarn(ctx, "external push payload marshal failed", "event", event, "err", err)
+		} else {
+			hookBody = b
+		}
+	}
+	// ValueOnlyFrom 剥离取消/超时：请求返回即取消请求 ctx,fire-and-forget
+	// 推送若继承之会在请求尾后被掐断(间歇性推送失败);超时由 client 兜
+	pushCtx := contextx.ValueOnlyFrom(ctx)
+	if hookBody != nil {
+		async.GoSafeLabeled("notify-webhook", func() {
+			if err := s.sendWebhook(pushCtx, event, hookBody); err != nil {
+				logger.CtxWarn(pushCtx, "webhook push failed", "url", hookTarget, "err", err)
+			}
+		})
+	}
+	if tg != nil {
+		async.GoSafeLabeled("notify-telegram", func() {
+			if err := s.sendTelegram(pushCtx, tg, title, content); err != nil {
+				// ⚠️ 不打目标 URL：内嵌 bot token
+				logger.CtxWarn(pushCtx, "telegram push failed", "event", event, "err", err)
+			}
+		})
+	}
+	if br != nil {
+		async.GoSafeLabeled("notify-bark", func() {
+			if err := s.sendBark(pushCtx, br, title, content); err != nil {
+				logger.CtxWarn(pushCtx, "bark push failed", "event", event, "err", err)
+			}
+		})
+	}
 }

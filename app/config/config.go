@@ -176,6 +176,13 @@ func validateSystemConfig(cfg *SystemConfig) error {
 				return fmt.Errorf("notify.smtp.host 校验失败: %w", err)
 			}
 		}
+		// notify.bark.server_url 保存期校验（2026-11-01 Telegram/Bark 渠道；
+		// telegram 目标 host 固定 api.telegram.org 无出站 URL 注入面，无需校验）
+		if u := strings.TrimSpace(cfg.Notify.Bark.ServerURL); u != "" {
+			if err := security.ValidateEndpointURL(u); err != nil {
+				return fmt.Errorf("notify.bark.server_url 校验失败: %w", err)
+			}
+		}
 	}
 	if cfg.OIDC != nil {
 		if u := strings.TrimSpace(cfg.OIDC.Issuer); u != "" {
