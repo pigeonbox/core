@@ -118,8 +118,9 @@ func normalizeLogPage(page, pageSize int) (int, int) {
 
 // GetSystemLogs 获取系统日志（真实数据）：读 pkg/logger 进程内环形缓冲
 // （Init 时 Tee 进主日志链，容量有界、重启即清——定位是「最近运行日志」
-// 面板；操作审计在 operation_logs 表另有专页）。此前是返回模拟数据的
-// TODO 桩。level 空=全部，否则精确匹配级别名；分页窗口按时间序最旧在前。
+// 面板；操作审计在 operation_logs 表另有专页）。此处此前是返回模拟数据的桩，
+// 现已改为读环形缓冲的真实日志。level 空=全部，否则精确匹配级别名；
+// 分页窗口按时间序最旧在前。
 func (s *Service) GetSystemLogs(ctx context.Context, level string, page, pageSize int) ([]*LogEntry, int64, error) {
 	page, pageSize = normalizeLogPage(page, pageSize)
 
