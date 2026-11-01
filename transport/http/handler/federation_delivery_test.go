@@ -185,7 +185,7 @@ func TestFederationDeliverySlot_RequiresSharedToken(t *testing.T) {
 	// 无口令
 	w := ut.PerformRequest(h.Engine, "POST", "/api/v1/federation/delivery-slot", nil)
 	assert.Equal(t, http.StatusForbidden, w.Code, "无口令必须被拒")
-	assert.Contains(t, string(w.Body.Bytes()), "共享口令")
+	assert.Contains(t, w.Body.String(), "共享口令")
 
 	// 错口令
 	w = ut.PerformRequest(h.Engine, "POST", "/api/v1/federation/delivery-slot", nil,
@@ -195,7 +195,7 @@ func TestFederationDeliverySlot_RequiresSharedToken(t *testing.T) {
 	// 正确口令
 	w = ut.PerformRequest(h.Engine, "POST", "/api/v1/federation/delivery-slot", nil,
 		ut.Header{Key: "X-Federation-Token", Value: "shared-token"})
-	require.Equal(t, http.StatusOK, w.Code, "对口令必须放行: %s", string(w.Body.Bytes()))
+	require.Equal(t, http.StatusOK, w.Code, "对口令必须放行: %s", w.Body.String())
 	assert.ElementsMatch(t, []string{"code", "message", "data", "trace_id"}, topKeys(t, w.Body.Bytes()),
 		"槽位响应的顶层键集合固定（契约 code/message/data + 全站 trace_id）")
 	data := decodeData(t, w.Body.Bytes())
@@ -221,7 +221,7 @@ func TestFederationDeliver_UnregisteredTarget_NoOutboundRequest(t *testing.T) {
 	body, ct := multipartBody(t, map[string]string{"target_url": other.srv.URL}, "a.txt", []byte("hello"))
 	w := perform(h, "POST", "/api/v1/federation/deliver", body, ct)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, string(w.Body.Bytes()), "不在可投递名单")
+	assert.Contains(t, w.Body.String(), "不在可投递名单")
 
 	assert.Zero(t, atomic.LoadInt64(&registered.slotCalls), "未命中名单 ⇒ 不得对任何对端发请求")
 	assert.Zero(t, atomic.LoadInt64(&registered.uploadCalls), "未命中名单 ⇒ 不得对任何对端发请求")
@@ -243,14 +243,14 @@ func TestFederationDeliver_PrivatePeerNeedsAllowPrivate(t *testing.T) {
 	body, ct := multipartBody(t, map[string]string{"target_url": peer.srv.URL}, "a.txt", []byte("hello"))
 	w := perform(h, "POST", "/api/v1/federation/deliver", body, ct)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "私网对端未放行必须被拒")
-	assert.Contains(t, string(w.Body.Bytes()), "allow_private")
+	assert.Contains(t, w.Body.String(), "allow_private")
 	assert.Zero(t, atomic.LoadInt64(&peer.slotCalls), "被拒时不得发出站请求")
 
 	// allow_private=true ⇒ 放行
 	withDeliveryConf(t, conf.FederationDeliveryPeer{URL: peer.srv.URL, Token: "shared-token", AllowPrivate: true})
 	body2, ct2 := multipartBody(t, map[string]string{"target_url": peer.srv.URL}, "a.txt", []byte("hello"))
 	w2 := perform(h, "POST", "/api/v1/federation/deliver", body2, ct2)
-	require.Equal(t, http.StatusOK, w2.Code, "显式 allow_private 必须放行: %s", string(w2.Body.Bytes()))
+	require.Equal(t, http.StatusOK, w2.Code, "显式 allow_private 必须放行: %s", w2.Body.String())
 	assert.Equal(t, int64(1), atomic.LoadInt64(&peer.slotCalls))
 }
 
@@ -262,7 +262,7 @@ func TestFederationDeliver_ReturnsPeerPickupCode(t *testing.T) {
 
 	body, ct := multipartBody(t, map[string]string{"target_url": peer.srv.URL, "title": "给我的"}, "a.txt", []byte("hello"))
 	w := perform(h, "POST", "/api/v1/federation/deliver", body, ct)
-	require.Equal(t, http.StatusOK, w.Code, string(w.Body.Bytes()))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
 	assert.ElementsMatch(t, []string{"code", "message", "data", "trace_id"}, topKeys(t, w.Body.Bytes()),
 		"投递响应的顶层键集合固定")
@@ -292,7 +292,7 @@ func TestFederationDeliver_StreamsFile(t *testing.T) {
 	payload := bytes.Repeat([]byte("A"), 5<<20) // 5MB
 	body, ct := multipartBody(t, map[string]string{"target_url": peer.srv.URL}, "big.bin", payload)
 	w := perform(h, "POST", "/api/v1/federation/deliver", body, ct)
-	require.Equal(t, http.StatusOK, w.Code, string(w.Body.Bytes()))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.True(t, peer.gotChunked, "转发请求必须是 chunked（未整文件缓冲）")
 	assert.Equal(t, int64(len(payload)), peer.gotBodySize, "文件内容不得丢字节")
 }
@@ -316,7 +316,7 @@ func TestFederationDeliver_MissingTargetURL(t *testing.T) {
 	body, ct := multipartBody(t, map[string]string{}, "a.txt", []byte("x"))
 	w := perform(h, "POST", "/api/v1/federation/deliver", body, ct)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, string(w.Body.Bytes()), "target_url")
+	assert.Contains(t, w.Body.String(), "target_url")
 }
 
 // TestFederationDeliver_PeerWithoutPickupCode 对方柜没回码 ⇒ 响应里**不带**
@@ -327,7 +327,7 @@ func TestFederationDeliver_PeerWithoutPickupCode(t *testing.T) {
 	h := newDeliveryServer(t)
 	body, ct := multipartBody(t, map[string]string{"target_url": peer.srv.URL}, "a.txt", []byte("x"))
 	w := perform(h, "POST", "/api/v1/federation/deliver", body, ct)
-	require.Equal(t, http.StatusOK, w.Code, string(w.Body.Bytes()))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	data := decodeData(t, w.Body.Bytes())
 	_, has := data["pickup_code"]
 	assert.False(t, has, "对方柜没回码时不得回一个空串（前端会显示空白码框）")
