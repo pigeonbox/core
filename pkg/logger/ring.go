@@ -1,8 +1,8 @@
 // ring.go 进程内日志环形缓冲（管理端「系统日志」页的真实数据源）。
 //
-// 此前 admin.GetSystemLogs 是返回模拟数据的 TODO 桩——管理面板展示虚构日志。
-// 现将环形缓冲实现为 zapcore.Core 并在 Init 时 Tee 进主日志链：零额外调用
-// 面（业务代码照常 logger.Info/Warn/Error），容量有界（满载丢最旧），
+// 历史：admin.GetSystemLogs 曾是返回模拟数据的桩，管理面板展示的是虚构日志；
+// 现已修复——环形缓冲实现为 zapcore.Core 并在 Init 时 Tee 进主日志链：零额外
+// 调用面（业务代码照常 logger.Info/Warn/Error），容量有界（满载丢最旧），
 // 不持久化、重启即清（定位是"最近运行日志"面板，非审计存储——审计在
 // admin 域的 operation_logs 表）。
 package logger
