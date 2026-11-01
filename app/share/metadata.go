@@ -20,6 +20,9 @@ type ShareMetadata struct {
 	ExpiredCount int        `json:"expired_count"` // -1 无限 / 0 耗尽 / >0 剩余
 	UsedCount    int        `json:"used_count"`
 	Encrypted    bool       `json:"encrypted"`
+	// HasWrappedKey 是否携带口令型 E2E 信封密钥（true=解密需口令；只给标志不给本体——
+	// wrapped_key 本体仅随 GetShare 详情下发）。
+	HasWrappedKey bool `json:"has_wrapped_key"`
 	// FileCount 多文件分享的子文件数（单文件/text 分享为 0）
 	FileCount int64     `json:"file_count"`
 	CreatedAt time.Time `json:"created_at"`
@@ -50,14 +53,15 @@ func (s *Service) GetShareMetadata(ctx context.Context, code string) (*ShareMeta
 		return nil, ErrShareCountExhausted
 	}
 	meta := &ShareMetadata{
-		Code:         fc.Code,
-		Size:         fc.Size,
-		HasPassword:  fc.RequireAuth && fc.PasswordHash != "",
-		ExpiredAt:    fc.ExpiredAt,
-		ExpiredCount: fc.ExpiredCount,
-		UsedCount:    fc.UsedCount,
-		Encrypted:    fc.Encrypted,
-		CreatedAt:    fc.CreatedAt,
+		Code:          fc.Code,
+		Size:          fc.Size,
+		HasPassword:   fc.RequireAuth && fc.PasswordHash != "",
+		ExpiredAt:     fc.ExpiredAt,
+		ExpiredCount:  fc.ExpiredCount,
+		UsedCount:     fc.UsedCount,
+		Encrypted:     fc.Encrypted,
+		HasWrappedKey: fc.WrappedKey != "",
+		CreatedAt:     fc.CreatedAt,
 	}
 	if fc.GetFilePath() == "" {
 		// 无文件路径 = 纯文本分享（或匿名直传尚未绑定的占位记录）

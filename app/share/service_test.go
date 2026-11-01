@@ -506,7 +506,7 @@ func TestShareText_Moderation(t *testing.T) {
 	t.Run("reject 拦截返回30013", func(t *testing.T) {
 		svc, _, _, _ := newTestService(t)
 		svc.SetModerator(&mockModerator{verdict: moderation.VerdictReject})
-		_, err := svc.ShareTextWithAuth(context.Background(), "some text", 1, "day", false, "", nil, "1.1.1.1", false, "")
+		_, err := svc.ShareTextWithAuth(context.Background(), "some text", 1, "day", false, "", nil, "1.1.1.1", false, "", "")
 		require.Error(t, err)
 		var cre *ContentRejectedError
 		require.True(t, errors.As(err, &cre))
@@ -517,7 +517,7 @@ func TestShareText_Moderation(t *testing.T) {
 		emitter := &mockFlagEmitter{}
 		svc.SetModerator(&mockModerator{verdict: moderation.VerdictPending})
 		svc.SetFlagEventEmitter(emitter)
-		resp, err := svc.ShareTextWithAuth(context.Background(), "some text", 1, "day", false, "", nil, "1.1.1.1", false, "")
+		resp, err := svc.ShareTextWithAuth(context.Background(), "some text", 1, "day", false, "", nil, "1.1.1.1", false, "", "")
 		require.NoError(t, err)
 		assert.Equal(t, model.StatusPendingReview, resp.Status)
 		assert.Len(t, emitter.codes, 1)
@@ -533,7 +533,7 @@ func TestShareText_Moderation(t *testing.T) {
 		emitter := &mockFlagEmitter{}
 		svc.SetModerator(&mockModerator{verdict: moderation.VerdictAllow})
 		svc.SetFlagEventEmitter(emitter)
-		resp, err := svc.ShareTextWithAuth(context.Background(), "some text", 1, "day", false, "", nil, "1.1.1.1", false, "")
+		resp, err := svc.ShareTextWithAuth(context.Background(), "some text", 1, "day", false, "", nil, "1.1.1.1", false, "", "")
 		require.NoError(t, err)
 		assert.Equal(t, model.StatusNormal, resp.Status)
 		assert.Empty(t, emitter.codes)

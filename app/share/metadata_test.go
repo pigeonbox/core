@@ -17,7 +17,7 @@ func TestGetShareMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	// 文本分享：type=text，不返回内容
-	textResp, err := svc.ShareTextWithAuth(ctx, "机密内容ABC", 1, "day", false, "", nil, "127.0.0.1", false, "")
+	textResp, err := svc.ShareTextWithAuth(ctx, "机密内容ABC", 1, "day", false, "", nil, "127.0.0.1", false, "", "")
 	require.NoError(t, err)
 	meta, err := svc.GetShareMetadata(ctx, textResp.Code)
 	require.NoError(t, err)

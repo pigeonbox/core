@@ -39,8 +39,11 @@ type ShareTextReq struct {
 	UserID       *uint
 	UploadType   string
 	OwnerIP      string
-	Encrypted    bool   // E2E：Text 为客户端密文（P1）
-	CustomCode   string // 自定义取件码（P3；登录用户专属，handler 把关）
+	Encrypted    bool // E2E：Text 为客户端密文（P1）
+	// WrappedKey 口令型 E2E 信封密钥（base64 0x01||salt||nonce||ct||tag；契约 ShareTextReq.wrapped_key）。
+	// 非空 ⇒ 口令型（铸 6 位取件码，两因子：码+口令）；空且 Encrypted ⇒ 旧 URL-hash-key 形态（不铸码）。
+	WrappedKey string
+	CustomCode string // 自定义取件码（P3；登录用户专属，handler 把关）
 }
 
 type ShareFileReq struct {
@@ -58,9 +61,12 @@ type ShareFileReq struct {
 	FileHash     string
 	IsChunked    bool
 	UploadID     string
-	Encrypted    bool   // E2E：存储内容为客户端密文（P1）
-	CustomCode   string // 自定义取件码（P3；登录用户专属，handler 把关）
-	Note         string // 文件备注（可空，取件页展示；2026-10-12 #489）
+	Encrypted    bool // E2E：存储内容为客户端密文（P1）
+	// WrappedKey 口令型 E2E 信封密钥（base64 0x01||salt||nonce||ct||tag；契约 ShareFileReq.wrapped_key）。
+	// 非空 ⇒ 口令型（铸 6 位取件码）；空且 Encrypted ⇒ 旧 URL-hash-key 形态（不铸码）。
+	WrappedKey string
+	CustomCode string // 自定义取件码（P3；登录用户专属，handler 把关）
+	Note       string // 文件备注（可空，取件页展示；2026-10-12 #489）
 }
 
 type ShareResp struct {
@@ -79,7 +85,8 @@ type ShareResp struct {
 	UserID       *uint      `json:"user_id"`
 	UploadType   string     `json:"upload_type"`
 	RequireAuth  bool       `json:"require_auth"`
-	Encrypted    bool       `json:"encrypted"` // E2E 客户端加密标记（P1）
+	Encrypted    bool       `json:"encrypted"`             // E2E 客户端加密标记（P1）
+	WrappedKey   string     `json:"wrapped_key,omitempty"` // 口令型 E2E 信封密钥（仅创建响应/内部视图）
 	OwnerIP      string     `json:"owner_ip"`
 	Status       string     `json:"status"`         // 管控状态（normal/blocked/pending_review）
 	ShareURL     string     `json:"share_url"`      // 相对分享链接
@@ -377,6 +384,7 @@ func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp,
 			UploadType:   req.UploadType,
 			OwnerIP:      req.OwnerIP,
 			Encrypted:    req.Encrypted,
+			WrappedKey:   req.WrappedKey,
 		}
 	})
 	if err != nil {
@@ -392,7 +400,9 @@ func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp,
 	// 6 位取件码铸造（2026-10-08 起文本分享与文件分享同权，前端"只保留 6 位码"
 	// 呈现）。E2E 密文跳过：解密密钥只随链接传递，凭码取件拿到的只是密文。
 	// 非致命——铸造失败仅少一个快捷码，8 位分享码链路不受影响。
-	if s.pickupMinter != nil && !req.Encrypted {
+	// 铸码条件：未加密，或口令型 E2E（wrapped_key 非空 ⇒ 取件码+口令两因子）。
+	// 旧 URL-hash-key 形态（Encrypted 且无 wrapped_key）不铸：密钥已在 URL fragment。
+	if s.pickupMinter != nil && (!req.Encrypted || req.WrappedKey != "") {
 		if pickup, err := s.pickupMinter.MintForShare(ctx, fileCode.Code,
 			utils.TextPreview(req.Text), int64(len(req.Text)), req.RequireAuth, req.ExpiredAt); err != nil {
 			logger.CtxWarn(ctx, "mint pickup code failed (non-fatal)",
@@ -411,7 +421,7 @@ func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp,
 // requireAuth=true 时必须提供非空 passwordHash(handler 侧负责哈希),
 // 传入空哈希会被拒绝,防止创建出"密码保护形同虚设"的分享。
 // encrypted=true 时 text 为客户端密文（P1 E2E），跳过服务端转义与敏感词审核。
-func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValue int, expireStyle string, requireAuth bool, passwordHash string, userID *uint, ownerIP string, encrypted bool, customCode string) (*ShareResp, error) {
+func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValue int, expireStyle string, requireAuth bool, passwordHash string, userID *uint, ownerIP string, encrypted bool, customCode string, wrappedKey string) (*ShareResp, error) {
 	if requireAuth && passwordHash == "" {
 		return nil, errors.New("开启密码保护时必须提供密码")
 	}
@@ -450,6 +460,7 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 		UploadType:   uploadType,
 		OwnerIP:      ownerIP,
 		Encrypted:    encrypted,
+		WrappedKey:   wrappedKey,
 		CustomCode:   customCode, // 登录用户自定义取件码（匿名传空）
 	}
 
@@ -667,6 +678,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 			IsChunked:    req.IsChunked,
 			UploadID:     req.UploadID,
 			Encrypted:    req.Encrypted,
+			WrappedKey:   req.WrappedKey,
 			Note:         req.Note,
 		}
 	})
@@ -1064,6 +1076,7 @@ func (s *Service) modelToResp(ctx context.Context, fileCode *model.FileCode) *Sh
 		UploadType:   fileCode.UploadType,
 		RequireAuth:  fileCode.RequireAuth,
 		Encrypted:    fileCode.Encrypted,
+		WrappedKey:   fileCode.WrappedKey,
 		OwnerIP:      fileCode.OwnerIP,
 		// 分享链接三通道统一在此生成（页面链接 = hash 路由形态，见 pkg/baseurl/shareurl.go；
 		// 文本通道尾部原有一份同值覆盖，保持无害）
