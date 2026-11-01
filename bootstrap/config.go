@@ -195,6 +195,11 @@ var envBindings = map[string][]string{
 	"notify.smtp.username": {"PB_SMTP_USERNAME"},
 	"notify.smtp.password": {"PB_SMTP_PASSWORD"},
 	"notify.smtp.from":     {"PB_SMTP_FROM"},
+	// notify.telegram / notify.bark（外部推送渠道，2026-11-01）
+	"notify.telegram.bot_token": {"PB_TELEGRAM_BOT_TOKEN"},
+	"notify.telegram.chat_id":   {"PB_TELEGRAM_CHAT_ID"},
+	"notify.bark.server_url":    {"PB_BARK_SERVER_URL"},
+	"notify.bark.device_key":    {"PB_BARK_DEVICE_KEY"},
 	// mcp
 	"mcp.enabled":       {"PB_MCP_ENABLED"},
 	"mcp.allow_guest":   {"PB_MCP_ALLOW_GUEST"},

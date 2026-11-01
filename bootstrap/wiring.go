@@ -431,8 +431,8 @@ var (
 	bootstrapStorageSvc  *storage.StorageService
 )
 
-// applyNotifyConfig 通知渠道装配：Webhook + SMTP mailer（host 空 = 卸载 mailer）。
-// 启动装配与运行时热重建（管理端通知设置保存）共用。
+// applyNotifyConfig 通知渠道装配：Webhook + SMTP mailer + Telegram + Bark
+// （host/配置空 = 卸载）。启动装配与运行时热重建（管理端通知设置保存）共用。
 func applyNotifyConfig(target *notifyAppService.Service, cfg *conf.NotifyConfig) {
 	if cfg == nil {
 		return
@@ -450,6 +450,26 @@ func applyNotifyConfig(target *notifyAppService.Service, cfg *conf.NotifyConfig)
 		logger.Info("SMTP mail notifications enabled", zap.String("host", cfg.SMTP.Host))
 	} else {
 		target.SetMailer(nil)
+	}
+	// Telegram / Bark 外部推送渠道（2026-11-01）：配置缺任一字段 = 卸载（置 nil），
+	// 渠道内部对出站 URL 发送前复跑 SSRF 校验（见 notify.sendTelegram/sendBark）。
+	if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+		target.SetTelegram(&notifyAppService.TelegramConfig{
+			BotToken: cfg.Telegram.BotToken,
+			ChatID:   cfg.Telegram.ChatID,
+		})
+		logger.Info("Telegram push notifications enabled", zap.String("chat_id", cfg.Telegram.ChatID))
+	} else {
+		target.SetTelegram(nil)
+	}
+	if cfg.Bark.ServerURL != "" && cfg.Bark.DeviceKey != "" {
+		target.SetBark(&notifyAppService.BarkConfig{
+			ServerURL: cfg.Bark.ServerURL,
+			DeviceKey: cfg.Bark.DeviceKey,
+		})
+		logger.Info("Bark push notifications enabled", zap.String("server_url", cfg.Bark.ServerURL))
+	} else {
+		target.SetBark(nil)
 	}
 }
 

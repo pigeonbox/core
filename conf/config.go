@@ -254,6 +254,25 @@ type NotifyConfig struct {
 	WebhookURL string `mapstructure:"webhook_url" json:"webhook_url"`
 	// SMTP 邮件通知（站内信创建后对登记邮箱异步补发；空 host = 禁用）
 	SMTP SMTPConfig `mapstructure:"smtp" json:"smtp"`
+	// Telegram 推送渠道（bot_token + chat_id 均非空 = 启用；缺省空 = 禁用）
+	Telegram TelegramConfig `mapstructure:"telegram" json:"telegram"`
+	// Bark 推送渠道（server_url + device_key 均非空 = 启用；缺省空 = 禁用）
+	Bark BarkConfig `mapstructure:"bark" json:"bark"`
+}
+
+// TelegramConfig Telegram 推送渠道配置（2026-11-01 外部推送渠道扩展）。
+// 目标 host 固定 api.telegram.org（不可由用户输入）；缺省空 = 禁用。
+type TelegramConfig struct {
+	BotToken string `mapstructure:"bot_token" json:"bot_token"` // env: PB_TELEGRAM_BOT_TOKEN
+	ChatID   string `mapstructure:"chat_id" json:"chat_id"`     // env: PB_TELEGRAM_CHAT_ID
+}
+
+// BarkConfig Bark 推送渠道配置（2026-11-01 外部推送渠道扩展）。
+// ServerURL 由用户填（自建 Bark）⇒ 出站前必过 security.ValidateEndpointURL（SSRF）；
+// 缺省空 = 禁用。
+type BarkConfig struct {
+	ServerURL string `mapstructure:"server_url" json:"server_url"` // env: PB_BARK_SERVER_URL
+	DeviceKey string `mapstructure:"device_key" json:"device_key"` // env: PB_BARK_DEVICE_KEY
 }
 
 // SMTPConfig SMTP 邮件配置（P2；默认禁用）
