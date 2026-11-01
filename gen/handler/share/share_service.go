@@ -194,6 +194,12 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 		customCode = *req.CustomCode
 	}
 
+	// 口令型 E2E 信封密钥（契约 ShareTextReq.wrapped_key，optional）
+	wrappedKey := ""
+	if req.WrappedKey != nil {
+		wrappedKey = *req.WrappedKey
+	}
+
 	// 调用 service（使用转义后的安全文本；E2E 密文跳过转义，审核由 service 层跳过）
 	result, err := getShareService().ShareTextWithAuth(
 		ctx,
@@ -206,6 +212,7 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 		ownerIP,
 		encrypted,
 		customCode,
+		wrappedKey,
 	)
 	if err != nil {
 		resp.NewTypedError(c, err) // typed error（如审核 30013）按业务码透传
@@ -403,6 +410,16 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 		note = *req.Note
 	}
 
+	// 口令型 E2E 信封密钥（契约 ShareFileReq.wrapped_key=formData；契约绑定与表单
+	// 旁路双读，与 encryptedEarly 同款——multipart 下绑定可能不填）
+	wrappedKey := ""
+	if req.WrappedKey != nil {
+		wrappedKey = *req.WrappedKey
+	}
+	if wrappedKey == "" {
+		wrappedKey = c.DefaultPostForm("wrapped_key", "")
+	}
+
 	// 11. 构建分享请求（encrypted 于 4.5 处解析；E2E 密文分享）
 	shareReq := &shareService.ShareFileReq{
 		Channel:      "direct",
@@ -418,6 +435,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 		OwnerIP:      ownerIP,
 		FileHash:     fileHash,
 		Encrypted:    encryptedEarly,
+		WrappedKey:   wrappedKey,
 		CustomCode:   customCode,
 		Note:         note,
 	}
@@ -631,6 +649,11 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		DownloadURL: &downloadURL,
 		HasPassword: fileCode.RequireAuth,
 		Encrypted:   &fileCode.Encrypted,
+	}
+	// 口令型 E2E 信封密钥（契约 optional）：非空才下发（缺字段≠空串，前端按缺省处理旧分享）
+	if fileCode.WrappedKey != "" {
+		wk := fileCode.WrappedKey
+		data.WrappedKey = &wk
 	}
 	if token != "" {
 		data.Token = &token

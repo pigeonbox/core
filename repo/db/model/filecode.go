@@ -70,6 +70,10 @@ type FileCode struct {
 	// Encrypted 端到端客户端加密（P1 E2E）：true 时存储的是密文，密钥经分享链接
 	// #fragment 传递、从不落服务端；服务端零知识（预览/服务端 zip 打包不适用）
 	Encrypted bool `gorm:"default:false" json:"encrypted"`
+	// WrappedKey 口令型 E2E 的信封密钥（base64(0x01||salt16||nonce12||AES-256-GCM(KEK, content_key32)||tag16)，
+	// KEK=PBKDF2-HMAC-SHA256(口令, salt, 210000, 32)）。服务端不可解密，只存只发；
+	// 空 + Encrypted=true = 旧 URL-hash-key 形态（解密密钥在 URL fragment，不落库）。
+	WrappedKey string `gorm:"size:256"`
 
 	// 取件追踪（软删除字段 gorm.Model.DeletedAt 已自带）
 	ViewerIP       string     `gorm:"size:45" json:"viewer_ip"`      // 最近一次取件人IP
@@ -90,6 +94,10 @@ type FileCode struct {
 // 此前三处各写一份（app/anonymous 的 codeLength、app/share 的 pickupCodeLength、
 // app/mcp 的字面量 6）⇒ 任一处改长度即静默漂移（分享域兜底失效 / MCP 解析失效）。
 const PickupCodeLength = 6
+
+// IsPasswordWrapped 是否为「口令型 E2E」分享（wrapped_key 非空；解密需口令派生 KEK）。
+// 与口令保护正交：口令保护是取件门槛（IsPickupProtected），口令型 E2E 是解密门槛。
+func (f *FileCode) IsPasswordWrapped() bool { return f.WrappedKey != "" }
 
 // IsNotReady 判定记录是否为「未完成上传」的占位分享：既无文件路径、也非文本分享。
 //

@@ -52,7 +52,7 @@ type shareAPIAdapter struct{ svc *shareApp.Service }
 
 func (a shareAPIAdapter) CreateTextShare(ctx context.Context, text string, expireValue int, expireStyle string,
 	requireAuth bool, passwordHash string, userID *uint, ownerIP, customCode string) (ShareCreated, error) {
-	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, userID, ownerIP, false, customCode)
+	resp, err := a.svc.ShareTextWithAuth(ctx, text, expireValue, expireStyle, requireAuth, passwordHash, userID, ownerIP, false, customCode, "")
 	if err != nil {
 		return ShareCreated{}, err
 	}
