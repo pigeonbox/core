@@ -38,8 +38,9 @@ package bootstrap
 //
 // # 暴露面分层
 //
-//   - **公开面**（/api/config）：只放**匿名可见也无害**的三项
-//     （deployment_mode / public_url_set / setup_token_required）；
+//   - **公开面**（/api/config）：只放**匿名可见也无害**的四项
+//     （deployment_mode / public_url_set / setup_token_required /
+//     federation_delivery）；
 //   - **管理面**（/admin/diagnostics）：完整快照（含存储/Redis/DB/版本），
 //     见 bootstrap/diagnostics.go。
 
@@ -68,6 +69,14 @@ type CapabilitySnapshot struct {
 	SetupTokenRequired bool `json:"setup_token_required"`
 	// Federation 联邦是否启用（**生效值**：多副本下自动降级关闭）。
 	Federation bool `json:"federation"`
+	// FederationDelivery 跨站投递是否可用（联邦前台化，2026-11-01）。
+	//
+	// 语义 = **联邦启用** 且 **登记了至少一个可投递对端** ⇒ 两者缺一即不可用。
+	//
+	// ⚠️ 公开面下发这一位**不泄露对端身份**（访客只知道「本站支持跨站投递」，
+	// 不知道对端是谁、在哪）⇒ 无害；反之 storage_backend / redis_mode /
+	// federation 这几项会泄露部署形态，留在管理面。
+	FederationDelivery bool `json:"federation_delivery"`
 	// RedisMode redis | memory（redis.host 空 = 单机内存模式）。
 	RedisMode string `json:"redis_mode"`
 	// StorageBackend 当前存储后端（**生效值**，含远端构造失败后的降级结果）。
@@ -123,8 +132,21 @@ func capabilitySnapshot(ctx context.Context) CapabilitySnapshot {
 	}
 	if config != nil {
 		snap.DeploymentMode = config.NormalizedDeploymentMode()
-		snap.Federation = config.Federation.Enabled
 	}
+	// 联邦段取**生效值**（全局 conf 快照；多副本下 deployment.go 已就地降级
+	// 为 false，DB overlay 也会再次强制 ⇒ 两处口径一致）。
+	//
+	// ⚠️ 不用 bootstrap 的 config 变量：管理台保存配置后 DB overlay 替换的是
+	// 全局快照（copy-on-write 换指针），config 变量会**陈旧** ⇒ 会出现
+	// 「能力位说不可用、投递面却能用」的自相矛盾。
+	fed := effectiveFederationConfig()
+	snap.Federation = fed.Enabled
+	// 跨站投递能力位（联邦前台化，2026-11-01）：联邦启用 **且** 登记了至少
+	// 一个可投递对端 ⇒ 两者缺一即不可用。
+	//
+	// ⚠️ 对端列表与投递面（app/federation.DeliveryPeers，同一个真相源）同源
+	// ⇒ 不会出现「能力位说有、实际没有对端」的错位。
+	snap.FederationDelivery = fed.Enabled && len(fed.DeliveryPeers) > 0
 	snap.PublicURLSet = effectivePublicURL(ctx) != ""
 	snap.SetupTokenRequired = effectiveSetupToken() != ""
 
@@ -154,16 +176,40 @@ type PublicCapabilities struct {
 	PublicURLSet bool `json:"public_url_set"`
 	// SetupTokenRequired 首启建号是否需要令牌。
 	SetupTokenRequired bool `json:"setup_token_required"`
+	// FederationDelivery 跨站投递是否可用（联邦前台化，2026-11-01）。
+	//
+	// ⚠️ 只暴露「能不能用」，**不暴露对端身份**（谁、在哪）⇒ 访客看得见
+	// 功能入口，但看不到管理员配了对端。
+	FederationDelivery bool `json:"federation_delivery"`
 }
 
 // publicCapabilitySnapshot 公开面（/api/config）下发的能力子集。
 //
-// 只含**匿名可见也无害**的三项；存储后端/Redis 模式留在管理面诊断端点。
+// 只含**匿名可见也无害**的四项；存储后端/Redis 模式留在管理面诊断端点。
 func publicCapabilitySnapshot(ctx context.Context) PublicCapabilities {
 	full := capabilitySnapshot(ctx)
 	return PublicCapabilities{
 		DeploymentMode:     full.DeploymentMode,
 		PublicURLSet:       full.PublicURLSet,
 		SetupTokenRequired: full.SetupTokenRequired,
+		FederationDelivery: full.FederationDelivery,
 	}
+}
+
+// effectiveFederationConfig 联邦段的**生效值**。
+//
+// 真相源 = 全局 conf 快照（copy-on-write 原子换指针）：管理台保存配置后，
+// DB overlay 更新的是它（app/config/service.go 的 applySystemConfigOverlayLocked
+// 整段替换 next.Federation）⇒ bootstrap 的 config 变量是启动时的旧对象，
+// 读它会拿到陈旧的对端列表。
+//
+// 全局快照为 nil（单测 / bootstrap 极早期）时回退 bootstrap 的 config。
+func effectiveFederationConfig() conf.FederationConfig {
+	if g := conf.Snapshot(); g != nil {
+		return g.Federation
+	}
+	if config != nil {
+		return config.Federation
+	}
+	return conf.FederationConfig{}
 }

@@ -197,3 +197,58 @@ func TestDetectStaleP2PDirect(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "", stale.RegistryURL)
 }
+
+// TestValidateSystemConfigDeliveryPeers 可投递对端的写库前校验
+// （联邦前台化，2026-11-01）。
+//
+// 判据：
+//
+//	· url 必填、scheme 限 http/https；
+//	· token 必填（口令即权限，没口令的对端既无法被授权也无法被对方柜认）；
+//	· 私网对端必须显式 allow_private（按**对端粒度**，不动全局 SSRF 开关）。
+//
+// 负对照：把 validateSystemConfig 里的 delivery_peers 校验整段去掉 ⇒
+// 「空 token 被拒」「私网未放行被拒」两条断言必红。
+func TestValidateSystemConfigDeliveryPeers(t *testing.T) {
+	withGlobalConf(t)
+	base := func() *SystemConfig {
+		return &SystemConfig{P2P: &P2PSection{Federation: &conf.FederationConfig{
+			DeliveryPeers: []conf.FederationDeliveryPeer{
+				{URL: "https://b.example.com", Token: "shared-token", Name: "B 柜"},
+			},
+		}}}
+	}
+	if err := validateSystemConfig(base()); err != nil {
+		t.Fatalf("合法对端配置被拒: %v", err)
+	}
+
+	emptyURL := base()
+	emptyURL.P2P.Federation.DeliveryPeers[0].URL = ""
+	if err := validateSystemConfig(emptyURL); err == nil {
+		t.Fatal("空 url 应被拒")
+	}
+
+	badScheme := base()
+	badScheme.P2P.Federation.DeliveryPeers[0].URL = "ftp://b.example.com"
+	if err := validateSystemConfig(badScheme); err == nil {
+		t.Fatal("非 http/https 的 url 应被拒")
+	}
+
+	emptyToken := base()
+	emptyToken.P2P.Federation.DeliveryPeers[0].Token = "  "
+	if err := validateSystemConfig(emptyToken); err == nil {
+		t.Fatal("空 token 应被拒（口令即权限）")
+	}
+
+	// 私网对端：未显式 allow_private ⇒ 拒（127.0.0.1 落在私网）
+	privatePeer := base()
+	privatePeer.P2P.Federation.DeliveryPeers[0].URL = "http://127.0.0.1:12345"
+	if err := validateSystemConfig(privatePeer); err == nil {
+		t.Fatal("私网对端未开启 allow_private 应被拒")
+	}
+	// 同一对端显式 allow_private ⇒ 放行（只校验 scheme/host）
+	privatePeer.P2P.Federation.DeliveryPeers[0].AllowPrivate = true
+	if err := validateSystemConfig(privatePeer); err != nil {
+		t.Fatalf("allow_private 的私网对端应被放行: %v", err)
+	}
+}

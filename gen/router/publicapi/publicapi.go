@@ -23,6 +23,8 @@ func Register(r *server.Hertz) {
 			_v1 := _api.Group("/v1", _v1Mw()...)
 			{
 				_federation := _v1.Group("/federation", _federationMw()...)
+				_federation.POST("/deliver", append(_federationdeliverMw(), publicapi.FederationDeliver)...)
+				_federation.POST("/delivery-slot", append(_federationdeliveryslotMw(), publicapi.FederationDeliverySlot)...)
 				_federation.GET("/resolve", append(_federationresolveMw(), publicapi.FederationResolve)...)
 			}
 			{

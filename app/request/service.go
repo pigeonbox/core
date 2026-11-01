@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/oekit/kitx/uidgen"
@@ -25,6 +26,15 @@ import (
 const (
 	defaultRecvDays  = 7
 	defaultRecvCount = -1 // 无限次数
+)
+
+// 跨站投递槽位（联邦前台化，2026-11-01）的参数。
+const (
+	// FederationSlotTTL 槽位有效期：铸出后立即用于转发 ⇒ 短 TTL
+	//（不留长命窗口；过期后链接自然失效）。
+	FederationSlotTTL = 2 * time.Hour
+	// federationSlotMaxFiles 单次投递文件数上限（与访客投递端点的硬上限一致）。
+	federationSlotMaxFiles = 100
 )
 
 // ShareResult 投递落地结果（调用方需要的最小字段）。
@@ -123,6 +133,67 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateReq) (*mode
 		return nil, err
 	}
 	return fr, nil
+}
+
+// CreateFederationSlot 铸一个「访客投递槽位」（联邦前台化，2026-11-01）。
+//
+// 语义：对面柜（A 柜）请求在本站（B 柜）铸一个投递槽位，拿到 token 后用它
+// 往本站投递文件（POST /api/v1/request/:token/upload）⇒ 落成分享后由**本站**
+// 的 share 域铸 6 位取件码 ⇒ **码归属 = 本站**（取件人在本站取件）。
+//
+// 属主 = 0（无本地用户）⇒ 落成的分享是本站的**匿名分享**（归属天然正确：
+// 文件归本站柜子，不冒充某个用户）。
+//
+// ⚠️ 有效期**不走** Create 的过期样式白名单（utils.CheckExpireStyleAllowed）：
+// 槽位是内部通道（不是用户可选的分享过期样式）⇒ 管理员把 allowed_expire_styles
+// 收窄成 ["day","week"] 时，铸槽位不该跟着失败。
+func (s *Service) CreateFederationSlot(ctx context.Context, title, fromName, note string) (*model.FileRequest, error) {
+	expiredAt := time.Now().Add(FederationSlotTTL)
+	fr := &model.FileRequest{
+		Token:     genToken(),
+		Title:     federationSlotTitle(title, fromName, note),
+		UserID:    0, // 无本地属主（联邦投递槽位）
+		MaxFiles:  federationSlotMaxFiles,
+		MaxBytes:  0, // 不限（由本站的存储配额/闸门在落盘时裁决）
+		ExpiredAt: &expiredAt,
+	}
+	if err := s.reqRepo.Create(ctx, fr); err != nil {
+		return nil, err
+	}
+	return fr, nil
+}
+
+// federationSlotTitle 拼槽位的展示标题（访客在投递页可见）。
+//
+// 投递链接模型只有 Title 一个可写字段 ⇒ 发起柜名与留言并进标题（不静默丢弃）。
+func federationSlotTitle(title, fromName, note string) string {
+	parts := make([]string, 0, 3)
+	if v := strings.TrimSpace(title); v != "" {
+		parts = append(parts, v)
+	}
+	if v := strings.TrimSpace(fromName); v != "" {
+		parts = append(parts, "来自 "+v)
+	}
+	if v := strings.TrimSpace(note); v != "" {
+		parts = append(parts, v)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "跨站投递")
+	}
+	return truncateTitle(strings.Join(parts, " · "), 200)
+}
+
+// truncateTitle 按**字符**（不是字节）截断标题（避免切坏多字节 UTF-8）。
+func truncateTitle(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if maxRunes <= 0 {
+		return ""
+	}
+	rs := []rune(s)
+	if len(rs) <= maxRunes {
+		return s
+	}
+	return string(rs[:maxRunes])
 }
 
 // PublicView 访客侧链接信息

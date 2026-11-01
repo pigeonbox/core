@@ -23,7 +23,7 @@ func TestPublicCapabilitySnapshot_OnlyPublicSafeFields(t *testing.T) {
 	resetSetupAutoToken(t)
 	t.Setenv(setupTokenEnv, "")
 	t.Setenv(setupTokenAutoEnv, "")
-	withTestConfig(t, &conf.AppConfiguration{
+	withGlobalTestConfig(t, &conf.AppConfiguration{
 		App:        conf.AppConfig{DataPath: t.TempDir()},
 		Deployment: conf.DeploymentConfig{Mode: conf.DeployModePublic},
 		Redis:      conf.RedisConfig{Host: "redis.internal"},
@@ -37,19 +37,59 @@ func TestPublicCapabilitySnapshot_OnlyPublicSafeFields(t *testing.T) {
 	assert.False(t, full.Federation, "联邦不在公开快照里（顶层 federationEnabled 才是它的家）")
 	assert.True(t, full.RedisMode == "redis", "完整快照才带 Redis 模式")
 
-	// 公开面下发的 JSON **恰好三个键** —— 管理面事实（Redis 模式/存储后端）
+	// 公开面下发的 JSON **恰好四个键** —— 管理面事实（Redis 模式/存储后端）
 	// 连空串形态都不许泄出去（`redis_mode:""` 既不是事实也不是可辨识的「未知」）。
 	raw, err := json.Marshal(pub)
 	require.NoError(t, err)
 	var keys map[string]any
 	require.NoError(t, json.Unmarshal(raw, &keys))
-	assert.Len(t, keys, 3, "公开能力段只允许三个键：%s", string(raw))
-	for _, k := range []string{"deployment_mode", "public_url_set", "setup_token_required"} {
+	assert.Len(t, keys, 4, "公开能力段只允许四个键：%s", string(raw))
+	for _, k := range []string{"deployment_mode", "public_url_set", "setup_token_required", "federation_delivery"} {
 		assert.Contains(t, keys, k)
 	}
 	assert.NotContains(t, keys, "redis_mode")
 	assert.NotContains(t, keys, "storage_backend")
 	assert.NotContains(t, keys, "federation")
+}
+
+// TestCapabilitySnapshot_FederationDelivery 跨站投递能力位（联邦前台化，2026-11-01）：
+// 语义 = **联邦启用** 且 **登记了至少一个可投递对端** ⇒ 两者缺一即不可用。
+//
+// 负对照（必须能变红）：把 capabilitySnapshot 里的 `&& len(fed.DeliveryPeers) > 0`
+// 去掉 ⇒ 「没登记对端也报可用」这条断言必红。
+func TestCapabilitySnapshot_FederationDelivery(t *testing.T) {
+	resetSetupAutoToken(t)
+	withGlobalTestConfig(t, &conf.AppConfiguration{})
+
+	// 联邦关 ⇒ 不可用（哪怕登记了对端）
+	withGlobalTestConfig(t, &conf.AppConfiguration{
+		Federation: conf.FederationConfig{
+			DeliveryPeers: []conf.FederationDeliveryPeer{{URL: "https://b.example.com", Token: "t"}},
+		},
+	})
+	assert.False(t, capabilitySnapshot(context.Background()).FederationDelivery,
+		"联邦未启用 ⇒ 跨站投递不可用")
+
+	// 联邦开但没登记对端 ⇒ 不可用（没有可投递的目标）
+	withGlobalTestConfig(t, &conf.AppConfiguration{
+		Federation: conf.FederationConfig{Enabled: true},
+	})
+	assert.False(t, capabilitySnapshot(context.Background()).FederationDelivery,
+		"未登记任何可投递对端 ⇒ 跨站投递不可用")
+
+	// 两者齐备 ⇒ 可用
+	withGlobalTestConfig(t, &conf.AppConfiguration{
+		Federation: conf.FederationConfig{
+			Enabled: true,
+			DeliveryPeers: []conf.FederationDeliveryPeer{
+				{URL: "https://b.example.com", Token: "t"},
+			},
+		},
+	})
+	assert.True(t, capabilitySnapshot(context.Background()).FederationDelivery,
+		"联邦启用 + 登记了对端 ⇒ 跨站投递可用")
+	assert.True(t, publicCapabilitySnapshot(context.Background()).FederationDelivery,
+		"公开面必须下发这一位（访客功能：前端据此决定是否显示投递入口）")
 }
 
 func TestCapabilitySnapshot_DeploymentMode(t *testing.T) {

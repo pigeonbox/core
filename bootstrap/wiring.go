@@ -202,6 +202,11 @@ func initThriftIDLServices(database *gorm.DB) {
 	customHandler.SetRequestService(requestSvcInstance)
 	requestgenhandler.SetRequestService(requestSvcInstance)
 
+	// 2.4.1.1 跨站投递出站客户端（联邦前台化，2026-11-01）：A 柜往 B 柜铸槽位 +
+	// 流式转发文件。装配点显式注入（进程级单例 ⇒ 连接池复用；handler 侧也留了
+	// 惰性默认构造兜底）。
+	customHandler.SetDeliveryClient(federation.NewDeliveryClient())
+
 	// 2.4.2 P2P 联邦（spec 2026-10-14 §6）：装配收口 fedRT——启动种子（env/yaml，
 	// RestoreAdminSettings 已 overlay DB 值）与 admin 后台热切换同一条路径。
 	// 初始化失败降级为非联邦模式；resolve 代理路由恒注册（customizedRegister），

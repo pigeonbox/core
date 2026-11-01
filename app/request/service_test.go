@@ -3,6 +3,7 @@ package request
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -134,4 +135,35 @@ func TestGetPublic_UnknownToken(t *testing.T) {
 	svc, _ := newReqTestService(t)
 	_, err := svc.GetPublic(context.Background(), "nosuchtoken")
 	require.Error(t, err)
+}
+
+// TestCreateFederationSlot 跨站投递槽位（联邦前台化，2026-11-01）：
+//
+//	· token = 32 hex（**寄件码 token / 投递链接令牌**，不是 6 位取件码——此时
+//	  还没有文件，对方柜不可能铸出取件码）；
+//	· 属主 = 0（无本地用户 ⇒ 落成的是本站的匿名分享，归属天然正确）；
+//	· 短 TTL（约 2 小时：铸出后立即用于转发，不留长命窗口）；
+//	· 发起柜名与留言并进标题（投递链接模型只有 Title 一个可写字段 ⇒ 不静默丢弃）。
+//
+// 负对照：把 UserID 设成 1（或把标题里的 from_name/note 丢掉）⇒ 对应断言必红。
+func TestCreateFederationSlot(t *testing.T) {
+	svc, _ := newReqTestService(t)
+	ctx := context.Background()
+
+	fr, err := svc.CreateFederationSlot(ctx, "标题", "A 柜", "留言")
+	require.NoError(t, err)
+	assert.Len(t, fr.Token, 32, "投递令牌是 32 位 hex（不是 6 位取件码）")
+	assert.Equal(t, uint(0), fr.UserID, "槽位无本地属主（落成匿名分享）")
+	require.NotNil(t, fr.ExpiredAt)
+	assert.WithinDuration(t, time.Now().Add(FederationSlotTTL), *fr.ExpiredAt, time.Minute,
+		"槽位是短 TTL（过期后链接自然失效）")
+	assert.Contains(t, fr.Title, "标题")
+	assert.Contains(t, fr.Title, "A 柜")
+	assert.Contains(t, fr.Title, "留言")
+
+	// 空参数 ⇒ 仍有标题（不留空白标题）
+	fr2, err := svc.CreateFederationSlot(ctx, "", "", "")
+	require.NoError(t, err)
+	assert.NotEmpty(t, fr2.Title)
+	assert.NotEqual(t, fr.Token, fr2.Token, "每次铸槽位都是新 token")
 }

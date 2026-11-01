@@ -84,7 +84,7 @@ func (r *federationRuntime) apply(cfg conf.FederationConfig) error {
 		return fmt.Errorf("public_url 为空且无法从站点配置推断可用对外地址（当前 %q），请显式填写本站对外地址", eff.PublicURL)
 	}
 	// 同配置重复保存：短路，不触发 deregister/register 抖动（评审 P2-3）
-	if r.current != nil && cfg == r.cfg {
+	if r.current != nil && federationRuntimeEqual(cfg, r.cfg) {
 		return nil
 	}
 	svc, err := r.start(eff, r.nodeName)
@@ -109,6 +109,20 @@ func (r *federationRuntime) apply(cfg conf.FederationConfig) error {
 		zap.String("public_url", eff.PublicURL),
 		zap.String("node_id", svc.NodeID()))
 	return nil
+}
+
+// federationRuntimeEqual 比较两次联邦配置是否**运行态等价**。
+//
+// ⚠️ 只比运行态相关字段：
+//   - 不能整体 ==（FederationConfig 现含 DeliveryPeers 切片 ⇒ 不可比较）；
+//   - 投递对端（DeliveryPeers，2026-11-01）**不参与**联邦运行时（它属于跨站
+//     投递面）⇒ 增删对端不该触发联邦节点的 deregister/register 抖动。
+func federationRuntimeEqual(a, b conf.FederationConfig) bool {
+	return a.Enabled == b.Enabled &&
+		a.RegistryURL == b.RegistryURL &&
+		a.PublicURL == b.PublicURL &&
+		a.NodeKeyPath == b.NodeKeyPath &&
+		a.AnnounceMinEntropyBits == b.AnnounceMinEntropyBits
 }
 
 // stopLocked 停并摘注入点（调用方持锁）。

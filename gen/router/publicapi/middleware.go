@@ -80,3 +80,13 @@ func _sharemetadataMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _federationdeliverMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _federationdeliveryslotMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

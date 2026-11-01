@@ -139,6 +139,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"POST /api/v1/share/multi-direct", "POST /api/v1/share/multi-bind",
 		// ===== P2P 联邦解析代理（M2，2026-10-26 IDL 化：publicapi 域生成路由；未启用时 available:false）=====
 		"GET /api/v1/federation/resolve",
+		// ===== 跨站投递（联邦前台化，2026-11-01；publicapi 域生成路由；公开面）=====
+		"POST /api/v1/federation/delivery-slot", "POST /api/v1/federation/deliver",
 		// ===== 寄件码/反向收件（P2 手写）=====
 		"POST /api/v1/user/requests", "GET /api/v1/user/requests",
 		"DELETE /api/v1/user/requests/:token",

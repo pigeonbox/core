@@ -283,12 +283,24 @@ type requestShareGateway struct{ svc *shareService.Service }
 
 func (g requestShareGateway) CreateFromFileEntries(ctx context.Context, req *requestApp.ShareCreateRequest) (*requestApp.ShareResult, error) {
 	ownerID := req.OwnerID
+	// OwnerID = 0 ⇒ **无属主**（联邦投递槽位，2026-11-01）⇒ 落成**匿名分享**
+	// （分享归本站柜子，不冒充某个用户；6 位取件码仍由本站 share 域铸）。
+	//
+	// ⚠️ 不能把 &0 当 user_id 传下去：那是「属于不存在的 0 号用户」的语义
+	// （用户列表/配额/统计全按 0 号用户算 ⇒ 串账）。
+	var userID *uint
+	uploadType := "authenticated"
+	if ownerID != 0 {
+		userID = &ownerID
+	} else {
+		uploadType = "anonymous"
+	}
 	resp, err := g.svc.CreateMultiFileShare(ctx, &shareService.MultiShareReq{
 		Entries:      req.Entries,
 		ExpiredAt:    req.ExpiredAt,
 		ExpiredCount: req.ExpiredCount,
-		UserID:       &ownerID,
-		UploadType:   "authenticated",
+		UserID:       userID,
+		UploadType:   uploadType,
 		OwnerIP:      req.OwnerIP,
 		Channel:      req.Channel,
 	})

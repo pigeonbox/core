@@ -226,6 +226,31 @@ func validateSystemConfig(cfg *SystemConfig) error {
 		if f.AnnounceMinEntropyBits < 0 || f.AnnounceMinEntropyBits > 256 {
 			return errors.New("p2p.federation.announce_min_entropy_bits out of range (0-256)")
 		}
+		// 可投递对端（联邦前台化，2026-11-01）：URL 形态 + 口令必填 +
+		// 私网**按对端粒度**放行（allow_private=true 的对端跳过私网判定，
+		// 但 scheme/host 照样校验）。
+		//
+		// ⚠️ 不用全局 security.ssrf.allow_private_networks 兜底：全局一开 =
+		// 所有出站点位都放行私网（面太大）；这里只放行管理员**明确配的那几个**。
+		for i, peer := range f.DeliveryPeers {
+			u := strings.TrimSpace(peer.URL)
+			if u == "" {
+				return fmt.Errorf("p2p.federation.delivery_peers[%d].url 不能为空", i)
+			}
+			if strings.TrimSpace(peer.Token) == "" {
+				// 口令即权限：没有口令的对端既无法被授权，也无法被对方柜认。
+				return fmt.Errorf("p2p.federation.delivery_peers[%d].token 不能为空（口令即权限）", i)
+			}
+			if peer.AllowPrivate {
+				if err := security.ValidateEndpointURLAllowPrivate(u); err != nil {
+					return fmt.Errorf("p2p.federation.delivery_peers[%d].url 校验失败: %w", i, err)
+				}
+				continue
+			}
+			if err := security.ValidateEndpointURL(u); err != nil {
+				return fmt.Errorf("p2p.federation.delivery_peers[%d].url 校验失败: %w", i, err)
+			}
+		}
 	}
 	return nil
 }
