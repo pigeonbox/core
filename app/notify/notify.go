@@ -590,6 +590,10 @@ func (s *Service) dispatchWebhook(ctx context.Context, userID uint, title, conte
 type TelegramConfig struct {
 	BotToken string
 	ChatID   string
+	// apiBase Bot API 基址（空 = defaultTelegramAPIBase；**仅测试**覆写指向
+	// httptest）。host 由代码钉死 api.telegram.org，未导出 ⇒ 用户配置/装配
+	// 都改不到它；按配置快照携带（不是可变全局），热重建/并发下无 race。
+	apiBase string
 }
 
 // BarkConfig Bark 渠道配置（server_url + device_key 均非空 = 启用）。
@@ -598,10 +602,9 @@ type BarkConfig struct {
 	DeviceKey string
 }
 
-// telegramAPIBase Telegram Bot API 基址——目标 host **固定** api.telegram.org，
-// 不可由用户输入（token/chat_id 是配置值，不构成出站 URL 注入）；
-// 仅测试覆写指向 httptest，生产恒为默认值。
-var telegramAPIBase = "https://api.telegram.org"
+// defaultTelegramAPIBase Telegram Bot API 基址——目标 host **固定**
+// api.telegram.org，不可由用户输入（token/chat_id 是配置值，不构成出站 URL 注入）。
+const defaultTelegramAPIBase = "https://api.telegram.org"
 
 // SetTelegram 注入 Telegram 渠道配置（bootstrap 从 notify.telegram 段构建；
 // nil 或缺任一字段 = 禁用/卸载）。运行期热重建会调用 ⇒ 原子换指针
@@ -611,10 +614,9 @@ func (s *Service) SetTelegram(cfg *TelegramConfig) {
 		s.telegramCfg.Store(nil)
 		return
 	}
-	c := TelegramConfig{
-		BotToken: strings.TrimSpace(cfg.BotToken),
-		ChatID:   strings.TrimSpace(cfg.ChatID),
-	}
+	c := *cfg // 整体拷贝（保留 apiBase 测试缝），随后归一化
+	c.BotToken = strings.TrimSpace(c.BotToken)
+	c.ChatID = strings.TrimSpace(c.ChatID)
 	if c.BotToken == "" || c.ChatID == "" {
 		s.telegramCfg.Store(nil) // 缺任一字段 = 未启用
 		return
@@ -643,7 +645,11 @@ func (s *Service) SetBark(cfg *BarkConfig) {
 // telegramPushURL 拼 Telegram 推送目标（host 固定 api.telegram.org，不可由
 // 用户输入；token/chat_id 是配置值，不构成出站 URL 注入）。
 func telegramPushURL(cfg *TelegramConfig) string {
-	return fmt.Sprintf("%s/bot%s/sendMessage", telegramAPIBase, cfg.BotToken)
+	base := cfg.apiBase
+	if base == "" {
+		base = defaultTelegramAPIBase
+	}
+	return fmt.Sprintf("%s/bot%s/sendMessage", base, cfg.BotToken)
 }
 
 // barkPushURL 拼 Bark 推送目标（server_url + PathEscape(device_key)；

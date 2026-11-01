@@ -102,12 +102,11 @@ func TestExternal_FanOut_AllChannelsReceive(t *testing.T) {
 	hook, hookRec := newRecordingServer(t, http.StatusOK)
 	tg, tgRec := newRecordingServer(t, http.StatusOK)
 	bark, barkRec := newRecordingServer(t, http.StatusOK)
-	useTelegramBase(t, tg.URL)
 	allowPrivatePush(t)
 
 	svc := NewService(nil)
 	svc.SetWebhookURL(hook.URL)
-	svc.SetTelegram(&TelegramConfig{BotToken: "tok", ChatID: "42"})
+	svc.SetTelegram(&TelegramConfig{BotToken: "tok", ChatID: "42", apiBase: tg.URL})
 	svc.SetBark(&BarkConfig{ServerURL: bark.URL, DeviceKey: "devkey"})
 
 	payload := map[string]interface{}{"event": "notify.created", "title": "标题"}
@@ -145,12 +144,11 @@ func TestExternal_FanOut_ChannelFailureIsolated(t *testing.T) {
 			hook, hookRec := newRecordingServer(t, status("webhook"))
 			tg, tgRec := newRecordingServer(t, status("telegram"))
 			bark, barkRec := newRecordingServer(t, status("bark"))
-			useTelegramBase(t, tg.URL)
 			allowPrivatePush(t)
 
 			svc := NewService(nil)
 			svc.SetWebhookURL(hook.URL)
-			svc.SetTelegram(&TelegramConfig{BotToken: "tok", ChatID: "42"})
+			svc.SetTelegram(&TelegramConfig{BotToken: "tok", ChatID: "42", apiBase: tg.URL})
 			svc.SetBark(&BarkConfig{ServerURL: bark.URL, DeviceKey: "devkey"})
 
 			payload := map[string]interface{}{"event": "notify.created"}
@@ -336,12 +334,4 @@ func allowPrivatePush(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() { conf.SetGlobalConfig(prev) })
-}
-
-// useTelegramBase 测试期把 Telegram API 基址指向 httptest（生产恒为默认值）。
-func useTelegramBase(t *testing.T, base string) {
-	t.Helper()
-	prev := telegramAPIBase
-	telegramAPIBase = base
-	t.Cleanup(func() { telegramAPIBase = prev })
 }
