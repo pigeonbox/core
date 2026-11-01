@@ -122,6 +122,9 @@ type CodeMeta struct {
 	// IsText 文本分享标记（Retrieve 时按 DB 回填，不进 KV meta 串）。
 	// 文本分享取件后前端跳详情页展示（结果页无文本渲染形态），handler 据此回传 share_code。
 	IsText bool
+	// WrappedKey 口令型 E2E 信封密钥（Retrieve 时按 DB 回填，不进 KV meta 串）。
+	// 取件结果页据此提示「需要口令解密」并走 unwrap 流程（core#30）。
+	WrappedKey string
 }
 
 // GenerateCode 生成 6 位取件码：落库 file_codes.pickup_code（真相源，唯一索引
@@ -256,6 +259,9 @@ func enrichMetaFromDB(meta *CodeMeta, fc *model.FileCode) {
 		}
 	}
 	meta.RequireAuth = fc.RequireAuth
+	if meta.WrappedKey == "" {
+		meta.WrappedKey = fc.WrappedKey
+	}
 }
 
 // Retrieve 按取件码取件（校验 + 扣减次数，DB 为准）。

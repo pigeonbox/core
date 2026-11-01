@@ -106,6 +106,7 @@ type multiCommonParams struct {
 	RequireAuth  bool
 	PasswordHash string
 	Encrypted    bool   // E2E：客户端已加密（跳过魔数复检，密文头为随机字节）
+	WrappedKey   string // 口令型 E2E 信封密钥（core#30；非空⇒铸 6 位取件码）
 	CustomCode   string // 自定义取件码（P3；登录用户专属）
 	Note         string // 文件备注（可空，取件页展示；2026-10-12 #489）
 	UserID       *uint
@@ -122,6 +123,7 @@ func parseMultiCommonFromJSON(ctx context.Context, c *app.RequestContext) *multi
 		RequireAuth  bool   `json:"require_auth"`
 		Password     string `json:"password"`
 		Encrypted    bool   `json:"encrypted"`
+		WrappedKey   string `json:"wrapped_key"`
 		CustomCode   string `json:"custom_code"`
 		Note         string `json:"note"`
 		EntriesEmpty bool   `json:"-"`
@@ -133,7 +135,7 @@ func parseMultiCommonFromJSON(ctx context.Context, c *app.RequestContext) *multi
 		})
 		return nil
 	}
-	return finishMultiCommon(ctx, c, body.ExpireValue, body.ExpireStyle, body.RequireAuth, body.Password, body.Encrypted, body.CustomCode, body.Note)
+	return finishMultiCommon(ctx, c, body.ExpireValue, body.ExpireStyle, body.RequireAuth, body.Password, body.Encrypted, body.WrappedKey, body.CustomCode, body.Note)
 }
 
 // parseMultiCommonFromForm multipart 表单版本
@@ -143,13 +145,14 @@ func parseMultiCommonFromForm(ctx context.Context, c *app.RequestContext) *multi
 	requireAuth := c.DefaultPostForm("require_auth", "false") == "true"
 	password := c.DefaultPostForm("password", "")
 	encrypted := c.DefaultPostForm("encrypted", "false") == "true"
+	wrappedKey := c.DefaultPostForm("wrapped_key", "")
 	customCode := c.DefaultPostForm("custom_code", "")
 	note := c.DefaultPostForm("note", "")
-	return finishMultiCommon(ctx, c, expireValue, expireStyle, requireAuth, password, encrypted, customCode, note)
+	return finishMultiCommon(ctx, c, expireValue, expireStyle, requireAuth, password, encrypted, wrappedKey, customCode, note)
 }
 
 // finishMultiCommon 公共参数收尾：样式白名单/密码哈希/身份
-func finishMultiCommon(ctx context.Context, c *app.RequestContext, expireValue int, expireStyle string, requireAuth bool, password string, encrypted bool, customCode string, note string) *multiCommonParams {
+func finishMultiCommon(ctx context.Context, c *app.RequestContext, expireValue int, expireStyle string, requireAuth bool, password string, encrypted bool, wrappedKey string, customCode string, note string) *multiCommonParams {
 	if err := utils.CheckExpireStyleAllowed(expireStyle); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{
 			"code":    errcode.CodeInvalidParam,
@@ -162,6 +165,7 @@ func finishMultiCommon(ctx context.Context, c *app.RequestContext, expireValue i
 		ExpireStyle: expireStyle,
 		RequireAuth: requireAuth,
 		Encrypted:   encrypted,
+		WrappedKey:  wrappedKey,
 		Note:        note,
 		OwnerIP:     middleware.ClientIP(c),
 	}
@@ -274,6 +278,7 @@ func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 		OwnerIP:      p.OwnerIP,
 		Channel:      "direct",
 		Encrypted:    p.Encrypted,
+		WrappedKey:   p.WrappedKey,
 		CustomCode:   p.CustomCode,
 		Note:         p.Note,
 	})
@@ -450,6 +455,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 		OwnerIP:      p.OwnerIP,
 		Channel:      "chunk",
 		Encrypted:    p.Encrypted,
+		WrappedKey:   p.WrappedKey,
 		CustomCode:   p.CustomCode,
 		Note:         p.Note,
 	})

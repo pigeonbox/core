@@ -270,6 +270,11 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 		shareCode := meta.ShareCode
 		data.ShareCode = &shareCode
 	}
+	// 口令型 E2E 信封密钥（契约 optional）：非空才下发（core#30）
+	if meta.WrappedKey != "" {
+		wk := meta.WrappedKey
+		data.WrappedKey = &wk
+	}
 	resp.Success(c, data)
 }
 

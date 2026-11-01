@@ -151,7 +151,7 @@ func TestIDLizedRouteResponseShape(t *testing.T) {
 		// expired_at 必须是**显式 null**（不是省略、不是 ""）。
 		assert.ElementsMatch(t, []string{
 			"code", "type", "size", "has_password", "expired_at",
-			"expired_count", "used_count", "encrypted", "file_count", "created_at",
+			"expired_count", "used_count", "encrypted", "has_wrapped_key", "file_count", "created_at",
 		}, keysOf(data), "取件元信息字段集不符：%s", string(top["data"]))
 		// 契约（publicapi.ShareMetadataData）↔ 线上形状：required 一个不少、
 		// 暗字段一个不多。name 是 optional ⇒ 文本分享缺席不算违规。
