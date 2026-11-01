@@ -44,7 +44,9 @@ IDL_SRC="${IDL_DIR:-$(pwd)/../contracts/idl}"
 
 # hz 插件按 out_dir 相对解析 IDL，拷贝进仓内临时目录再跑
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+OK=0
+# shellcheck disable=SC2154  # rc 在 trap 体内赋值，shellcheck 看不见
+trap 'rc=$?; rm -rf "$WORK"; if [ "$rc" -ne 0 ]; then exit $rc; fi; if [ "${OK:-0}" != 1 ]; then exit 1; fi; exit 0' EXIT
 cp -R "$IDL_SRC" "$WORK/idl"
 
 # CHECK=1：仓库文件一律不落盘，生成进沙箱。沙箱只快照 gen/handler——hz 的"新增
@@ -177,6 +179,7 @@ if [ "$CHECK" = "1" ]; then
     echo "    ⇒ 还原后请核对该文件的手写改动是否还在；不在则从 git 历史取回后再提交。"
   fi
   echo "✓ CHECK=1 通过：gen/ 与 IDL 再生成结果一致（本次未改动任何仓库文件）"
+  OK=1
   exit 0
 fi
 
@@ -203,3 +206,4 @@ fi
 echo "✓ 已再生成 gen/router/。自检："
 echo "  git diff gen/router/   # 应仅排序/嵌套风格或真实 IDL 变更；middleware.go 不应出现"
 echo "  go test ./bootstrap/   # 路由守卫（TestRegisteredRoutesMatchContract 等）必须绿"
+OK=1
