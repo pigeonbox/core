@@ -2,6 +2,7 @@ package share
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 
@@ -20,7 +21,13 @@ import (
 //   - wrapped_key 服务端零知识：只存只发，不解析不解密
 // =====================================================================
 
-const testWrappedKey = "AQ==" + "AAAAAAAAAAAAAAAAAAAAAA" // 形状不校验，服务端只存只发
+// testWrappedKey 是**形状合法**的标准 base64 信封（服务端只校验编码与长度，
+// 不解析内容 ⇒ 随便一段合法字节即可）。
+var testWrappedKey = base64.StdEncoding.EncodeToString(func() []byte {
+	raw := make([]byte, 77)
+	raw[0] = 0x01
+	return raw
+}())
 
 func TestShareTextPasswordWrappedMintsPickupCode(t *testing.T) {
 	svc, _, _, _ := newTestService(t)

@@ -371,6 +371,10 @@ func (s *Service) createWithRetry(ctx context.Context, build func(code string) *
 
 // ShareText 分享文本
 func (s *Service) ShareText(ctx context.Context, req *ShareTextReq) (*ShareResp, error) {
+	// 口令型 E2E 信封密钥的形状校验（core#30 补缺）：防存储/传输放大 + 跨库行为不一致
+	if err := validateWrappedKeyField(req.WrappedKey); err != nil {
+		return nil, err
+	}
 
 	fileCode, err := s.createWithCode(ctx, req.CustomCode, func(code string) *model.FileCode {
 		return &model.FileCode{
@@ -616,6 +620,10 @@ func (s *Service) ShareFile(ctx context.Context, req *ShareFileReq) (*ShareResp,
 // CreateShare 创建分享记录（ShareFile 的语义化别名，便于其他 service 调用）
 // 行为：单用户上传上限检查 → 存储配额检查 → 生成 code → 写 file_codes 表 → 返回 share_code / url
 func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareResp, error) {
+	// 口令型 E2E 信封密钥的形状校验（core#30 补缺）
+	if err := validateWrappedKeyField(req.WrappedKey); err != nil {
+		return nil, err
+	}
 
 	// 单用户单次上传上限 + 存储配额强制执行
 	if err := s.checkUploadCaps(ctx, req.UserID, req.Size); err != nil {
