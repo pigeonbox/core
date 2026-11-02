@@ -1252,6 +1252,17 @@ func toUserShareItemData(f *model.FileCode) *sharemodel.UserShareItemData {
 		// 文件分享的 Text 存原始文件名（非空），须用 IsTextShare 判定（Text 非空且无文件路径）
 		IsTextShare: isTextShare,
 	}
+	// 是否端到端加密（2026-11-02，core#30 配套）：消费端没有解密能力时
+	// 不能假装取到了明文 ⇒ 桌面端据此标注「端到端加密，请在浏览器端取件」。
+	// ⚠️ 与取件码的关系：口令型 E2E **有**取件码（码+口令两因子），
+	// 旧 URL-hash-key 形态没有 ⇒ 出现在待取列表里的 encrypted 必然是口令型。
+	//
+	// optional 字段：**只在为真时下发**（与同文件的 PickupCode / Note 同款）
+	// ⇒ 老消费端读不到该键时按「不是密文」处理，向后兼容。
+	if f.Encrypted {
+		encrypted := true
+		item.Encrypted = &encrypted
+	}
 	if f.PickupCode != nil {
 		item.PickupCode = f.PickupCode
 	}

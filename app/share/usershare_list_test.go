@@ -49,3 +49,26 @@ func TestToUserShareListItemClassification(t *testing.T) {
 		assert.Equal(t, "path-fallback.txt", item.FileName)
 	})
 }
+
+// 守卫测试：我的分享列表项的 **encrypted** 标志（2026-11-02，core#30 配套）。
+//
+// 为什么要有这个字段：core#30 的口令型 E2E 分享**有** 6 位取件码（码+口令两因子）
+// ⇒ 桌面端一等取件端会把它列入待取，但它**没有解密能力**⇒ 若列表不告知
+// 「这是密文」，用户点进去拿到的是一坨解不开的密文。
+//
+// 口径：optional 字段 ⇒ **只在为真时下发**（明文分享不下发该键）
+// ⇒ 老消费端读不到时按「不是密文」处理，向后兼容。
+func TestToUserShareListItemEncrypted(t *testing.T) {
+	t.Run("明文分享不下发 encrypted 键", func(t *testing.T) {
+		item := toUserShareItemData(&model.FileCode{Code: "PLAIN01", Text: "普通内容"})
+		assert.Nil(t, item.Encrypted, "明文分享不应下发 encrypted（缺键 = 不是密文）")
+	})
+
+	t.Run("口令型 E2E 下发 encrypted=true", func(t *testing.T) {
+		item := toUserShareItemData(&model.FileCode{
+			Code: "ENC0001", Text: "ciphertext", Encrypted: true,
+		})
+		assert.NotNil(t, item.Encrypted)
+		assert.True(t, *item.Encrypted)
+	})
+}
