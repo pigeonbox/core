@@ -40,7 +40,6 @@ func TestUpdateConfigPartialPreservesValueSections(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Base)
 	require.Equal(t, "PigeonBox", got.Base.Name)
-	require.Equal(t, 8888, got.Base.Port)
 	require.NotNil(t, got.Storage)
 	require.Equal(t, "local", got.Storage.Type)
 	require.NotNil(t, got.Transfer)
@@ -51,12 +50,11 @@ func TestUpdateConfigPartialPreservesValueSections(t *testing.T) {
 
 	// 显式提交仍整体覆盖；未提交段继续保留
 	require.NoError(t, svc.UpdateConfig(ctx, &SystemConfig{
-		Base: &BaseConfig{Name: "自定义站点", Description: "desc", Port: 9000},
+		Base: &BaseConfig{Name: "自定义站点", Description: "desc"},
 	}))
 	got, err = svc.GetConfig(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "自定义站点", got.Base.Name)
-	require.Equal(t, 9000, got.Base.Port)
 	require.Equal(t, 100, got.Transfer.MaxCount)
 }
 

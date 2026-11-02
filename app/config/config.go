@@ -19,7 +19,10 @@ import (
 type BaseConfig struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Port        int    `json:"port"`
+	// Port 已删（2026-11-03）：死配置——监听端口实来自 ServerConfig.Port
+	// （bootstrap 启动绑定），Base.Port 从拆分起只有校验、从未参与任何行为，
+	// 且与 server.port 双旋钮互相矛盾。旧持久化记录里的 "port" 会被反序列化
+	// 静默忽略（wire/DB 兼容），老壳继续提交也无害。
 
 	// PublicURL 站点公网地址（2026-10-22 落地，可选）：用户可访问本柜的对外
 	// 地址（如 https://box.example.com）。分享链接与「交付文本」按它拼；
@@ -112,7 +115,7 @@ func userSettingsFromYAML() *UserSettings {
 // defaultSystemConfig 站点配置默认值。
 func defaultSystemConfig() *SystemConfig {
 	cfg := &SystemConfig{}
-	cfg.Base = &BaseConfig{Name: "PigeonBox", Description: "文件分享平台", Port: 8888}
+	cfg.Base = &BaseConfig{Name: "PigeonBox", Description: "文件分享平台"}
 	cfg.Storage = &StorageSettings{Type: "local", MaxSize: 1024 * 1024 * 1024} // 1GB
 	cfg.Transfer = &TransferSettings{MaxCount: 100, ExpireDefault: 7}          // 7天
 	cfg.User = userSettingsFromYAML()
@@ -125,9 +128,6 @@ func validateSystemConfig(cfg *SystemConfig) error {
 		return errors.New("config is nil")
 	}
 	// nil 段 = 本次未提交（保存时保留现状），不参与校验
-	if cfg.Base != nil && (cfg.Base.Port < 0 || cfg.Base.Port > 65535) {
-		return errors.New("base.port out of range (0-65535)")
-	}
 	// base.public_url 站点公网地址（2026-10-22）：可选，空 = 未配置。
 	if cfg.Base != nil {
 		if u := strings.TrimSpace(cfg.Base.PublicURL); u != "" {
