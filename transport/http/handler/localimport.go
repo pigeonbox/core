@@ -44,7 +44,9 @@ func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 	if body.ExpireStyle == "" {
 		body.ExpireStyle = "day"
 		if body.ExpireValue <= 0 {
-			body.ExpireValue = 7
+			// 站点默认过期天数（transfer.expire_default，缺省 7）：此前硬编码 7，
+			// 管理台「默认过期天数」对本通道形同虚设（2026-11-02 接线收口）。
+			_, body.ExpireValue = utils.EffectiveTransferDefaults()
 		}
 	}
 	if err := utils.CheckExpireStyleAllowed(body.ExpireStyle); err != nil {

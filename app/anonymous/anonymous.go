@@ -433,6 +433,12 @@ func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousSharePara
 	if maxCount == 0 {
 		maxCount = -1 // 默认无限
 	}
+	// 「单分享可取件次数上限」（transfer.max_count，0=不限）：匿名占位路径不走
+	// share 域漏斗（createWithCode/createWithRetry），在此收口——否则本通道成为
+	// 上限校验的旁路（presign 取件码绑定正是回填到这里的占位记录）。
+	if err := utils.CheckPickupCountCap(maxCount); err != nil {
+		return "", err
+	}
 
 	hash, err := utils.HashPassword(p.Password)
 	if err != nil {

@@ -79,6 +79,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("deployment.mode", conf.DeployModeStandalone)
 	// 安全默认（安全加固项，未配置时全开）：
 	v.SetDefault("upload.enable_magic_check", true)
+	// 分享传输默认值（transfer 段；与管理台 app/config.defaultConfig 的展示默认一致）：
+	// max_count = 单分享可取件次数上限（0=不限），expire_default = 未指定过期时的默认天数
+	v.SetDefault("transfer.max_count", 100)
+	v.SetDefault("transfer.expire_default", 7)
 	v.SetDefault("security.download_token.enabled", true)
 	v.SetDefault("security.download_token.validity_seconds", 1000)
 	v.SetDefault("security.lockout.enabled", true)

@@ -328,6 +328,11 @@ func (s *Service) createWithCode(ctx context.Context, customCode string, build f
 		return nil, errors.New("自定义取件码与已有取件码冲突，请换一个")
 	}
 	fc := build(customCode)
+	// 「单分享可取件次数上限」（transfer.max_count，0=不限）：漏斗收口，
+	// 覆盖一切经本域建的分享（文本/文件/多文件/本地导入）。
+	if err := utils.CheckPickupCountCap(fc.ExpiredCount); err != nil {
+		return nil, err
+	}
 	if err := s.fileCodeRepo.Create(ctx, fc); err != nil {
 		if gormx.IsUniqueViolation(err) {
 			return nil, errors.New("自定义取件码已被占用，请换一个")
@@ -354,6 +359,10 @@ func (s *Service) createWithRetry(ctx context.Context, build func(code string) *
 		Retryable: func(err error) bool { return gormx.IsUniqueViolation(err) },
 	}, func(attempt int) error {
 		rec := build(s.GenerateCode())
+		// 「单分享可取件次数上限」（transfer.max_count，0=不限）：漏斗收口。
+		if err := utils.CheckPickupCountCap(rec.ExpiredCount); err != nil {
+			return err
+		}
 		if err := s.fileCodeRepo.Create(ctx, rec); err != nil {
 			return err
 		}
