@@ -252,10 +252,23 @@ func HTTPStatusForCode(code int) int {
 
 // NewTypedError 把实现 ErrCode() int 的 typed error（gate/moderation 等）写成
 // 业务错误响应；未实现该接口的错误按内部错误处理。
+//
+// pkgerrors.New/Wrap 构造的业务错误（AppError = oekit BizError）**没有**
+// ErrCode() 方法——若不单独提取，它们会全部塌成 10008「内部错误」：
+// 形状非法这类**客户端**错误被报成服务端故障，调用方无从区分传参与
+// 服务端坏了（2026-11-02 core#30 S27 冒烟实测暴露：wrapped_key 形状
+// 校验的 10001 到 wire 上成了 10008）。⇒ 这里按 BizCode 透传。
 func NewTypedError(c *app.RequestContext, err error) {
 	var coder interface{ ErrCode() int }
 	if stderrors.As(err, &coder) {
 		NewErrorWithMessage(c, coder.ErrCode(), err.Error())
+		return
+	}
+	var biz *errors.AppError
+	if stderrors.As(err, &biz) {
+		// 用 Message 而非 Error()：后者带 "biz_code:%d " 前缀（日志语义），
+		// 不该进面向用户/调用方的 message 字段。
+		NewErrorWithMessage(c, biz.BizCode, biz.Message)
 		return
 	}
 	NewErrorWithMessage(c, errcode.CodeInternal, err.Error())
