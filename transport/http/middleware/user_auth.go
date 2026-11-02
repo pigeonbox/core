@@ -21,12 +21,20 @@ func isRevoked(ctx context.Context, token string) bool {
 }
 
 // UserAuth 用户 JWT 认证中间件
-// 验证 Bearer JWT token 并将用户信息注入到上下文
+// 验证用户会话 JWT 并将用户信息注入到上下文。
+//
+// 令牌来源与 pkg AuthMiddleware 同一双通道：Authorization: Bearer 头优先，
+// 回退会话 Cookie（pb_token，浏览器端默认）。2026-11-02 修复：此前只认
+// Bearer 头，浏览器 Cookie 会话在 /api/v1/user/requests* 上恒 401「Authorization
+// header is required」——前端 HttpOnly 会话全部走 Cookie（其余接口由
+// AuthMiddleware 双通道放行），唯独本中间件漏了 Cookie 通道，前端自动 refresh
+// 后重放仍是 Cookie ⇒ 用户被误踢到登录提示。Cookie 认证的非安全方法另有
+// CSRF 头门禁（session.go）。语义不变：只认用户 JWT，API Key 不可操作寄件码。
 func UserAuth() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		tokenString := extractBearerToken(c)
+		tokenString, viaCookie := pkgmw.SessionToken(c)
 		if tokenString == "" {
-			respondUnauthorized(c, "Authorization header is required")
+			respondUnauthorized(c, "未认证（缺少 Bearer 头或会话 Cookie）")
 			return
 		}
 
@@ -40,6 +48,12 @@ func UserAuth() app.HandlerFunc {
 		// 登出后 token 仍然可用）
 		if isRevoked(ctx, tokenString) {
 			respondUnauthorized(c, "Token has been revoked")
+			return
+		}
+
+		// CSRF 门禁（仅 Cookie 认证的非安全方法；与 pkg AuthMiddleware 同序）
+		if !pkgmw.CSRFAllowed(c, viaCookie) {
+			respondForbidden(c, "缺少 CSRF 头（Cookie 认证的写请求须携带 X-Requested-With: XMLHttpRequest）")
 			return
 		}
 
