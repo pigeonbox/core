@@ -150,11 +150,13 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 		cfg.User = &us
 	}
 
-	// Base：站点名称/描述（向导基础段可选；携带时以向导值 + 现网端口整段写入，
-	// 未携带保持 nil = 不改动现状）
+	// Base：站点名称/描述（向导基础段可选；携带时以向导值整段写入，
+	// 未携带保持 nil = 不改动现状）。IDL 的 base_config.port 是装饰字段：
+	// 服务端从未采纳（监听端口在 bootstrap 已定），BaseConfig.Port 死配置
+	// 已删（2026-11-03）。
 	if base := req.GetBaseConfig(); base != nil {
 		cfg.Base = &adminsvc.BaseConfig{
-			Name: base.Name, Description: base.Description, Port: g.Server.Port,
+			Name: base.Name, Description: base.Description,
 		}
 	}
 

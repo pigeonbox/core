@@ -455,7 +455,6 @@ type UserConfig struct {
 	UserUploadSize        int64  `mapstructure:"user_upload_size"`
 	UserStorageQuota      int64  `mapstructure:"user_storage_quota"`
 	SessionExpiryHours    int    `mapstructure:"session_expiry_hours"`
-	MaxSessionsPerUser    int    `mapstructure:"max_sessions_per_user"`
 	JWTSecret             string `mapstructure:"jwt_secret"`
 }
 
