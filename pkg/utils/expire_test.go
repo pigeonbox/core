@@ -6,6 +6,7 @@ import (
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCalculateExpireTime_Basic(t *testing.T) {
@@ -114,4 +115,85 @@ func TestAllExpireStylesIncludesCount(t *testing.T) {
 	for _, s := range all {
 		assert.Truef(t, IsValidExpireStyle(s), "全集里的 %q 竟未通过合法性校验", s)
 	}
+}
+
+// ===== transfer 段生效默认（2026-11-02 接线）=====
+
+// withTransferConfig 为单个测试注入 transfer 配置，结束后恢复原全局配置。
+func withTransferConfig(t *testing.T, tc conf.TransferConfig) {
+	t.Helper()
+	old := conf.GetGlobalConfig()
+	conf.SetGlobalConfig(&conf.AppConfiguration{Transfer: tc})
+	t.Cleanup(func() { conf.SetGlobalConfig(old) })
+}
+
+// TestEffectiveTransferDefaults 钉住生效默认的取值口径：
+// conf 未装载回退内置 100/7；装载后取 conf，且 MaxCount 的 0 是**显式不限**
+// （不得当"未配置"回退成 100——否则管理台把上限调成"不限"会静默变回 100）。
+func TestEffectiveTransferDefaults(t *testing.T) {
+	t.Run("conf 未装载回退内置 100/7", func(t *testing.T) {
+		old := conf.GetGlobalConfig()
+		conf.SetGlobalConfig(nil)
+		t.Cleanup(func() { conf.SetGlobalConfig(old) })
+		maxCount, days := EffectiveTransferDefaults()
+		assert.Equal(t, 100, maxCount)
+		assert.Equal(t, 7, days)
+	})
+	t.Run("装载后取 conf；MaxCount 的 0 是显式不限", func(t *testing.T) {
+		withTransferConfig(t, conf.TransferConfig{MaxCount: 0, ExpireDefault: 30})
+		maxCount, days := EffectiveTransferDefaults()
+		assert.Equal(t, 0, maxCount, "0=显式不限，不得回退成 100")
+		assert.Equal(t, 30, days)
+	})
+	t.Run("ExpireDefault<=0 回退内置 7", func(t *testing.T) {
+		withTransferConfig(t, conf.TransferConfig{MaxCount: 50, ExpireDefault: 0})
+		maxCount, days := EffectiveTransferDefaults()
+		assert.Equal(t, 50, maxCount)
+		assert.Equal(t, 7, days)
+	})
+}
+
+// TestCheckPickupCountCap 「单分享可取件次数上限」：超限**显式拒绝**（不静默
+// 钳制——用户要 50 次、静默改成上限值是撒谎）；<=0（不按次数过期/无限）不校验。
+func TestCheckPickupCountCap(t *testing.T) {
+	t.Run("超限拒绝、恰等上限放行", func(t *testing.T) {
+		withTransferConfig(t, conf.TransferConfig{MaxCount: 3, ExpireDefault: 7})
+		assert.NoError(t, CheckPickupCountCap(3))
+		err := CheckPickupCountCap(4)
+		require.Error(t, err, "超限必须显式拒绝")
+		assert.Contains(t, err.Error(), "取件次数超过站点上限")
+	})
+	t.Run("<=0 不校验（不按次数过期/无限）", func(t *testing.T) {
+		withTransferConfig(t, conf.TransferConfig{MaxCount: 3, ExpireDefault: 7})
+		assert.NoError(t, CheckPickupCountCap(0))
+		assert.NoError(t, CheckPickupCountCap(-1))
+	})
+	t.Run("上限 0=显式不限", func(t *testing.T) {
+		withTransferConfig(t, conf.TransferConfig{MaxCount: 0, ExpireDefault: 7})
+		assert.NoError(t, CheckPickupCountCap(1000))
+	})
+}
+
+// TestCalculateExpireTime_TransferDefaults 钉住「未指定过期 ⇒ 站点默认天数」，
+// 且**只在完全未指定**时生效：给了样式没给值仍按历史口径 1（单位随样式），
+// 避免 "hour + 0" 从 1 小时漂成站点默认天数。
+func TestCalculateExpireTime_TransferDefaults(t *testing.T) {
+	withTransferConfig(t, conf.TransferConfig{MaxCount: 100, ExpireDefault: 30})
+	start := time.Now()
+
+	tp := CalculateExpireTime(0, "")
+	require.NotNil(t, tp)
+	assert.InDelta(t, 30*24*time.Hour, tp.Sub(start), float64(2*time.Hour),
+		"完全未指定 ⇒ 站点默认 30 天")
+
+	tp2 := CalculateExpireTime(0, "hour")
+	require.NotNil(t, tp2)
+	assert.InDelta(t, time.Hour, tp2.Sub(start), float64(2*time.Minute),
+		"给了样式没给值 ⇒ 仍历史口径 1 小时（不得漂成站点默认 30 天）")
+
+	// 负对照：改回"完全未指定也给 1 天"（接线前行为）⇒ 第一条断言转红
+	tp3 := CalculateExpireTime(5, "day")
+	require.NotNil(t, tp3)
+	assert.InDelta(t, 5*24*time.Hour, tp3.Sub(start), float64(2*time.Hour),
+		"显式指定不受站点默认影响")
 }

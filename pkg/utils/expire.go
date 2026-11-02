@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -108,6 +109,41 @@ func GetMaxSaveSecondsCap() int64 {
 // 可控（想要"5 次、两个月内有效"根本做不到）。此处改为**与次数解耦**的固定兜底。
 const countExpireFallback = 30 * 24 * time.Hour
 
+// EffectiveTransferDefaults 生效的分享传输默认值（conf.transfer 段）。
+//
+//	· maxPickupCount：单分享可取件次数上限（0 = 不限，transfer.max_count）
+//	· expireDefaultDays：创建分享**完全未指定**过期时的站点默认天数（transfer.expire_default）
+//
+// conf 未装载（单测/极早期）回退内置默认 100/7（与 bootstrap setDefaults /
+// 管理台 app/config.defaultConfig 的展示默认同款）。⚠️ MaxCount 的 0 是**显式
+// 不限**（viper 缺省已在装载时补 100），不得再拿 0 当"未配置"回退。
+func EffectiveTransferDefaults() (maxPickupCount int, expireDefaultDays int) {
+	maxPickupCount, expireDefaultDays = 100, 7
+	if cfg := conf.GetGlobalConfig(); cfg != nil {
+		maxPickupCount = cfg.Transfer.MaxCount
+		if cfg.Transfer.ExpireDefault > 0 {
+			expireDefaultDays = cfg.Transfer.ExpireDefault
+		}
+	}
+	return
+}
+
+// CheckPickupCountCap 「单分享可取件次数上限」校验（transfer.max_count，0 = 不限）。
+//
+// n = 分享允许的取件次数（expire_style=count 的 expire_value，或已换算的
+// ExpiredCount；<=0 表示不按次数过期/无限 ⇒ 不校验）。
+// 超限**显式拒绝**——不静默钳制：用户要 50 次、静默改成上限值是撒谎。
+func CheckPickupCountCap(n int) error {
+	if n <= 0 {
+		return nil
+	}
+	maxCount, _ := EffectiveTransferDefaults()
+	if maxCount > 0 && n > maxCount {
+		return fmt.Errorf("取件次数超过站点上限（最多 %d 次）", maxCount)
+	}
+	return nil
+}
+
 // CalculateExpireTime 计算过期时间。
 // 全局上限钳制：upload.max_save_seconds_cap > 0 且时长超过上限时钳到上限
 // （此前该配置定义了但无任何调用方，形同虚设）。
@@ -123,13 +159,17 @@ func CalculateExpireTime(expireValue int, expireStyle string) *time.Time {
 		return &expireTime
 	}
 
-	// 修复：当不传参数时，设置默认值为1天
-	// 这样避免了 expireValue=0 和 expireStyle="" 导致立即过期的问题
-	if expireValue <= 0 {
-		expireValue = 1
-	}
+	// 未指定过期（值与样式都没传）⇒ 站点默认（transfer.expire_default，缺省 7 天）。
+	// 2026-11-02 接线：此前硬编码 1 天 ⇒ 管理台「默认过期天数」形同虚设。
+	// 只在**完全未指定**时取站点默认；给了样式没给值仍按历史口径 1（单位随样式），
+	// 避免"hour + 0"从 1 小时漂成 7 天。
 	if expireStyle == "" {
 		expireStyle = "day"
+		if expireValue <= 0 {
+			_, expireValue = EffectiveTransferDefaults()
+		}
+	} else if expireValue <= 0 {
+		expireValue = 1
 	}
 
 	var duration time.Duration

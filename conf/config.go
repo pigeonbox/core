@@ -45,6 +45,7 @@ type AppConfiguration struct {
 	App           AppConfig           `mapstructure:"app"`
 	User          UserConfig          `mapstructure:"user"`
 	Upload        UploadConfig        `mapstructure:"upload"`
+	Transfer      TransferConfig      `mapstructure:"transfer"`
 	Download      DownloadConfig      `mapstructure:"download"`
 	Storage       StorageConfig       `mapstructure:"storage"`
 	UI            UIConfig            `mapstructure:"ui"`
@@ -456,6 +457,24 @@ type UserConfig struct {
 	SessionExpiryHours    int    `mapstructure:"session_expiry_hours"`
 	MaxSessionsPerUser    int    `mapstructure:"max_sessions_per_user"`
 	JWTSecret             string `mapstructure:"jwt_secret"`
+}
+
+// TransferConfig 分享传输默认值（transfer 段；管理台 SystemConfig.Transfer 的运行时镜像）。
+//
+// 2026-11-02 接线：此前管理台「上传与分享」页的 transfer 段（传输次数上限/默认过期
+// 天数）**存库不生效**——全局 conf 没有对应段，overlay 不到任何读取点 ⇒ 管理员改了
+// 也不影响任何行为（用户可见的静默失效）。现在该段 overlay 进全局 conf，两个读取点：
+//   - ExpireDefault：创建分享**未指定**过期时的站点默认（pkg/utils.CalculateExpireTime）；
+//   - MaxCount：「按取件次数」过期的单分享取件次数上限（0 = 不限；超限**拒绝**，
+//     不静默钳制）。
+//
+// 缺省值 100/7 由 bootstrap/config.go 的 SetDefault 种下（与管理台
+// app/config.defaultConfig 的展示默认一致）。
+type TransferConfig struct {
+	// MaxCount 单分享可取件次数上限（expire_style=count 的 expire_value 上限；0 = 不限）。
+	MaxCount int `mapstructure:"max_count" json:"max_count"`
+	// ExpireDefault 站点默认过期天数（创建分享未指定过期参数时生效）。
+	ExpireDefault int `mapstructure:"expire_default" json:"expire_default"`
 }
 
 // UploadConfig 上传配置

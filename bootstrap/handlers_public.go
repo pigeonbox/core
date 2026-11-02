@@ -57,6 +57,9 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 			effectiveDownload = *cfg.Download
 		}
 	}
+	// 分享传输生效默认（transfer 段）：overlay 后的全局 conf，与建分享
+	// enforcement 同源（pkg/utils 的 CheckPickupCountCap/CalculateExpireTime 读它）
+	maxPickupCount, expireDefaultDays := utils.EffectiveTransferDefaults()
 	resp.Success(c, map[string]interface{}{
 		"name":        name,
 		"description": description,
@@ -94,7 +97,14 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		// 文本分享大小上限（字节；前端预检+超限引导"改用文件分享"）。
 		// 与 utils.GetTextShareMaxBytes 同语义：未配置(<=0)用默认 222KB
 		"textMaxBytes": textShareMaxBytesOrDefault(),
-		"initialized":  initialized,
+		// 分享传输生效默认（transfer 段，2026-11-02 接线）：与建分享 enforcement
+		// 同源（utils.EffectiveTransferDefaults ⇒ overlay 后的全局 conf）——
+		// 前端表单初值/预检用，管理台改了这里即变。
+		//  · maxPickupCount：单分享可取件次数上限（0=不限；超限服务端显式拒绝）
+		//  · expireDefaultDays：创建分享完全未指定过期时的默认天数
+		"maxPickupCount":    maxPickupCount,
+		"expireDefaultDays": expireDefaultDays,
+		"initialized":       initialized,
 		// OIDC 登录按钮开关（P2 SSO；security.oidc.enabled）
 		"oidcEnabled": conf.GetGlobalConfig().Security.OIDC.Enabled,
 		// 管理入口可见性（ui.show_admin_addr，缺省=展示；/admin 路由始终可达，仅控制页脚入口展示）
