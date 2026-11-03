@@ -79,6 +79,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("deployment.mode", conf.DeployModeStandalone)
 	// 安全默认（安全加固项，未配置时全开）：
 	v.SetDefault("upload.enable_magic_check", true)
+	// 分享传输默认值（transfer 段；与管理台 app/config.defaultConfig 的展示默认一致）：
+	// max_count = 单分享可取件次数上限（0=不限），expire_default = 未指定过期时的默认天数
+	v.SetDefault("transfer.max_count", 100)
+	v.SetDefault("transfer.expire_default", 7)
 	v.SetDefault("security.download_token.enabled", true)
 	v.SetDefault("security.download_token.validity_seconds", 1000)
 	v.SetDefault("security.lockout.enabled", true)
@@ -126,12 +130,10 @@ var envBindings = map[string][]string{
 	// deployment（多副本部署模式）
 	"deployment.mode": {"PB_DEPLOY_MODE"},
 	// server
-	"server.host":          {"PB_SERVER_HOST", "HOST"},
-	"server.port":          {"PB_SERVER_PORT", "PORT"},
-	"server.mode":          {"PB_SERVER_MODE"},
-	"server.base_url":      {"PB_SERVER_BASE_URL", "BASE_URL"},
-	"server.read_timeout":  {"PB_SERVER_READ_TIMEOUT"},
-	"server.write_timeout": {"PB_SERVER_WRITE_TIMEOUT"},
+	"server.host":     {"PB_SERVER_HOST", "HOST"},
+	"server.port":     {"PB_SERVER_PORT", "PORT"},
+	"server.mode":     {"PB_SERVER_MODE"},
+	"server.base_url": {"PB_SERVER_BASE_URL", "BASE_URL"},
 	// database
 	"database.driver":   {"PB_DATABASE_DRIVER", "DATABASE_TYPE", "DB_TYPE"},
 	"database.db_name":  {"PB_DATABASE_DB_NAME", "DATABASE_NAME", "DB_NAME"},
@@ -225,13 +227,14 @@ var envBindings = map[string][]string{
 	"federation.node_key_path":             {"PB_FEDERATION_NODE_KEY_PATH"},
 	"federation.announce_min_entropy_bits": {"PB_FEDERATION_MIN_ENTROPY"},
 	// upload 安全项
-	"upload.text_max_bytes":        {"PB_TEXT_MAX_BYTES"},
-	"upload.allowed_extensions":    {"PB_UPLOAD_ALLOWED_EXTENSIONS"},
-	"upload.blocked_extensions":    {"PB_UPLOAD_BLOCKED_EXTENSIONS"},
-	"upload.enable_magic_check":    {"PB_ENABLE_MAGIC_CHECK"},
-	"upload.max_save_seconds_cap":  {"PB_UPLOAD_MAX_SAVE_SECONDS_CAP"},
-	"upload.anonymous_daily_count": {"PB_UPLOAD_ANON_DAILY_COUNT"},
-	"upload.anonymous_daily_bytes": {"PB_UPLOAD_ANON_DAILY_BYTES"},
+	"upload.text_max_bytes":              {"PB_TEXT_MAX_BYTES"},
+	"upload.allowed_extensions":          {"PB_UPLOAD_ALLOWED_EXTENSIONS"},
+	"upload.blocked_extensions":          {"PB_UPLOAD_BLOCKED_EXTENSIONS"},
+	"upload.enable_magic_check":          {"PB_ENABLE_MAGIC_CHECK"},
+	"upload.magic_check_skip_extensions": {"PB_MAGIC_CHECK_SKIP_EXTS"},
+	"upload.max_save_seconds_cap":        {"PB_UPLOAD_MAX_SAVE_SECONDS_CAP"},
+	"upload.anonymous_daily_count":       {"PB_UPLOAD_ANON_DAILY_COUNT"},
+	"upload.anonymous_daily_bytes":       {"PB_UPLOAD_ANON_DAILY_BYTES"},
 	// upload.local_import（NAS 本地文件免上传导入）
 	"upload.local_import.enabled": {"PB_LOCAL_IMPORT_ENABLED"},
 	"upload.local_import.roots":   {"PB_LOCAL_IMPORT_ROOTS"},
@@ -249,13 +252,14 @@ var envBindings = map[string][]string{
 // 需按逗号拆分后写入（viper Unmarshal 的 WeaklyTypedInput 不拆分逗号，
 // 会把 ".jpg,.png" 整串当单个元素——此前 allowed_extensions env 一直有此问题）。
 var listValuedKeys = map[string]bool{
-	"upload.local_import.roots":    true,
-	"upload.allowed_extensions":    true,
-	"upload.blocked_extensions":    true,
-	"upload.allowed_expire_styles": true,
-	"security.trusted_proxies":     true,
-	"security.cors.allow_origins":  true,
-	"moderation.blocked_words":     true,
+	"upload.local_import.roots":          true,
+	"upload.allowed_extensions":          true,
+	"upload.blocked_extensions":          true,
+	"upload.magic_check_skip_extensions": true,
+	"upload.allowed_expire_styles":       true,
+	"security.trusted_proxies":           true,
+	"security.cors.allow_origins":        true,
+	"moderation.blocked_words":           true,
 }
 
 // splitCSV 逗号分隔字符串 → 去空白去空的切片。

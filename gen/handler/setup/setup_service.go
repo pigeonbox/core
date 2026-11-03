@@ -97,6 +97,23 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 		AdminEmail:    req.AdminEmail,
 	})
 	if err != nil {
+		// typed 业务拒绝按语义透传，不落 500——2026-11-02 与注册面同批收口：
+		// 此前撞名/重复初始化一律「系统初始化失败」+ CodeInternal，调用方无从区分。
+		if errors.Is(err, setupservice.ErrAlreadyInitialized) {
+			// 与上面 IsSystemInitialized 预检的口径一致（竞态兜底路径）
+			c.JSON(consts.StatusForbidden, map[string]interface{}{
+				"code":    errcode.CodeForbidden,
+				"message": err.Error(),
+			})
+			return
+		}
+		if errors.Is(err, setupservice.ErrAdminUsernameExists) || errors.Is(err, setupservice.ErrAdminEmailExists) {
+			c.JSON(consts.StatusConflict, map[string]interface{}{
+				"code":    errcode.CodeConflict,
+				"message": err.Error(),
+			})
+			return
+		}
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    errcode.CodeInternal,
 			"message": "系统初始化失败: " + err.Error(),
@@ -150,11 +167,13 @@ func applySitePreConfig(ctx context.Context, req *setupmodel.InitializeReq, sc *
 		cfg.User = &us
 	}
 
-	// Base：站点名称/描述（向导基础段可选；携带时以向导值 + 现网端口整段写入，
-	// 未携带保持 nil = 不改动现状）
+	// Base：站点名称/描述（向导基础段可选；携带时以向导值整段写入，
+	// 未携带保持 nil = 不改动现状）。IDL 的 base_config.port 是装饰字段：
+	// 服务端从未采纳（监听端口在 bootstrap 已定），BaseConfig.Port 死配置
+	// 已删（2026-11-03）。
 	if base := req.GetBaseConfig(); base != nil {
 		cfg.Base = &adminsvc.BaseConfig{
-			Name: base.Name, Description: base.Description, Port: g.Server.Port,
+			Name: base.Name, Description: base.Description,
 		}
 	}
 

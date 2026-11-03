@@ -45,6 +45,7 @@ type AppConfiguration struct {
 	App           AppConfig           `mapstructure:"app"`
 	User          UserConfig          `mapstructure:"user"`
 	Upload        UploadConfig        `mapstructure:"upload"`
+	Transfer      TransferConfig      `mapstructure:"transfer"`
 	Download      DownloadConfig      `mapstructure:"download"`
 	Storage       StorageConfig       `mapstructure:"storage"`
 	UI            UIConfig            `mapstructure:"ui"`
@@ -379,13 +380,13 @@ func UpdateGlobalConfig(mutator func(cfg *AppConfiguration)) *AppConfiguration {
 }
 
 // ServerConfig 服务器配置
+// （ReadTimeout/WriteTimeout 两旋钮已删：定义后零消费、Hertz 语义接线会误杀
+// 慢速大文件上传——2026-11-03 死配置清理第二批）
 type ServerConfig struct {
-	Host         string `mapstructure:"host"`
-	Port         int    `mapstructure:"port"`
-	Mode         string `mapstructure:"mode"`     // debug, release, test
-	BaseURL      string `mapstructure:"base_url"` // 对外可访问的基础 URL（用于生成分享链接等）
-	ReadTimeout  int    `mapstructure:"read_timeout"`
-	WriteTimeout int    `mapstructure:"write_timeout"`
+	Host    string `mapstructure:"host"`
+	Port    int    `mapstructure:"port"`
+	Mode    string `mapstructure:"mode"`     // debug, release, test
+	BaseURL string `mapstructure:"base_url"` // 对外可访问的基础 URL（用于生成分享链接等）
 }
 
 // DatabaseConfig 数据库配置
@@ -454,8 +455,25 @@ type UserConfig struct {
 	UserUploadSize        int64  `mapstructure:"user_upload_size"`
 	UserStorageQuota      int64  `mapstructure:"user_storage_quota"`
 	SessionExpiryHours    int    `mapstructure:"session_expiry_hours"`
-	MaxSessionsPerUser    int    `mapstructure:"max_sessions_per_user"`
 	JWTSecret             string `mapstructure:"jwt_secret"`
+}
+
+// TransferConfig 分享传输默认值（transfer 段；管理台 SystemConfig.Transfer 的运行时镜像）。
+//
+// 2026-11-02 接线：此前管理台「上传与分享」页的 transfer 段（传输次数上限/默认过期
+// 天数）**存库不生效**——全局 conf 没有对应段，overlay 不到任何读取点 ⇒ 管理员改了
+// 也不影响任何行为（用户可见的静默失效）。现在该段 overlay 进全局 conf，两个读取点：
+//   - ExpireDefault：创建分享**未指定**过期时的站点默认（pkg/utils.CalculateExpireTime）；
+//   - MaxCount：「按取件次数」过期的单分享取件次数上限（0 = 不限；超限**拒绝**，
+//     不静默钳制）。
+//
+// 缺省值 100/7 由 bootstrap/config.go 的 SetDefault 种下（与管理台
+// app/config.defaultConfig 的展示默认一致）。
+type TransferConfig struct {
+	// MaxCount 单分享可取件次数上限（expire_style=count 的 expire_value 上限；0 = 不限）。
+	MaxCount int `mapstructure:"max_count" json:"max_count"`
+	// ExpireDefault 站点默认过期天数（创建分享未指定过期参数时生效）。
+	ExpireDefault int `mapstructure:"expire_default" json:"expire_default"`
 }
 
 // UploadConfig 上传配置
@@ -475,6 +493,10 @@ type UploadConfig struct {
 	BlockedExtensions []string `mapstructure:"blocked_extensions" json:"blocked_extensions"`
 	// EnableMagicCheck 是否启用魔数校验（默认 true）。
 	EnableMagicCheck bool `mapstructure:"enable_magic_check" json:"enable_magic_check"`
+	// MagicCheckSkipExts 魔数检查豁免扩展名**追加项**（如 [".fpk",".ipk"]）。
+	// 内置事实性豁免（.appimage/.run/.bin/无扩展名等，见 pkg/utils/magic.go）
+	// 恒生效，本字段只做补充；要禁传某类文件用 BlockedExtensions（永远优先）。
+	MagicCheckSkipExts []string `mapstructure:"magic_check_skip_extensions" json:"magic_check_skip_extensions"`
 	// AllowedExpireStyles 允许用户选择的过期样式
 	// （minute/hour/day/week/month/year/forever/count —— count =「按取件次数」，
 	// 2026-10-22 补入：此前注释漏了它，合法集合以 pkg/utils.AllExpireStyles 为准）。
@@ -581,6 +603,21 @@ func (c DownloadConfig) PresignThresholdMBOrDefault() int {
 		return 100
 	}
 	return c.PresignThresholdMB
+}
+
+// DownloadStallTimeout 下载停滞超时（download.download_timeout，秒）转时长。
+// 语义：传输中连续 N 秒无任何字节流动即中断下载（回收挂死连接）；
+// 值 <=0 或配置未加载返回 0（不限）。
+//
+// 动态语义：下载**开流时现读**——管理台保存后对新下载立即生效（与站点公网
+// 地址 provider 同类）。全局读收在 conf/ 属主包内（规则8 棘轮的「定义处」豁免面），
+// 消费方（app/share 停滞守卫）不各自直读全局配置。
+func DownloadStallTimeout() time.Duration {
+	c := globalConfig.Load()
+	if c == nil || c.Download.DownloadTimeout <= 0 {
+		return 0
+	}
+	return time.Duration(c.Download.DownloadTimeout) * time.Second
 }
 
 // StorageConfig 存储配置

@@ -7,11 +7,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/gormx"
 	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/contracts/errcode"
 	usermodel "github.com/pigeonbox/contracts/gen/user"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -20,6 +22,15 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/oekit/pkg/encoding"
+)
+
+// 注册/建号的**业务拒绝**哨兵错误（typed）：撞名/撞邮箱是客户端可修复的
+// 冲突（409），不是服务端故障。2026-11-02 实录：Create 此前返回普通 error、
+// handler 一律映射 500「服务器内部错误」⇒ 注册撞名在前端只显示内部错误，
+// 用户无从得知该换用户名。文案保持 "already exists"（既有测试断言该子串）。
+var (
+	ErrUsernameExists = errors.New("username already exists")
+	ErrEmailExists    = errors.New("email already exists")
 )
 
 type CreateUserReq struct {
@@ -116,8 +127,10 @@ func (s *Service) Create(ctx context.Context, req *CreateUserReq) (*model.UserRe
 
 	// username 字符集白名单（2026-10-05 审计 P3）：注册/建号共用本收口。
 	// 昵称不受限（展示字段）；username 进日志/审计/键值，收紧为安全字符集。
+	// 校验失败是**参数错误**（400），typed 化后 handler 按业务码透传，
+	// 不落 500（与 chunk 面「typed 业务错误按码透传」同一收口）。
 	if err := utils.ValidateUsername(req.Username); err != nil {
-		return nil, err
+		return nil, pkgerrors.BadRequest(err.Error())
 	}
 
 	existing, err := s.repo.GetByUsername(ctx, req.Username)
@@ -125,7 +138,7 @@ func (s *Service) Create(ctx context.Context, req *CreateUserReq) (*model.UserRe
 		return nil, err
 	}
 	if existing != nil {
-		return nil, errors.New("username already exists")
+		return nil, ErrUsernameExists
 	}
 
 	existing, err = s.repo.GetByEmail(ctx, req.Email)
@@ -133,7 +146,7 @@ func (s *Service) Create(ctx context.Context, req *CreateUserReq) (*model.UserRe
 		return nil, err
 	}
 	if existing != nil {
-		return nil, errors.New("email already exists")
+		return nil, ErrEmailExists
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -151,6 +164,16 @@ func (s *Service) Create(ctx context.Context, req *CreateUserReq) (*model.UserRe
 	}
 
 	if err := s.repo.Create(ctx, user); err != nil {
+		// 竞态兜底：先查后插的窗口内并发注册可能同时通过上面的存在性预检，
+		// 撞 users 表唯一索引（username/email 均 uniqueIndex）⇒ 同样是
+		// 「已存在」业务冲突，不是服务端故障。判据收口 dao/gormx 单源。
+		if gormx.IsUniqueViolation(err) {
+			// 归因到具体撞了哪个唯一键（回查一次；查不出则按用户名口径）
+			if e, _ := s.repo.GetByUsername(ctx, req.Username); e != nil {
+				return nil, ErrUsernameExists
+			}
+			return nil, ErrEmailExists
+		}
 		return nil, err
 	}
 

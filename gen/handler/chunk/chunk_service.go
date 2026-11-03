@@ -420,6 +420,19 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// 内容预检（2026-11-03）：分片 0 即文件头部 ⇒ 类型/魔数不合格在首片即拒，
+	// 不必等合并后在 Complete 才发现（同 presign PUT 预检语义；Complete 复检保留为兜底）。
+	if chunkIndex == 0 && len(data) > 0 {
+		head := data
+		if len(head) > 512 {
+			head = head[:512]
+		}
+		if err := utils.CheckUploadContent(info.FileName, head); err != nil {
+			resp.NewErrorWithMessage(c, errcode.CodeFileTypeDenied, err.Error())
+			return
+		}
+	}
+
 	// 计算分片哈希
 	hash := md5.Sum(data)
 	chunkHash := hex.EncodeToString(hash[:])

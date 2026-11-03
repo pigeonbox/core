@@ -72,3 +72,12 @@ func (s *Service) MaxFileSize() int64 {
 	}
 	return s.config.MaxFileSize
 }
+
+// CachePath 返回预览缓存目录（缩略图落盘位置）。缩略图服务路由按
+// 「缓存目录 + 文件名」回文件，文件名的路径穿越校验在消费端做。
+func (s *Service) CachePath() string {
+	if s == nil || s.config == nil {
+		return ""
+	}
+	return s.config.PreviewCachePath
+}

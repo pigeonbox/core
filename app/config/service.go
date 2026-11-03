@@ -488,6 +488,15 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 		if sc.Download != nil {
 			next.Download = *sc.Download
 		}
+		// Transfer 段（2026-11-02 接线）：此前存库但**没有任何 overlay** ⇒ 管理台
+		// 「传输次数上限/默认过期天数」静默失效。生效值读口在 pkg/utils
+		// （EffectiveTransferDefaults / CheckPickupCountCap / CalculateExpireTime）。
+		if sc.Transfer != nil {
+			next.Transfer = conf.TransferConfig{
+				MaxCount:      sc.Transfer.MaxCount,
+				ExpireDefault: sc.Transfer.ExpireDefault,
+			}
+		}
 		if sc.Notify != nil {
 			next.Notify = *sc.Notify
 		}
@@ -558,6 +567,10 @@ func (s *Service) syncMirrorFromGlobalLocked(g *conf.AppConfiguration, sc *Syste
 	if sc.Download != nil {
 		d := g.Download
 		sc.Download = &d
+	}
+	if sc.Transfer != nil {
+		t := TransferSettings{MaxCount: g.Transfer.MaxCount, ExpireDefault: g.Transfer.ExpireDefault}
+		sc.Transfer = &t
 	}
 	if sc.Notify != nil {
 		n := g.Notify

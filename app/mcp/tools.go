@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/oekit/pkg/stringx"
 	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/utils"
@@ -403,9 +404,10 @@ func (s *Service) previewShare(ctx context.Context, in previewShareIn, caller Ca
 	text := res.TextContent
 	truncated := false
 	const capRunes = 8000
-	if r := []rune(text); len(r) > capRunes {
-		text = string(r[:capRunes]) + "\n…（预览截断，全文见取件页或下载）"
-		truncated = true
+	// 截断收编 oekit/pkg/stringx.FirstN（超长才截 + 追加提示语，与手搓版逐位一致）
+	trimmed := stringx.FirstN(text, capRunes, "\n…（预览截断，全文见取件页或下载）")
+	if truncated = trimmed != text; truncated {
+		text = trimmed
 	}
 	return previewShareOut{
 		Code:            previewCode,

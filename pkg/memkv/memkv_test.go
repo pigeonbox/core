@@ -97,35 +97,32 @@ func TestDel(t *testing.T) {
 	assert.Equal(t, 0, s.Del("a"))
 }
 
-// TestSweep_AndCapacityReset 满载守卫：满载时插入新键先清扫过期条目让位；
-// 无过期可清时整表重置（保命优先）。
-func TestSweep_AndCapacityReset(t *testing.T) {
+// TestCapacityFIFO_Eviction 满载守卫（收编 oekit LocalCache 后的口径）：写满
+// DefaultMax 后插入新键触发 **FIFO 逐出**——最早写入的键让位，Len 恒 ≤ DefaultMax。
+//
+// 旧口径是「先清扫过期、仍满则整表重置」；差异与理由见包文档「满载语义」：
+// 防 DoS 的内存上界不变，被撑爆时的附带伤害从「殃及全部键」收窄为「逐出最旧键」。
+func TestCapacityFIFO_Eviction(t *testing.T) {
 	now := time.Now()
 	s := New().WithClock(func() time.Time { return now })
 
-	// 满载且全部已过期：插入新键前清扫让位，不触发重置
-	for i := 0; i < DefaultMax; i++ {
-		s.Set("old"+strconv.Itoa(i), "v", time.Second)
-	}
-	require.Equal(t, DefaultMax, s.Len())
-	now = now.Add(2 * time.Second)
-	s.Set("fresh", "v", time.Minute) // 触发满载清扫
-	assert.Equal(t, 1, s.Len(), "过期条目应被清扫，仅剩新键")
-	v, ok := s.Get("fresh")
-	require.True(t, ok)
-	assert.Equal(t, "v", v)
-
-	// 满载且全部未过期：整表重置
-	s.Del("fresh")
 	for i := 0; i < DefaultMax; i++ {
 		s.Set("k"+strconv.Itoa(i), "v", time.Hour)
 	}
 	require.Equal(t, DefaultMax, s.Len())
-	s.Set("overflow", "v", time.Minute)
-	assert.Equal(t, 1, s.Len(), "仍满应整表重置")
-	v, ok = s.Get("overflow")
-	require.True(t, ok)
+
+	s.Set("overflow", "v", time.Hour) // 满载插入 ⇒ FIFO 逐出最旧
+	assert.Equal(t, DefaultMax, s.Len(), "满载不得增长（内存上界）")
+
+	_, ok := s.Get("k0")
+	assert.False(t, ok, "最早写入的键应被逐出")
+
+	v, ok := s.Get("overflow")
+	require.True(t, ok, "新键应存活")
 	assert.Equal(t, "v", v)
+
+	_, ok = s.Get("k1")
+	assert.True(t, ok, "只逐出最旧一格，次旧键应存活")
 }
 
 // TestZeroTTL_NoExpiry ttl<=0 = 永不过期。

@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oekit/pkg/stringx"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -368,11 +369,8 @@ func displayFileName(fc *model.FileCode) string {
 	if name == "" {
 		return fc.FilePath
 	}
-	runes := []rune(name)
-	if len(runes) > 20 {
-		name = string(runes[:20]) + "…"
-	}
-	return name
+	// 截断收编 oekit/pkg/stringx.FirstN（超长才截 + 省略号，与手搓版逐位一致）
+	return stringx.FirstN(name, 20, "…")
 }
 
 // ============ 作用域/结果格式辅助（2026-10-12 访客快速分享）============

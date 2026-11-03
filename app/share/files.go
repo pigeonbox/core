@@ -60,7 +60,9 @@ func (s *Service) OpenShareDownload(ctx context.Context, filePath string) (*File
 	if err != nil {
 		return nil, err
 	}
-	return &FilePayload{ReadCloser: rc, Size: size}, nil
+	// 远端后端流套停滞守卫（download.download_timeout）：存储卡死/客户端消失
+	// 连续 N 秒无字节流动即中断，回收挂死连接。本地路径走 c.File 不经此流。
+	return &FilePayload{ReadCloser: newStallGuard(rc, downloadStallTimeout()), Size: size}, nil
 }
 
 // OpenShareDownloadRange 区间打开单文件下载流（Range 下载/断点续传，
@@ -83,7 +85,7 @@ func (s *Service) OpenShareDownloadRange(ctx context.Context, filePath string, s
 	if length <= 0 || start+length > total {
 		length = total - start
 	}
-	return rc, length, total, nil
+	return newStallGuard(rc, downloadStallTimeout()), length, total, nil
 }
 
 // StatShareFile 获取分享文件总大小（Range 解析需先知 total）。

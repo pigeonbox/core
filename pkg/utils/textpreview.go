@@ -1,6 +1,10 @@
 package utils
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/oekit/pkg/stringx"
+)
 
 // TextPreview 取文本的一行预览（换行/竖线归一为空格，截断到 32 字符 + 省略号）。
 //
@@ -14,9 +18,6 @@ func TextPreview(text string) string {
 		}
 		return r
 	}, text)
-	runes := []rune(strings.TrimSpace(preview))
-	if len(runes) > 32 {
-		runes = append(runes[:32], []rune("…")...)
-	}
-	return string(runes)
+	// 截断收编 oekit/pkg/stringx.FirstN（超长才截、追加省略号，与手搓版逐位一致）
+	return stringx.FirstN(strings.TrimSpace(preview), 32, "…")
 }

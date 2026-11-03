@@ -58,6 +58,10 @@ const maxMultiFiles = 100
 //
 // 失败时不回滚物理文件——调用方（handler）负责在 err != nil 时清理已落盘文件。
 func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) (*ShareResp, error) {
+	// 口令型 E2E 信封密钥的形状校验（core#30 补缺）：多文件共用一把内容密钥 ⇒ 只有一个信封
+	if err := validateWrappedKeyField(req.WrappedKey); err != nil {
+		return nil, err
+	}
 	if len(req.Entries) == 0 {
 		return nil, errors.New("至少需要一个文件")
 	}

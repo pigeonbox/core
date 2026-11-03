@@ -1,163 +1,114 @@
-// Package memkv 进程内字符串 TTL KV（主包仅依赖标准库与 oekit/concurrency/async，后者为纯标准库实现的外部模块）：单机内存模式的共享存储原语。
+// Package memkv 进程内字符串 TTL KV（主包仅依赖标准库与 oekit/pkg/cache）：单机内存模式的共享存储原语。
 //
 // 服务对象：Redis 消费方（anonymous/presign 等持窄接口的域）在 redis.host 为空
 // 时的等价兜底——取件码映射、直传会话这类短 TTL 数据。语义对齐 Redis 最小子集：
 // Get / Set / SetNX（原子）/ Del + TTL 过期；不做持久化、不跨进程。
 //
-// 防御对齐 lockout 内存兜底先例（2026-10-05 审计 P2）：容量上限 + 周期清扫 +
-// 满载守卫——仅靠惰性清理时，攻击者用海量唯一键（取件码枚举/负缓存标记）可把
-// 表撑到无界。
+// # 收编 oekit/pkg/cache.LocalCache（2026-11-03）
+//
+// 手搓 map+mutex+TTL 表退役，本包只保留「Redis 最小子集 API 形状」的薄门面
+// （字符串键值、无 ctx）。收编顺带根治一个数据竞争：旧实现的周期清扫协程
+// （startGC）裸调 sweepLocked（其文档要求「调用方须已持锁」）⇒ 与读写路径的
+// s.mu 并发访问同一张 map（-race 必红，线上只因 10min 清扫窗口罕见才未炸）。
+//
+// 与旧实现的有意差异（满载语义，对齐 lockout 内存兜底先例的「差异记录在案」
+// 纪律）：
+//   - 旧：满载先清扫过期、仍满则**整表重置**（保命优先于保留数据）；
+//   - 新：LocalCache MaxSize=DefaultMax + FIFO 逐出（写满时淘汰最早写入）。
+//
+// 防 DoS 的内存上界不变（DefaultMax）；差异只在「被撑爆时的附带伤害面」——
+// 整表重置殃及全部键，FIFO 只逐出最旧的键。两者同属「缓存/标记失效、回源
+// 兜底」的代价类别（DB 仍是唯一真相源），FIFO 严格更温和。
+//
+// 另两处口径差（均已核消费面无感）：
+//   - 过期回收：旧=10min 周期清扫+读路径惰性删除；新=读路径惰性删除（含
+//     SetNX 的「过期按不存在」）+满载 FIFO 逐出，无后台清扫 goroutine
+//     （NullTTL 显式禁用 ⇒ sweepNeeded=false，进程内零常驻协程）。过期
+//     尸体最多驻留到被读到或被逐出，内存上界不变。
+//   - Del 计数：旧=map 存在性（过期未回收条目也计数）；新=删前逻辑存在性
+//     统计（过期即不存在）。单线程语义一致；与并发写入交错时计数为近似
+//     ——消费面无人读计数（redisshim 消费点全走 .Err()，已核）。
 //
 // 消费方 ≥3 处后可评估上收 kit（当前 anonymous/presign 两个适配层复用本包）。
 package memkv
 
 import (
-	"sync"
+	"context"
 	"time"
 
-	"github.com/oekit/concurrency/async"
+	"github.com/oekit/pkg/cache"
 )
 
 const (
-	// DefaultMax 单表容量上限。满载先清扫过期，仍满则整表重置（保命优先于
-	// 保留数据：满载意味着已被海量唯一键刷过，重置的代价是缓存/标记失效，
-	// 重回源路径兜底，不放大业务影响）。
+	// DefaultMax 单表容量上限（LocalCache MaxSize：写满 FIFO 逐出，语义见
+	// 包文档「满载语义」）。攻击面同旧口径：海量唯一键刷表时内存有界。
 	DefaultMax = 65536
-	// DefaultGCPeriod 周期清扫间隔。
+	// DefaultGCPeriod 历史自管清扫周期。现无自管清扫（过期回收口径见包
+	// 文档），保留常量兼容既有引用。
 	DefaultGCPeriod = 10 * time.Minute
 )
 
-type entry struct {
-	val string
-	exp time.Time // 零值 = 永不过期（调用方恒带 TTL，保留通用性）
-}
-
-func (e entry) expired(now time.Time) bool {
-	return !e.exp.IsZero() && now.After(e.exp)
-}
-
-// Store 字符串 TTL KV。并发安全；清扫协程随首次写入惰性启动（只读不启）。
+// Store 字符串 TTL KV。并发安全；零常驻 goroutine（无后台清扫件）。
 type Store struct {
-	mu       sync.Mutex
-	m        map[string]entry
-	max      int
-	gcPeriod time.Duration
-	once     sync.Once
-	now      func() time.Time // 可注入时钟（测试）
+	c *cache.LocalCache[string]
 }
 
-// New 创建 Store（默认容量与清扫周期）。
+// New 创建 Store（默认容量；时钟 time.Now）。
 func New() *Store {
-	return &Store{
-		m:        map[string]entry{},
-		max:      DefaultMax,
-		gcPeriod: DefaultGCPeriod,
-		now:      time.Now,
-	}
+	return newWithClock(time.Now)
 }
 
-// WithClock 注入时钟（测试用）。
+// WithClock 注入时钟（测试用）。LocalCache 的时钟在构造时确定，故返回注入
+// 时钟的**新实例**；仅测试链式 New().WithClock(...) 形态使用（已核全部调用
+// 点），写入后换时钟会丢数据。
 func (s *Store) WithClock(now func() time.Time) *Store {
-	s.now = now
-	return s
+	return newWithClock(now)
+}
+
+func newWithClock(now func() time.Time) *Store {
+	return &Store{c: cache.NewLocalCache(cache.LocalConfig[string]{
+		TTL:     0, // 无默认 TTL：逐操作显式传参，ttl<=0 = 永不过期（同旧 expAt）
+		MaxSize: DefaultMax,
+		Now:     now,
+		NullTTL: -1, // 显式禁用空值缓存：本 KV 无 GetOrLoad/markers 概念；顺带 sweepNeeded=false ⇒ 零后台 goroutine
+	})}
 }
 
 // Len 返回当前条目数（含未过期；测试用）。
-func (s *Store) Len() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.m)
-}
+func (s *Store) Len() int { return s.c.Size() }
 
-// Get 返回 (值, 是否命中)。过期条目惰性删除。
+// Get 返回 (值, 是否命中)。过期条目惰性删除（LocalCache 读路径回收）。
 func (s *Store) Get(key string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.m[key]
-	if !ok {
+	v, hit, err := s.c.GetEx(context.Background(), key)
+	if err != nil || !hit || v == nil {
 		return "", false
 	}
-	if e.expired(s.now()) {
-		delete(s.m, key)
-		return "", false
-	}
-	return e.val, true
+	return *v, true
 }
 
-// Set 写入（覆盖语义，同 Redis SET）。
+// Set 写入（覆盖语义，同 Redis SET）。ttl<=0 = 永不过期。
 func (s *Store) Set(key, val string, ttl time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.insert(key, entry{val: val, exp: s.expAt(ttl)})
+	_ = s.c.SetWithTTL(context.Background(), key, &val, ttl)
 }
 
 // SetNX 不存在才写入，返回是否写入成功（原子，同 Redis SET NX）。
-// 已有过期条目视为不存在（写入前失效）。
+// 已有过期条目视为不存在（LocalCache.SetNX 契约同口径）。
 func (s *Store) SetNX(key, val string, ttl time.Duration) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if e, ok := s.m[key]; ok && !e.expired(s.now()) {
-		return false
-	}
-	s.insert(key, entry{val: val, exp: s.expAt(ttl)})
-	return true
+	ok, _ := s.c.SetNX(context.Background(), key, &val, ttl)
+	return ok
 }
 
-// Del 删除若干键，返回实际删除数（同 Redis DEL）。
+// Del 删除若干键，返回实际删除数（同 Redis DEL）。计数口径见包文档。
 func (s *Store) Del(keys ...string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	ctx := context.Background()
 	n := 0
+	present := make([]string, 0, len(keys))
 	for _, k := range keys {
-		if _, ok := s.m[k]; ok {
-			delete(s.m, k)
+		if ok, _ := s.c.Exists(ctx, k); ok {
 			n++
+			present = append(present, k)
 		}
 	}
+	_ = s.c.DelBatch(ctx, present...)
 	return n
-}
-
-// expAt 由 TTL 计算过期时点（ttl<=0 = 永不过期，对齐 Redis 无过期语义）。
-func (s *Store) expAt(ttl time.Duration) time.Time {
-	if ttl <= 0 {
-		return time.Time{}
-	}
-	return s.now().Add(ttl)
-}
-
-// insert 满载守卫下的写入。调用方须已持锁。
-func (s *Store) insert(key string, e entry) {
-	s.startGC()
-	if _, exists := s.m[key]; !exists && len(s.m) >= s.max {
-		s.sweepLocked()
-		if len(s.m) >= s.max {
-			s.m = map[string]entry{}
-		}
-	}
-	s.m[key] = e
-}
-
-// startGC 惰性启动清扫协程（守护协程，随进程存活——与 lockout 先例一致，
-// Store 为进程级单例量级，不为短生命周期实例设计回收）。常驻无监督，GoSafe
-// 兜底与 lockout 同判。
-func (s *Store) startGC() {
-	s.once.Do(func() {
-		async.GoSafe(func() {
-			ticker := time.NewTicker(s.gcPeriod)
-			defer ticker.Stop()
-			for range ticker.C {
-				s.sweepLocked()
-			}
-		})
-	})
-}
-
-// sweepLocked 清扫过期条目。调用方须已持锁。
-func (s *Store) sweepLocked() {
-	now := s.now()
-	for k, e := range s.m {
-		if e.expired(now) {
-			delete(s.m, k)
-		}
-	}
 }

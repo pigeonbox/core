@@ -276,7 +276,11 @@ func Complete(ctx context.Context, c *app.RequestContext) {
 			// （那是「预签名生成失败」= 500 语义，且消息对已完成场景是错的）。
 			resp.NewErrorByCode(c, errcode.CodePresignCompleted)
 		default:
-			resp.NewErrorWithMessage(c, errcode.CodeInternal, err.Error())
+			// typed error 按业务码透传（2026-11-03）：魔数/类型拒绝（30011）、
+			// 文件过大（10010）、配额（30002）等曾在此塌成 10008「内部错误」——
+			// 用户传 .AppImage 被误杀后只看到「内部错误」，无从判断是内容问题。
+			// 未实现 ErrCode 的错误 NewTypedError 仍按 10008 兜底，行为不回退。
+			resp.NewTypedError(c, err)
 		}
 		return
 	}

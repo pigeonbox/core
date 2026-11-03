@@ -55,8 +55,10 @@ var codeMessages = map[int]string{
 //     调用方映射；本包构造器不设置，与迁移前一致）；
 //   - Error() 文案多出 "biz_code:%d " 前缀（原为纯 message）。
 //
-// 本仓无任何调用点（AppError 及其构造器全仓仅本文件自身引用，qnap/server/
-// openwrt/fnos 四个消费仓均未引用 pkg/errors），故上述差异无对外可观测影响。
+// 调用点：app/share/wrappedkey_validate.go（core#30 补缺的 wrapped_key 形状
+// 校验）为全仓唯一构造器调用点；qnap/server/openwrt/fnos 四个消费仓均未引用
+// pkg/errors。⚠️ BizError **没有** ErrCode() 方法 ⇒ 经 resp.NewTypedError 透传
+// 时须单独提取 BizCode（见 pkg/resp/response.go），否则业务码塌成 10008。
 type AppError = oekiterrors.BizError
 
 // New 构造一个业务错误（业务码 + 描述）。

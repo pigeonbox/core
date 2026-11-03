@@ -121,7 +121,7 @@ func TestCleanExpiredFiles_NoStorage(t *testing.T) {
 // customTestConfig 构造一份与默认值不同的配置，便于断言。
 func customTestConfig(name string) *SystemConfig {
 	cfg := &SystemConfig{}
-	cfg.Base = &BaseConfig{Name: name, Description: "自定义描述", Port: 12345}
+	cfg.Base = &BaseConfig{Name: name, Description: "自定义描述"}
 	cfg.Storage = &StorageSettings{Type: "s3", MaxSize: 5 * 1024 * 1024 * 1024}
 	cfg.Transfer = &TransferSettings{MaxCount: 50, ExpireDefault: 30}
 	return cfg
@@ -151,7 +151,6 @@ func TestGetConfig_PersistedAcrossRestart(t *testing.T) {
 	cfg, err := svc2.GetConfig(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "重启不丢", cfg.Base.Name)
-	assert.Equal(t, 12345, cfg.Base.Port)
 	assert.Equal(t, "s3", cfg.Storage.Type)
 	assert.Equal(t, int64(5*1024*1024*1024), cfg.Storage.MaxSize)
 	assert.Equal(t, 50, cfg.Transfer.MaxCount)
@@ -184,8 +183,8 @@ func TestUpdateConfig_InvalidConfig(t *testing.T) {
 	adminDB := newAdminTestDB(t)
 	svc := NewService(adminDB)
 
-	bad := customTestConfig("非法端口")
-	bad.Base.Port = 70000
+	bad := customTestConfig("非法公网地址")
+	bad.Base.PublicURL = "ftp://not-http"
 	require.Error(t, svc.UpdateConfig(context.Background(), bad))
 
 	neg := customTestConfig("负数上限")
