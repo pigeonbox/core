@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/oekit/concurrency/syncx"
@@ -90,6 +91,33 @@ type GetReq struct {
 func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePreview, error) {
 	// 下载闸门 + 分享管控（回归 P0：此前裸查 DB，blocked/待审/过期/密码/登录闸门
 	// 全部旁路，违规内容可被匿名预览提取全文）
+	fileCode, err := s.authorizePickup(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// 取预览；不存在则生成
+	preview, err := s.previewRepo.GetByFileCodeID(ctx, fileCode.ID)
+	if err == nil {
+		return s.renderThumbURL(preview, req.Code), nil
+	}
+	// 并发闸：只在真实生成路径占用（缓存命中零开销）
+	release, ok := previewGenGate.TryAcquire()
+	if !ok {
+		return nil, ErrPreviewBusy
+	}
+	defer release()
+	preview, err = s.generatePreview(ctx, fileCode)
+	if err != nil {
+		return nil, ErrPreviewUnavailable
+	}
+	return s.renderThumbURL(preview, req.Code), nil
+}
+
+// authorizePickup 取件闸门（登录/解析/未就绪/次数/过期/管控/密码/防爆破），
+// 通过则回解析后的分享记录。GetOrCreate 与 GetThumb 共用同一闸门链——
+// 缩略图同样是「拿内容」的面，闸门不全 ⇒ 缩略图成旁路提取通道。
+func (s *Service) authorizePickup(ctx context.Context, req GetReq) (*model.FileCode, error) {
 	if err := gate.CheckDownloadLogin(req.UserID); err != nil {
 		return nil, err
 	}
@@ -139,23 +167,54 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 	case gate.PickupPasswordMissing, gate.PickupPasswordWrong:
 		return nil, ErrPasswordRequired
 	}
+	return fileCode, nil
+}
 
-	// 取预览；不存在则生成
-	preview, err := s.previewRepo.GetByFileCodeID(ctx, fileCode.ID)
-	if err == nil {
-		return preview, nil
+// renderThumbURL 把持久层的缩略图落盘位置改写为可取的 URL（`/preview/<code>/thumb`，
+// 取件密码经 X-Share-Password 头，与 /preview/:code 同口径）。
+//
+// 背景：此前 Thumbnail 落的是**服务器文件系统路径**并被响应直出——契约字段
+// 语义是「缩略图URL」，实际却是不可取的假 URL + 服务器路径泄漏。响应面统一
+// 改写为 URL；DB 里保留落盘位置（thumb 服务路由按 code 查库定位文件，
+// 响应与 DB 字段自此语义分叉，注释即真相）。
+func (s *Service) renderThumbURL(preview *model.FilePreview, code string) *model.FilePreview {
+	if preview == nil || preview.Thumbnail == "" {
+		return preview
 	}
-	// 并发闸：只在真实生成路径占用（缓存命中零开销）
-	release, ok := previewGenGate.TryAcquire()
-	if !ok {
-		return nil, ErrPreviewBusy
-	}
-	defer release()
-	preview, err = s.generatePreview(ctx, fileCode)
+	preview.Thumbnail = "/preview/" + code + "/thumb"
+	return preview
+}
+
+// GetThumb 缩略图取件：同款取件闸门后回缓存目录里的缩略图文件。
+// 文件名只取落盘位置的 base（历史行存的是全路径）并在缓存目录内做
+// 穿越复核——DB 值虽非用户直参，仍按不可信输入防守。
+func (s *Service) GetThumb(ctx context.Context, req GetReq) (path string, err error) {
+	fileCode, err := s.authorizePickup(ctx, req)
 	if err != nil {
-		return nil, ErrPreviewUnavailable
+		return "", err
 	}
-	return preview, nil
+	preview, err := s.previewRepo.GetByFileCodeID(ctx, fileCode.ID)
+	if err != nil || preview.Thumbnail == "" {
+		return "", ErrPreviewUnavailable
+	}
+
+	engine := previewService.GetService()
+	cachePath := engine.CachePath()
+	if cachePath == "" {
+		return "", ErrPreviewUnavailable
+	}
+	base := filepath.Base(preview.Thumbnail)
+	full := filepath.Join(cachePath, base)
+	// 穿越复核：Join 后必须仍落在缓存目录内（Base 已剥目录，这里防
+	// base 为 "."/".." 之类畸形值的残余面）
+	rel, relErr := filepath.Rel(cachePath, full)
+	if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", ErrPreviewUnavailable
+	}
+	if fi, statErr := os.Stat(full); statErr != nil || fi.IsDir() {
+		return "", ErrPreviewUnavailable
+	}
+	return full, nil
 }
 
 // generatePreview 生成预览。经统一存储实例读取文件（回归：此前硬编码

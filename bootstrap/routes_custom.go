@@ -51,6 +51,10 @@ func customizedRegister(r *server.Hertz) {
 	// 此前端点缺失导致前端启动报 "获取配置失败: Network Error"。此处补齐。
 	r.GET("/api/config", publicConfigHandler)
 
+	// ===== 预览缩略图取件（二进制面；同款取件闸门在 app/preview）=====
+	// /preview/:code 的响应里 Thumbnail 即本路由 URL（密码经 X-Share-Password 头）。
+	r.GET("/preview/:code/thumb", customHandler.PreviewThumb)
+
 	// ===== P2P 联邦解析代理（M2；未启用时 handler 返回 available:false）=====
 	// 2026-10-26 IDL 化收编：路由改由 contracts IDL 生成（idl/publicapi.thrift
 	// ⇒ 只在公开副本注册，可见性与收敛前一致）。
