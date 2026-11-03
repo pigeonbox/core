@@ -86,6 +86,7 @@ var shareSurfaceContracts = []shareSurfaceContract{
 	{"GET /share/download", "文件内容（交付面）", "交付点扣次", "TestDownload_CountExhausted_BlocksNewSession_AllowsChargedSession", errcode.CodeShareReachLimit, 403},
 	{"GET /share/metadata/:code", "分享元信息（文件名/大小）", "20004", "TestShareMetadata_CountExhaustedReturns20004", errcode.CodeShareReachLimit, 403},
 	{"GET /preview/:code", "预览摘要（内容派生）", "20004", "TestPreview_CountExhausted_ReturnsReachLimit", errcode.CodeShareReachLimit, 403},
+	{"GET /preview/:code/thumb", "缩略图（内容派生，二进制流）", "20004", "TestGetThumb_CountExhausted", errcode.CodeShareReachLimit, 403},
 	{"POST /anonymous/retrieve", "取件凭证（不扣次）", "20007", "TestRetrieve_CountExhausted", errcode.CodePickupCodeExhausted, 403},
 	{"GET /anonymous/download/:code", "下载直链（302）", "20007", "TestAnonymousDownload_CountExhausted_ReturnsExhausted", errcode.CodePickupCodeExhausted, 403},
 	{"GET /anonymous/search/:code", "分享元信息（文件名/大小）", "20007", "TestSearchByCode_CountExhausted", errcode.CodePickupCodeExhausted, 403},
