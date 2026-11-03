@@ -11,6 +11,15 @@ import (
 	"gorm.io/gorm"
 )
 
+// 系统初始化的**业务拒绝**哨兵错误：撞名/重复初始化是客户端可见的冲突
+// （409），不是服务端故障。2026-11-02 与 user 注册面同批收口（此前 handler
+// 一律映射 500「系统初始化失败」）。
+var (
+	ErrAdminUsernameExists = errors.New("用户名已存在")
+	ErrAdminEmailExists    = errors.New("邮箱已存在")
+	ErrAlreadyInitialized  = errors.New("系统已初始化，禁止重复初始化")
+)
+
 // InitializeSystemReq 系统初始化请求
 type InitializeSystemReq struct {
 	AdminUsername string
@@ -55,17 +64,17 @@ func (s *Service) InitializeSystem(ctx context.Context, req *InitializeSystemReq
 		return fmt.Errorf("检查管理员状态失败: %w", err)
 	}
 	if count > 0 {
-		return errors.New("系统已初始化，禁止重复初始化")
+		return ErrAlreadyInitialized
 	}
 
 	// 检查用户名是否已存在
 	if user, _ := s.userRepo.GetByUsername(ctx, req.AdminUsername); user != nil {
-		return errors.New("用户名已存在")
+		return ErrAdminUsernameExists
 	}
 
 	// 检查邮箱是否已存在
 	if user, _ := s.userRepo.GetByEmail(ctx, req.AdminEmail); user != nil {
-		return errors.New("邮箱已存在")
+		return ErrAdminEmailExists
 	}
 
 	// 哈希密码
@@ -91,7 +100,7 @@ func (s *Service) InitializeSystem(ctx context.Context, req *InitializeSystemReq
 		return fmt.Errorf("创建管理员失败: %w", err)
 	}
 	if !created {
-		return errors.New("系统已初始化，禁止重复初始化")
+		return ErrAlreadyInitialized
 	}
 
 	// 首启成功 ⇒ 通知装配层收尾（清理一次性令牌等）。
