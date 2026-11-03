@@ -102,4 +102,33 @@ func TestPublicConfigHandler_UploadCaps(t *testing.T) {
 	body := w.Body.String()
 	assert.NotContains(t, body, "useruploadsize", "内部字段名不得出现在公开响应")
 	assert.NotContains(t, body, "max_upload_size", "per-user 私有值不得出现在公开响应")
+
+	// PigeonBeam 入口（2026-11-03 Phase 3）：base.beam_base_url 下发为 beamBaseUrl，
+	// 空 = 未配置 = 前端零渲染（不给必然打不开的坏按钮）。
+	{
+		require.NoError(t, configApp.Default().UpdateConfig(ctx, &configApp.SystemConfig{
+			Base: &configApp.BaseConfig{Name: "n", BeamBaseURL: "https://beam.example.com"},
+		}))
+		w2 := ut.PerformRequest(h.Engine, "GET", "/api/config", nil, ut.Header{Key: "Host", Value: "test.local"})
+		require.Equal(t, 200, w2.Code)
+		var out2 struct {
+			Data map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &out2))
+		assert.Equal(t, "https://beam.example.com", out2.Data["beamBaseUrl"],
+			"base.beam_base_url 必须下发为 beamBaseUrl（失败卡片据此渲染 Beam 入口）")
+
+		// 清空 ⇒ 空串（前端据空串零渲染）
+		require.NoError(t, configApp.Default().UpdateConfig(ctx, &configApp.SystemConfig{
+			Base: &configApp.BaseConfig{Name: "n", BeamBaseURL: ""},
+		}))
+		w3 := ut.PerformRequest(h.Engine, "GET", "/api/config", nil, ut.Header{Key: "Host", Value: "test.local"})
+		require.Equal(t, 200, w3.Code)
+		var out3 struct {
+			Data map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &out3))
+		assert.Equal(t, "", out3.Data["beamBaseUrl"],
+			"beam_base_url 空时必须下发空串（前端据空串零渲染，不给坏入口）")
+	}
 }

@@ -71,3 +71,31 @@ func TestValidateSystemConfigBasePublicURL(t *testing.T) {
 		t.Fatalf("错误信息应含字段名 base.public_url，实际：%v", err)
 	}
 }
+
+// TestValidateSystemConfigBaseBeamBaseURL base.beam_base_url（PigeonBeam 入口，
+// 2026-11-03 Phase 3）：可选、空=不渲染、形态同 public_url（http/https 白名单）。
+func TestValidateSystemConfigBaseBeamBaseURL(t *testing.T) {
+	// 空 = 未配置 = 前端零渲染该入口
+	if err := validateSystemConfig(&SystemConfig{Base: &BaseConfig{Name: "n"}}); err != nil {
+		t.Fatalf("未配置 beam_base_url 应放行：%v", err)
+	}
+	if err := validateSystemConfig(&SystemConfig{Base: &BaseConfig{BeamBaseURL: "   "}}); err != nil {
+		t.Fatalf("空白 beam_base_url 应放行：%v", err)
+	}
+	// 合法值放行（http/https，含局域网）
+	for _, raw := range []string{"https://beam.example.com", "http://192.168.1.10:9000", "https://beam.example.com/entry"} {
+		if err := validateSystemConfig(&SystemConfig{Base: &BaseConfig{BeamBaseURL: raw}}); err != nil {
+			t.Fatalf("合法 beam_base_url %q 应放行：%v", raw, err)
+		}
+	}
+	// 非法 scheme / 缺 host 拦下，错误信息含字段名
+	for _, raw := range []string{"javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", "beam.example.com", "https://"} {
+		err := validateSystemConfig(&SystemConfig{Base: &BaseConfig{BeamBaseURL: raw}})
+		if err == nil {
+			t.Fatalf("非法 beam_base_url %q 应被拒", raw)
+		}
+		if !strings.Contains(err.Error(), "base.beam_base_url") {
+			t.Fatalf("错误信息应含 base.beam_base_url，实际：%v", err)
+		}
+	}
+}

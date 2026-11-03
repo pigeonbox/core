@@ -33,6 +33,16 @@ type BaseConfig struct {
 	// 带内网 IP（如 http://10.10.10.3:56789）→ 发给外部用户根本打不开。
 	// 这是"多部署方式"下最隐蔽的易用性断点。
 	PublicURL string `json:"public_url"`
+
+	// BeamBaseURL PigeonBeam 设备直传客户端入口（2026-11-03 Phase 3 · 可选）：
+	// 上传失败时前端给出「用 PigeonBeam 加速传」的跳转交接地址（web URL）。
+	// 为空 = 未配置 = 前端**零渲染**该入口（不给必然打不开的坏按钮）。
+	//
+	// 与 /beam（NAS 平台适配器挂载的 web 面板，客户端探测）不是一回事——
+	// 这里是管理员显式配置的**独立 Beam 客户端**地址，供浏览器端失败时交接。
+	// ⚠️ 语义诚实：Beam 是设备直传客户端，入口只是**跳转交接**（携取件码/来源
+	// 参数），浏览器端不编排 Beam 传输。校验口径同 public_url（http/https）。
+	BeamBaseURL string `json:"beam_base_url"`
 }
 
 // StorageSettings 存储概览段（nil 语义同 BaseConfig；运行时存储后端走 runtime_storage）。
@@ -133,6 +143,13 @@ func validateSystemConfig(cfg *SystemConfig) error {
 		if u := strings.TrimSpace(cfg.Base.PublicURL); u != "" {
 			if err := validatePublicSiteURL(u); err != nil {
 				return fmt.Errorf("base.public_url 校验失败: %w", err)
+			}
+		}
+		// base.beam_base_url PigeonBeam 入口（2026-11-03 Phase 3）：可选，空 = 不渲染。
+		// 形态校验同 public_url（http/https 白名单）。
+		if u := strings.TrimSpace(cfg.Base.BeamBaseURL); u != "" {
+			if err := validatePublicSiteURL(u); err != nil {
+				return fmt.Errorf("base.beam_base_url 校验失败: %w", err)
 			}
 		}
 	}

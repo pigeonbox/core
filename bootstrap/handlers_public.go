@@ -46,6 +46,8 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 	// 否则用户看到的链接与自己发的链接对不上。
 	// 口径收敛到 effectivePublicURL（bootstrap/capabilities.go）——三处取同一值。
 	publicURL := effectivePublicURL(ctx)
+	// PigeonBeam 入口（2026-11-03 Phase 3）：base.beam_base_url，空 = 前端零渲染。
+	beamBaseURL := ""
 	if cfg, err := configApp.Default().GetConfig(ctx); err == nil && cfg != nil {
 		if cfg.Base.Name != "" {
 			name = cfg.Base.Name
@@ -53,6 +55,7 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		if cfg.Base.Description != "" {
 			description = cfg.Base.Description
 		}
+		beamBaseURL = strings.TrimSpace(cfg.Base.BeamBaseURL)
 		if cfg.Download != nil {
 			effectiveDownload = *cfg.Download
 		}
@@ -66,6 +69,9 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		// 站点公网地址（2026-10-22）：供前端拼分享链接与交付文本。
 		// 空串 = 未配置 → 前端回退 location.origin。
 		"publicUrl": publicURL,
+		// PigeonBeam 入口（2026-11-03 Phase 3）：上传失败时「用 PigeonBeam 加速传」
+		// 跳转交接地址。空串 = 未配置 → 前端零渲染该入口（不给坏按钮）。
+		"beamBaseUrl": beamBaseURL,
 		// 联邦是否启用（2026-10-22）：前端据此决定取件台要不要显式给出
 		// 「跨站取件」提示。生效值 = overlay 后的全局 conf（多副本模式下
 		// 联邦被强制降级关闭，见 bootstrap/deployment.go 的降级分支）。
