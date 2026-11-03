@@ -86,8 +86,13 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		// **系统默认层**同源；**不含** per-user 覆盖（登录用户私有值，不上公开面——
 		// 服务端 413 才是权威，本值只用于前端**提示**）。
 		"maxBatchSize": effectiveUploadBatchCap(ctx),
-		"enableChunk":  config.Upload.EnableChunk,
-		"openUpload":   config.Upload.OpenUpload,
+		// 禁传扩展名黑名单（upload.blocked_extensions，缺省=内置默认可执行扩展名）：
+		// 前端**前置**拦截用（选文件时即拒，省一次上传后才被 30011 拒的往返与流量）。
+		// 判据与服务端校验同源：utils.GetBlockedExtensions()（filecheck.go）——
+		// 两侧必须同一次取值，否则 UI 与服务端拒收口径漂移。
+		"blockedExtensions": utils.GetBlockedExtensions(),
+		"enableChunk":       config.Upload.EnableChunk,
+		"openUpload":        config.Upload.OpenUpload,
 		// 注册开关走生效值：管理后台"用户配置"持久化段优先，
 		// 无记录回退 yaml（与 /user/register 判定同源）
 		"registerEnabled": configApp.EffectiveUserSettings(ctx).AllowUserRegistration,
