@@ -61,7 +61,9 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 	async.GoSafe(func() {
 		s.assembleZip(ctx, buildCtx, pw, cancel, fc, entries)
 	})
-	return pr, nil
+	// zip 管道读端同样套停滞守卫：客户端停滞/消失时守卫中断并反压解除组装协程
+	//（组装侧另有 zipStreamTimeout 整体上限）。
+	return newStallGuard(pr, downloadStallTimeout()), nil
 }
 
 // assembleZip 逐文件从存储拉流组装 zip 写入 pw（ZipStream 组装协程体，独立成
@@ -125,7 +127,10 @@ func (s *Service) singleFileStream(ctx context.Context, fc *model.FileCode, item
 		return nil, fmt.Errorf("文件路径为空")
 	}
 	rc, _, err := s.storage.GetFileReader(ctx, rel)
-	return rc, err
+	if err != nil {
+		return nil, err
+	}
+	return newStallGuard(rc, downloadStallTimeout()), nil
 }
 
 // zipItem zip 组装条目（name=zip 内展示名，rel=存储相对路径）

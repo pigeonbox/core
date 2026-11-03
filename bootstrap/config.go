@@ -132,10 +132,8 @@ var envBindings = map[string][]string{
 	// server
 	"server.host":          {"PB_SERVER_HOST", "HOST"},
 	"server.port":          {"PB_SERVER_PORT", "PORT"},
-	"server.mode":          {"PB_SERVER_MODE"},
-	"server.base_url":      {"PB_SERVER_BASE_URL", "BASE_URL"},
-	"server.read_timeout":  {"PB_SERVER_READ_TIMEOUT"},
-	"server.write_timeout": {"PB_SERVER_WRITE_TIMEOUT"},
+	"server.mode":     {"PB_SERVER_MODE"},
+	"server.base_url": {"PB_SERVER_BASE_URL", "BASE_URL"},
 	// database
 	"database.driver":   {"PB_DATABASE_DRIVER", "DATABASE_TYPE", "DB_TYPE"},
 	"database.db_name":  {"PB_DATABASE_DB_NAME", "DATABASE_NAME", "DB_NAME"},
