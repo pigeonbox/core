@@ -33,6 +33,7 @@ import (
 	configApp "github.com/pigeonbox/core/app/config"
 	setupApp "github.com/pigeonbox/core/app/setup"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -85,8 +86,49 @@ func TestPublicConfigHandler_UploadCaps(t *testing.T) {
 	assert.EqualValues(t, 268435456, out.Data["maxBatchSize"],
 		"单次发送总量上限必须下发（与单文件上限是两个闸，只发一个必然对不上）")
 
+	// 禁传扩展名黑名单必须下发（2026-11-03 上传前置校验）：前端选文件时即拦，
+	// 判据必须与服务端校验同源（utils.GetBlockedExtensions）——两份名单漂移
+	// ⇒ 前置放行的文件在上传完成后才被 30011 拒（1.35GB 实录同款代价）。
+	{
+		want, err := json.Marshal(utils.GetBlockedExtensions())
+		require.NoError(t, err)
+		got, err := json.Marshal(out.Data["blockedExtensions"])
+		require.NoError(t, err)
+		assert.JSONEq(t, string(want), string(got),
+			"blockedExtensions 必须与 utils.GetBlockedExtensions() 逐项一致")
+	}
+
 	// per-user 私有值不得出现在公开面（登录用户的实际上限以服务端 413 为准）
 	body := w.Body.String()
 	assert.NotContains(t, body, "useruploadsize", "内部字段名不得出现在公开响应")
 	assert.NotContains(t, body, "max_upload_size", "per-user 私有值不得出现在公开响应")
+
+	// PigeonBeam 入口（2026-11-03 Phase 3）：base.beam_base_url 下发为 beamBaseUrl，
+	// 空 = 未配置 = 前端零渲染（不给必然打不开的坏按钮）。
+	{
+		require.NoError(t, configApp.Default().UpdateConfig(ctx, &configApp.SystemConfig{
+			Base: &configApp.BaseConfig{Name: "n", BeamBaseURL: "https://beam.example.com"},
+		}))
+		w2 := ut.PerformRequest(h.Engine, "GET", "/api/config", nil, ut.Header{Key: "Host", Value: "test.local"})
+		require.Equal(t, 200, w2.Code)
+		var out2 struct {
+			Data map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &out2))
+		assert.Equal(t, "https://beam.example.com", out2.Data["beamBaseUrl"],
+			"base.beam_base_url 必须下发为 beamBaseUrl（失败卡片据此渲染 Beam 入口）")
+
+		// 清空 ⇒ 空串（前端据空串零渲染）
+		require.NoError(t, configApp.Default().UpdateConfig(ctx, &configApp.SystemConfig{
+			Base: &configApp.BaseConfig{Name: "n", BeamBaseURL: ""},
+		}))
+		w3 := ut.PerformRequest(h.Engine, "GET", "/api/config", nil, ut.Header{Key: "Host", Value: "test.local"})
+		require.Equal(t, 200, w3.Code)
+		var out3 struct {
+			Data map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &out3))
+		assert.Equal(t, "", out3.Data["beamBaseUrl"],
+			"beam_base_url 空时必须下发空串（前端据空串零渲染，不给坏入口）")
+	}
 }
