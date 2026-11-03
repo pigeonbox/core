@@ -380,13 +380,13 @@ func UpdateGlobalConfig(mutator func(cfg *AppConfiguration)) *AppConfiguration {
 }
 
 // ServerConfig 服务器配置
+// （ReadTimeout/WriteTimeout 两旋钮已删：定义后零消费、Hertz 语义接线会误杀
+// 慢速大文件上传——2026-11-03 死配置清理第二批）
 type ServerConfig struct {
-	Host         string `mapstructure:"host"`
-	Port         int    `mapstructure:"port"`
-	Mode         string `mapstructure:"mode"`     // debug, release, test
-	BaseURL      string `mapstructure:"base_url"` // 对外可访问的基础 URL（用于生成分享链接等）
-	ReadTimeout  int    `mapstructure:"read_timeout"`
-	WriteTimeout int    `mapstructure:"write_timeout"`
+	Host    string `mapstructure:"host"`
+	Port    int    `mapstructure:"port"`
+	Mode    string `mapstructure:"mode"`     // debug, release, test
+	BaseURL string `mapstructure:"base_url"` // 对外可访问的基础 URL（用于生成分享链接等）
 }
 
 // DatabaseConfig 数据库配置
@@ -599,6 +599,21 @@ func (c DownloadConfig) PresignThresholdMBOrDefault() int {
 		return 100
 	}
 	return c.PresignThresholdMB
+}
+
+// DownloadStallTimeout 下载停滞超时（download.download_timeout，秒）转时长。
+// 语义：传输中连续 N 秒无任何字节流动即中断下载（回收挂死连接）；
+// 值 <=0 或配置未加载返回 0（不限）。
+//
+// 动态语义：下载**开流时现读**——管理台保存后对新下载立即生效（与站点公网
+// 地址 provider 同类）。全局读收在 conf/ 属主包内（规则8 棘轮的「定义处」豁免面），
+// 消费方（app/share 停滞守卫）不各自直读全局配置。
+func DownloadStallTimeout() time.Duration {
+	c := globalConfig.Load()
+	if c == nil || c.Download.DownloadTimeout <= 0 {
+		return 0
+	}
+	return time.Duration(c.Download.DownloadTimeout) * time.Second
 }
 
 // StorageConfig 存储配置
