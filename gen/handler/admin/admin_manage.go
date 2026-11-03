@@ -12,6 +12,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -20,8 +21,10 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/pigeonbox/contracts/errcode"
 	adminapp "github.com/pigeonbox/core/app/admin"
 	userapp "github.com/pigeonbox/core/app/user"
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/pkg/utils"
@@ -132,6 +135,22 @@ func AdminCreateUser(ctx context.Context, c *app.RequestContext) {
 		_, err = userSvc.SetStorageQuota(ctx, created.ID, req.MaxStorageQuota)
 	}
 	if err != nil {
+		// 撞名/撞邮箱是业务冲突（40002「用户已存在」），不是「创建失败」泛化文案；
+		// 用户名格式非法按参数错误透传。2026-11-02 与注册面同批收口。
+		if errors.Is(err, userapp.ErrUsernameExists) {
+			resp.NewErrorWithMessage(c, errcode.CodeUserExists, "用户名已存在")
+			return
+		}
+		if errors.Is(err, userapp.ErrEmailExists) {
+			resp.NewErrorWithMessage(c, errcode.CodeUserExists, "该邮箱已被注册")
+			return
+		}
+		var typed interface{ ErrCode() int }
+		var bizErr *pkgerrors.AppError
+		if errors.As(err, &typed) || errors.As(err, &bizErr) {
+			resp.NewTypedError(c, err)
+			return
+		}
 		resp.NewErrorWithMessage(c, 40002, "创建用户失败: "+err.Error())
 		return
 	}

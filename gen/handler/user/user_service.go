@@ -4,6 +4,7 @@ package user
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +16,9 @@ import (
 	userservice "github.com/pigeonbox/core/app/user"
 	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/auth"
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/middleware"
+	"github.com/pigeonbox/core/pkg/resp"
 )
 
 var userService *userservice.Service
@@ -72,6 +75,36 @@ func Register(ctx context.Context, c *app.RequestContext) {
 		Nickname: req.Nickname,
 	})
 	if err != nil {
+		// typed 业务错误按业务码透传，不落 500/CodeInternal——
+		// 2026-11-02 实录：注册撞名被显示成「服务器内部错误」，用户无从得知
+		// 该换用户名（与 chunk 面 2026-10-19 事故同一收口教训）。
+		//
+		// 撞名/撞邮箱是**资源冲突**（409 + 10016）：客户端可修复的业务拒绝，
+		// 显式映射（不依赖 httpStatusForCode 的 10016 自动映射——该映射
+		// 尚未登记，见 pkg/resp）。
+		if errors.Is(err, userservice.ErrUsernameExists) {
+			c.JSON(consts.StatusConflict, map[string]interface{}{
+				"code":    errcode.CodeConflict,
+				"message": "用户名已存在，请更换",
+			})
+			return
+		}
+		if errors.Is(err, userservice.ErrEmailExists) {
+			c.JSON(consts.StatusConflict, map[string]interface{}{
+				"code":    errcode.CodeConflict,
+				"message": "该邮箱已被注册",
+			})
+			return
+		}
+		// 其余 typed 业务错误按码透传（如用户名格式非法 CodeBadRequest→400）。
+		// ⚠️ AppError(=oekit BizError) **没有** ErrCode() 方法 ⇒ 两个分支都要接，
+		// 否则参数错误塌回 500（见 pkg/resp.NewTypedError 的同款注释）。
+		var typed interface{ ErrCode() int }
+		var bizErr *pkgerrors.AppError
+		if errors.As(err, &typed) || errors.As(err, &bizErr) {
+			resp.NewTypedError(c, err)
+			return
+		}
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    errcode.CodeInternal,
 			"message": err.Error(),

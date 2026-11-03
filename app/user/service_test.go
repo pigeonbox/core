@@ -2,11 +2,13 @@ package user
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +55,20 @@ func TestCreate_Success(t *testing.T) {
 	assert.Equal(t, "Alice", resp.Nickname)
 }
 
+// 测试：非法用户名 ⇒ typed 参数错误（CodeBadRequest），不是裸 error。
+// 负对照：把 Create 里 ValidateUsername 的 pkgerrors.BadRequest 包装去掉
+// ⇒ 本用例红（errors.As 接不到业务错误）。
+func TestCreate_InvalidUsername_TypedBadRequest(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.Create(context.Background(), &CreateUserReq{
+		Username: "bad name!", Email: "x@example.com", Password: "x",
+	})
+	require.Error(t, err)
+	var bizErr *pkgerrors.AppError
+	require.True(t, errors.As(err, &bizErr), "非法用户名应返回 typed 业务错误：%v", err)
+	assert.Equal(t, pkgerrors.CodeBadRequest, bizErr.BizCode)
+}
+
 // 测试：重复用户名拒绝
 func TestCreate_DuplicateUsername(t *testing.T) {
 	svc := newTestService(t)
@@ -66,6 +82,10 @@ func TestCreate_DuplicateUsername(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
+	// sentinel 锁定：撞用户名必须是 ErrUsernameExists（typed 业务错误），
+	// handler 才能映射 409 而不是 500（2026-11-02 注册撞名 500 修复）。
+	// 负对照：换回 errors.New 裸错误 ⇒ 本断言红。
+	assert.ErrorIs(t, err, ErrUsernameExists)
 }
 
 // 测试：重复邮箱拒绝
@@ -81,6 +101,8 @@ func TestCreate_DuplicateEmail(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
+	// sentinel 锁定：撞邮箱必须是 ErrEmailExists（负对照同上）。
+	assert.ErrorIs(t, err, ErrEmailExists)
 }
 
 // 测试：登录成功返回 JWT token

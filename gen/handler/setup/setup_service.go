@@ -97,6 +97,23 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 		AdminEmail:    req.AdminEmail,
 	})
 	if err != nil {
+		// typed 业务拒绝按语义透传，不落 500——2026-11-02 与注册面同批收口：
+		// 此前撞名/重复初始化一律「系统初始化失败」+ CodeInternal，调用方无从区分。
+		if errors.Is(err, setupservice.ErrAlreadyInitialized) {
+			// 与上面 IsSystemInitialized 预检的口径一致（竞态兜底路径）
+			c.JSON(consts.StatusForbidden, map[string]interface{}{
+				"code":    errcode.CodeForbidden,
+				"message": err.Error(),
+			})
+			return
+		}
+		if errors.Is(err, setupservice.ErrAdminUsernameExists) || errors.Is(err, setupservice.ErrAdminEmailExists) {
+			c.JSON(consts.StatusConflict, map[string]interface{}{
+				"code":    errcode.CodeConflict,
+				"message": err.Error(),
+			})
+			return
+		}
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
 			"code":    errcode.CodeInternal,
 			"message": "系统初始化失败: " + err.Error(),
