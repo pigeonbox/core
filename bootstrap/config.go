@@ -231,6 +231,7 @@ var envBindings = map[string][]string{
 	"upload.allowed_extensions":    {"PB_UPLOAD_ALLOWED_EXTENSIONS"},
 	"upload.blocked_extensions":    {"PB_UPLOAD_BLOCKED_EXTENSIONS"},
 	"upload.enable_magic_check":    {"PB_ENABLE_MAGIC_CHECK"},
+	"upload.magic_check_skip_extensions": {"PB_MAGIC_CHECK_SKIP_EXTS"},
 	"upload.max_save_seconds_cap":  {"PB_UPLOAD_MAX_SAVE_SECONDS_CAP"},
 	"upload.anonymous_daily_count": {"PB_UPLOAD_ANON_DAILY_COUNT"},
 	"upload.anonymous_daily_bytes": {"PB_UPLOAD_ANON_DAILY_BYTES"},
@@ -251,13 +252,14 @@ var envBindings = map[string][]string{
 // 需按逗号拆分后写入（viper Unmarshal 的 WeaklyTypedInput 不拆分逗号，
 // 会把 ".jpg,.png" 整串当单个元素——此前 allowed_extensions env 一直有此问题）。
 var listValuedKeys = map[string]bool{
-	"upload.local_import.roots":    true,
-	"upload.allowed_extensions":    true,
-	"upload.blocked_extensions":    true,
-	"upload.allowed_expire_styles": true,
-	"security.trusted_proxies":     true,
-	"security.cors.allow_origins":  true,
-	"moderation.blocked_words":     true,
+	"upload.local_import.roots":          true,
+	"upload.allowed_extensions":          true,
+	"upload.blocked_extensions":          true,
+	"upload.magic_check_skip_extensions": true,
+	"upload.allowed_expire_styles":       true,
+	"security.trusted_proxies":           true,
+	"security.cors.allow_origins":        true,
+	"moderation.blocked_words":           true,
 }
 
 // splitCSV 逗号分隔字符串 → 去空白去空的切片。
