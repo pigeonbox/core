@@ -6,10 +6,9 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/oekit/concurrency/singleflight"
+	"github.com/oekit/pkg/cache"
 	"github.com/oekit/pkg/urlguard"
 	"github.com/pigeonbox/core/conf"
 )
@@ -37,20 +36,18 @@ func mustEndpointGuard() *urlguard.Guard {
 }
 
 // dnsCache 端点解析结果短缓存，避免每次校验都打 DNS（5 分钟 TTL）。
-// 未命中的并发解析经 singleflight 合并：同 host 共享一次 LookupIP，
-// 不同 host 并行互不阻塞（历史实现持全局锁横跨 DNS 调用，会把全部
-// 校验串行化在一次慢解析之后）。
-var (
-	dnsCache   = map[string]dnsCacheEntry{}
-	dnsCacheMu sync.Mutex
-	dnsFlight  = singleflight.New[[]net.IP]()
-)
-
-type dnsCacheEntry struct {
-	ips  []net.IP
-	at   time.Time
-	priv bool
-}
+// oekit/pkg/cache.LocalCache（TTL 过期回收 + 后台清扫）+ SingleFlightCache
+// 装饰器（并发未命中合并成一次 LookupIP，不同 host 并行互不阻塞——历史实现
+// 持全局锁横跨 DNS 调用，会把全部校验串行化在一次慢解析之后）。
+//
+// 语义与历史手搓 map 版对齐：解析失败不缓存（Source 回错即透传，下次重试）；
+// 「解析成功但无地址」缓存为真值（避免每请求重解析）。顺带修掉旧版两个小
+// 毛病：过期条目永不清理（多 host 场景下 map 无界增长）、entry.priv 死字段。
+var dnsCache = cache.NewSingleFlightCache(cache.NewLocalCache(cache.LocalConfig[[]net.IP]{
+	TTL:     5 * time.Minute,
+	NullTTL: -1, // 不写 null marker：Source 只在解析成功时返回非 nil
+	Source:  lookupHostIP,
+}))
 
 // ValidateEndpointURL 校验 s3/webdav 存储端点 URL：
 //   - 仅允许 http/https scheme
@@ -142,38 +139,24 @@ func ValidateEndpointHost(hostPort string) error {
 	return nil
 }
 
-// resolveHost 带缓存的 DNS 解析（结果缓存 5 分钟；解析失败不缓存，下次重试）。
-func resolveHost(host string) []net.IP {
-	if ips, ok := dnsCacheLookup(host); ok {
-		return ips
+// lookupHostIP DNS 解析回源函数（LocalCache.Source）。
+func lookupHostIP(ctx context.Context, host string) (*[]net.IP, error) {
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
 	}
-	ips, _ := dnsFlight.Do(context.Background(), host, func(ctx context.Context) ([]net.IP, error) {
-		// 双检:等待合并期间可能已被同批调用写入缓存
-		if ips, ok := dnsCacheLookup(host); ok {
-			return ips, nil
-		}
-		addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, err
-		}
-		ips := make([]net.IP, len(addrs))
-		for i, a := range addrs {
-			ips[i] = a.IP
-		}
-		dnsCacheMu.Lock()
-		dnsCache[host] = dnsCacheEntry{ips: ips, at: time.Now()}
-		dnsCacheMu.Unlock()
-		return ips, nil
-	})
-	return ips
+	ips := make([]net.IP, len(addrs))
+	for i, a := range addrs {
+		ips[i] = a.IP
+	}
+	return &ips, nil
 }
 
-// dnsCacheLookup 读取未过期的缓存解析结果（ok=false = 未命中/已过期）。
-func dnsCacheLookup(host string) ([]net.IP, bool) {
-	dnsCacheMu.Lock()
-	defer dnsCacheMu.Unlock()
-	if e, ok := dnsCache[host]; ok && time.Since(e.at) < 5*time.Minute {
-		return e.ips, true
+// resolveHost 带缓存的 DNS 解析（结果缓存 5 分钟；解析失败不缓存，下次重试）。
+func resolveHost(host string) []net.IP {
+	ips, err := dnsCache.GetOrLoad(context.Background(), host)
+	if err != nil || ips == nil {
+		return nil
 	}
-	return nil, false
+	return *ips
 }

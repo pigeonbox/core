@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/oekit/pkg/cache"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -23,8 +24,25 @@ type redisBlacklistCmds interface {
 type tokenBlacklist struct {
 	rdb redisBlacklistCmds
 
-	memMu sync.Mutex
-	mem   map[string]time.Time
+	// mem 进程内存兜底表（Redis 故障降级窗口用）：oekit/pkg/cache.LocalCache
+	// （逐条 TTL = token 剩余有效期，容量上限 + 过期回收托管），替代此前手搓
+	// 「map[until] + 惰性 GC」约 40 行。
+	//
+	// ⚠️ 淘汰策略差异（相对手搓版）：超容时手搓版丢「最早过期」条目（保护损失
+	// 最小），LocalCache 的 EvictFIFO 丢「最早写入」——仅在「Redis 故障期间
+	// 单实例累积 > memBlacklistMax 条未过期吊销」这一双重故障场景才可见，
+	// 且被丢条目的 token 仍在自身 TTL 内自然过期；换来的收益是内存有界与
+	// 过期清扫不再自理。若未来要恢复「最早过期先丢」语义，换 EvictPolicy
+	// 不够（那是按写/读序），需要在上游 oekit/pkg/cache 加淘汰策略。
+	mem *cache.LocalCache[struct{}]
+}
+
+// newMemBlacklist 构造内存兜底表。
+func newMemBlacklist() *cache.LocalCache[struct{}] {
+	return cache.NewLocalCache(cache.LocalConfig[struct{}]{
+		MaxSize: memBlacklistMax,
+		NullTTL: -1, // 不写 null marker：本表只用 Set/GetEx，无回源
+	})
 }
 
 // 供 auth 包内部单例使用
@@ -50,10 +68,15 @@ func SetBlacklistRedis(rdb *redis.Client) {
 	if rdb != nil {
 		cmds = rdb
 	}
-	bl := &tokenBlacklist{rdb: cmds, mem: map[string]time.Time{}}
+	bl := &tokenBlacklist{rdb: cmds, mem: newMemBlacklist()}
 	globalBlacklistMu.Lock()
+	old := globalBlacklist
 	globalBlacklist = bl
 	globalBlacklistMu.Unlock()
+	if old != nil {
+		// 换实例后回收旧表的清扫协程（Close 只停清扫，不影响在用读者）
+		_ = old.mem.Close(context.Background())
+	}
 }
 
 func getBlacklist() *tokenBlacklist {
@@ -68,7 +91,7 @@ func getBlacklist() *tokenBlacklist {
 	defer globalBlacklistMu.Unlock()
 	// double-check：等锁期间可能已被别的 goroutine 初始化
 	if globalBlacklist == nil {
-		globalBlacklist = &tokenBlacklist{mem: map[string]time.Time{}}
+		globalBlacklist = &tokenBlacklist{mem: newMemBlacklist()}
 	}
 	return globalBlacklist
 }
@@ -95,7 +118,7 @@ func RevokeToken(ctx context.Context, token string, remaining time.Duration) {
 		}
 		// Redis 写失败 → 落内存，吊销不因基础设施抖动丢失
 	}
-	bl.memRevoke(tokenKey(token), time.Now().Add(remaining))
+	bl.memRevoke(ctx, tokenKey(token), remaining)
 }
 
 // IsTokenRevoked 查询 token 是否已注销。
@@ -112,49 +135,15 @@ func IsTokenRevoked(ctx context.Context, token string) bool {
 			return n > 0
 		}
 	}
-	return bl.memRevoked(tokenKey(token))
+	return bl.memRevoked(ctx, tokenKey(token))
 }
 
-func (bl *tokenBlacklist) memRevoke(key string, until time.Time) {
-	bl.memMu.Lock()
-	defer bl.memMu.Unlock()
-	if len(bl.mem) >= memBlacklistMax {
-		bl.memGC()
-	}
-	bl.mem[key] = until
+// memRevoke 写内存兜底（逐条 TTL = token 剩余有效期）。
+func (bl *tokenBlacklist) memRevoke(ctx context.Context, key string, remaining time.Duration) {
+	_ = bl.mem.SetWithTTL(ctx, key, &struct{}{}, remaining)
 }
 
-// memGC 清理过期项；仍超限时丢弃最早过期项（调用方持锁）。
-func (bl *tokenBlacklist) memGC() {
-	now := time.Now()
-	for k, until := range bl.mem {
-		if now.After(until) {
-			delete(bl.mem, k)
-		}
-	}
-	for len(bl.mem) >= memBlacklistMax {
-		var oldestKey string
-		var oldest time.Time
-		first := true
-		for k, until := range bl.mem {
-			if first || until.Before(oldest) {
-				oldestKey, oldest, first = k, until, false
-			}
-		}
-		delete(bl.mem, oldestKey)
-	}
-}
-
-func (bl *tokenBlacklist) memRevoked(key string) bool {
-	bl.memMu.Lock()
-	defer bl.memMu.Unlock()
-	until, ok := bl.mem[key]
-	if !ok {
-		return false
-	}
-	if time.Now().After(until) {
-		delete(bl.mem, key)
-		return false
-	}
-	return true
+func (bl *tokenBlacklist) memRevoked(ctx context.Context, key string) bool {
+	_, ok, _ := bl.mem.GetEx(ctx, key)
+	return ok
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/pkg/contextx"
 	"github.com/oekit/pkg/httpjson"
+	"github.com/oekit/pkg/stringx"
 	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/security"
@@ -661,11 +662,8 @@ func barkPushURL(cfg *BarkConfig) string {
 // telegramText Telegram 消息正文 = title + content（4096 字符硬限，截断好过
 // 整条被 Bot API 拒）。
 func telegramText(title, content string) string {
-	text := title + "\n\n" + content
-	if r := []rune(text); len(r) > 4000 {
-		text = string(r[:4000])
-	}
-	return text
+	// 截断收编 oekit/pkg/stringx.FirstN（超长才截、无省略号，与手搓版逐位一致）
+	return stringx.FirstN(title+"\n\n"+content, 4000)
 }
 
 // sendTelegram 发送 Telegram 消息（POST <base>/bot<token>/sendMessage，

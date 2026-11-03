@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/oekit/pkg/timex"
+	"github.com/oekit/redisx"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -99,19 +101,31 @@ func CheckAnonymousQuota(ctx context.Context, ip string, addBytes int64) error {
 
 // incrRedis Redis 侧计数。rdb 由调用方从 atomic 取出后传入——
 // **不在这里读 d.rdb**，保证同一次调用内用的是同一个一致快照。
+//
+// 计数原语收编到 **oekit/redisx** 的 `Counter.IncrWithTTL`（Lua 原子），
+// 与 pkg/middleware 的限流/锁定计数同一原语（2026-10-28 收编那轮的漏网点：
+// 本文件当时仍是手搓 TxPipeline「Incr + Expire」）。
+//
+// 等价性核对（与旧 TxPipeline 版逐条对齐）：
+//   - TTL = 当日结束 + 1h 缓冲（跨时区/时钟偏移兜底）的**绝对过期**：旧版每次
+//     重设本就幂等，新版「已有 TTL 不续期」得到同一绝对过期时刻；
+//   - 键名不变（redisx 纯包装默认无前缀，见 NewClientFromClient）；
+//   - 原子性从「两键一条 pipeline」降为**单键原子**：count 与 bytes 是两个
+//     独立上限，互不需要跨键事务；极端失败窗口下两维计数可能差一次，
+//     计数基础设施故障本就 fail-open（见 CheckAnonymousQuota），可接受。
 func (d *dailyQuota) incrRedis(ctx context.Context, rdb *redis.Client, ip, day string, addBytes int64) (int64, int64, error) {
 	key := fmt.Sprintf("pb:quota:%s:%s", ip, day)
-	pipe := rdb.TxPipeline()
-	cntCmd := pipe.Incr(ctx, key+":count")
-	byteCmd := pipe.IncrBy(ctx, key+":bytes", addBytes)
-	// TTL 到当日结束 + 1h 缓冲（跨时区/时钟偏移兜底），重复设置无害
 	ttl := timeUntilMidnight() + time.Hour
-	pipe.Expire(ctx, key+":count", ttl)
-	pipe.Expire(ctx, key+":bytes", ttl)
-	if _, err := pipe.Exec(ctx); err != nil {
+	rc := redisx.NewClientFromClient(rdb)
+	cnt, err := rc.NewCounter(key+":count").IncrWithTTL(ctx, 1, ttl)
+	if err != nil {
 		return 0, 0, err
 	}
-	return cntCmd.Val(), byteCmd.Val(), nil
+	byt, err := rc.NewCounter(key+":bytes").IncrWithTTL(ctx, addBytes, ttl)
+	if err != nil {
+		return 0, 0, err
+	}
+	return cnt, byt, nil
 }
 
 func (d *dailyQuota) incrMem(ip, day string, addBytes int64) (int64, int64, error) {
@@ -131,8 +145,11 @@ func (d *dailyQuota) incrMem(ip, day string, addBytes int64) (int64, int64, erro
 	return e.count, e.bytes, nil
 }
 
+// timeUntilMidnight 距次日零点的剩余时长。
+//
+// 收编 oekit/pkg/timex.EndOfDay（2026-11-03）：当日结束＝次日零点−1ns，
+// 与手搓 time.Date(..., 24, 0, ...) 的差被调用点 TTL 的小时级宽限吸收
+// （EXPIRE 秒级截断不可见），行为等价。
 func timeUntilMidnight() time.Duration {
-	now := time.Now()
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 24, 0, 0, 0, now.Location())
-	return midnight.Sub(now)
+	return time.Until(timex.EndOfDay(time.Now()))
 }

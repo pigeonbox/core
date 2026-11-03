@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oekit/kitx/uidgen"
+	"github.com/oekit/pkg/stringx"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -189,11 +190,8 @@ func truncateTitle(s string, maxRunes int) string {
 	if maxRunes <= 0 {
 		return ""
 	}
-	rs := []rune(s)
-	if len(rs) <= maxRunes {
-		return s
-	}
-	return string(rs[:maxRunes])
+	// 截断收编 oekit/pkg/stringx.FirstN（超长才截、无省略号，与手搓版逐位一致）
+	return stringx.FirstN(s, maxRunes)
 }
 
 // PublicView 访客侧链接信息
