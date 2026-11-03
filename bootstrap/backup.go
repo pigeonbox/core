@@ -49,7 +49,19 @@ func NewOfflineBackupService(cfg *conf.AppConfiguration, database *gorm.DB) (*ba
 	// （config 变量等）⇒ 离线进程里取它要么 panic，要么拿到一个与运行中实例
 	// 混在一起的半初始化对象。而备份/恢复本来就该是**独立进程**：自建一份，
 	// 语义干净（读什么后端、写到哪个后端，都由本次进程自己的配置决定）。
-	storeCfg := storage.ConfigFromConf(&cfg.Storage, offlineBaseURL(cfg))
+	//
+	// ⚠️ 「本次进程自己的配置」= **生效配置**（env > DB runtime_storage > yaml），
+	// 不是 yaml 原文：管理台在线切换的存储后端持久化在 system_configs.runtime_storage，
+	// 只读 yaml 的话，运行期切过存储后端的实例备份只导 yaml 里的后端 ⇒ 对象全部
+	// missing、备份包只剩 DB 快照（2026-11-03 215 真机 S25d 实录：COS 实例离线
+	// 导出 object_count=0）。restoreRuntimeStorage 与 server 启动路径同一实现
+	// （wiring.go / deployment.go 同源，env>DB>yaml 优先级一致）。
+	storeBase := &cfg.Storage
+	if applied := restoreRuntimeStorage(); applied != nil {
+		// copy-on-write：overlay 在**新快照**上，cfg 这个旧指针看不到。
+		storeBase = &applied.Storage
+	}
+	storeCfg := storage.ConfigFromConf(storeBase, offlineBaseURL(cfg))
 	store, err := storage.NewStorageServiceE(storeCfg)
 	if err != nil {
 		// 远端后端连不上 ⇒ 降级 local（与 bootstrap 同款：连不上时用 local 兜底，
