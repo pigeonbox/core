@@ -130,8 +130,8 @@ var envBindings = map[string][]string{
 	// deployment（多副本部署模式）
 	"deployment.mode": {"PB_DEPLOY_MODE"},
 	// server
-	"server.host":          {"PB_SERVER_HOST", "HOST"},
-	"server.port":          {"PB_SERVER_PORT", "PORT"},
+	"server.host":     {"PB_SERVER_HOST", "HOST"},
+	"server.port":     {"PB_SERVER_PORT", "PORT"},
 	"server.mode":     {"PB_SERVER_MODE"},
 	"server.base_url": {"PB_SERVER_BASE_URL", "BASE_URL"},
 	// database
