@@ -34,7 +34,7 @@ require (
 	github.com/oekit/core v0.12.1
 	github.com/oekit/gormx v0.6.6
 	github.com/oekit/kitx v0.3.4
-	github.com/oekit/pkg v0.31.2
+	github.com/oekit/pkg v0.32.0
 	github.com/oekit/redisx v0.10.9
 	github.com/pkg/sftp v1.13.12
 	github.com/studio-b12/gowebdav v0.13.0
@@ -75,7 +75,7 @@ require (
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/oekit/logx v0.8.0 // indirect
+	github.com/oekit/logx v0.8.2 // indirect
 	github.com/pandatix/go-abnf v0.5.3 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
