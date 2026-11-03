@@ -149,3 +149,18 @@ func TestComplete_InvalidToken_Forbidden(t *testing.T) {
 		"令牌无效应是 403（用 401 会让前端误判为会话失效）：%v", body)
 	assert.Equal(t, float64(errcode.CodePresignToken), body["code"])
 }
+
+// TestComplete_SessionMissing_ActionableMessage 会话键不在（TTL 清掉/未知 id）时，
+// wire 文案必须可行动。2026-11-03 真机实录：2.5GB 慢速传完时会话已被 TTL 清掉，
+// 用户只看到裸 "not found"——以为接口/资源不存在，无从判断是「会话过期需重传」。
+// 负对照：把文案改回 NewErrorByCode(CodeNotFound)（"not found"）⇒ 本用例红。
+func TestComplete_SessionMissing_ActionableMessage(t *testing.T) {
+	newHandlerEnv(t, &stubShareGateway{})
+
+	code, body := postComplete(t, `{"upload_id":"up_missing","token":"any"}`)
+	assert.Equal(t, http.StatusNotFound, code, "%v", body)
+	assert.Equal(t, float64(errcode.CodeNotFound), body["code"], "业务码保持 10004 资源不存在")
+	msg, _ := body["message"].(string)
+	assert.Contains(t, msg, "上传会话",
+		"会话缺失的文案必须指明原因并引导重传，不得是裸 \"not found\"")
+}

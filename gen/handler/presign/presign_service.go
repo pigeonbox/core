@@ -266,7 +266,10 @@ func Complete(ctx context.Context, c *app.RequestContext) {
 		// 区分 token 校验错误 vs share 写入错误
 		switch {
 		case errors.Is(err, presignapp.ErrUploadNotFound):
-			resp.NewErrorByCode(c, errcode.CodeNotFound)
+			// 会话键被 TTL 清掉（如慢速大文件传完时会话早已过期）时，裸
+			// "not found" 让用户以为资源/接口不存在（2026-11-03 真机实录）——
+			// 给可行动文案，引导重新发起上传。
+			resp.NewErrorWithMessage(c, errcode.CodeNotFound, "上传会话不存在或已过期，请重新上传")
 		case errors.Is(err, presignapp.ErrTokenInvalid):
 			resp.NewErrorByCode(c, errcode.CodePresignToken)
 		case errors.Is(err, presignapp.ErrUploadExpired):

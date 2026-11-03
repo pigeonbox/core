@@ -37,6 +37,24 @@ import (
 // Redis key 模板
 const (
 	keyUploadMeta = "presign:meta:%s" // upload_id -> InitMeta (JSON)
+
+	// transferWindow 在途传输保护窗口：会话记录的存活期须覆盖整条传输 +
+	// 随后的 Complete，不得被签名时效中途清掉。
+	//
+	// 2026-11-03 真机实录：2.5GB .img 慢速上传，PUT 跑了 28.6 分钟，而会话时效
+	// （download.presign_expire_seconds，线上=600s）在传输途中把 meta 键 TTL 跑
+	// 完 ⇒ 键被 Redis 静默清掉；PUT 只在**开头**查过期 ⇒ 流照常传完并返回 200，
+	// 27ms 后 Complete 却报 10004「not found」（连"过期"都报不出来）⇒ 2.5GB
+	// 对象成孤儿。语义修正：签名时效只约束「PUT 发起时刻」，传输过程由 HTTP 层
+	// 超时约束，不再受签名时效摆布。
+	//
+	// self 方案：传输期间键允许过期（PUT 结束的回写会重建，见 UploadDirect
+	// 第 5 步）；s3 方案传输不经本进程、无从回写 ⇒ Init 就按本窗口存 meta。
+	transferWindow = 2 * time.Hour
+
+	// completeGrace 数据面传完后的 Complete 宽限：PUT 成功后 meta 以此时长
+	// 回写（含 Transferred/FileHash），客户端拿什么速度收尾都能 Complete。
+	completeGrace = 30 * time.Minute
 )
 
 // 错误定义
@@ -75,6 +93,17 @@ type Service struct {
 	objects ObjectStore
 	// fileCodeRepo 秒传检索用（此前 CheckQuickUpload 方法体内联现建）
 	fileCodeRepo *dao.FileCodeRepository
+	// nowFn 过期判定的时钟注入点（缺省真实墙钟；测试可控推进——签名时效的
+	// 生效与否是「传输期跨越过期时刻」类缺陷的判据量，必须可被测试测量）。
+	nowFn func() time.Time
+}
+
+// nowTime 会话过期判定的统一时间源。
+func (s *Service) nowTime() time.Time {
+	if s.nowFn != nil {
+		return s.nowFn()
+	}
+	return time.Now()
 }
 
 // 直传模式标记（meta.Scheme / InitResult.Scheme，服务端判定为准）
@@ -239,6 +268,12 @@ type InitMeta struct {
 	// SessionTTL 直传会话/签名时效（handler 按管理配置下发；0=服务端默认 1h）
 	SessionTTL time.Duration `json:"-"`
 	FileHash   string        `json:"file_hash,omitempty"`
+	// Transferred 数据面已完成（self 方案 PUT 落盘成功后置位）。签名时效
+	// （ExpireAt）只约束 PUT **发起**时刻；数据已传完的会话 Complete 不再被
+	// ExpireAt 拒绝——否则慢速大文件「传完即过期」，2.5GB 对象成孤儿
+	// （2026-11-03 真机实录）。s3 方案服务端不见流量，以 Complete 的对象存在
+	// 性核实为等价判据（见 Complete）。
+	Transferred bool `json:"transferred,omitempty"`
 	// PickupCode 匿名取件码直传绑定（2026-10-07）：非空时 Complete 不新建分享，
 	// 而是把对象回填到该占位记录（/anonymous/generate 创建）。有效期/密码以
 	// 占位记录为准——本 meta 的 expire/auth 字段在绑定路径被忽略。
@@ -296,7 +331,7 @@ func (s *Service) Init(ctx context.Context, meta InitMeta) (*InitResult, error) 
 	if meta.SessionTTL > 0 {
 		ttl = meta.SessionTTL
 	}
-	meta.ExpireAt = time.Now().Add(ttl)
+	meta.ExpireAt = s.nowTime().Add(ttl)
 	meta.Complete = false
 	meta.ObjectKey = genObjectKey(uploadID, meta.FileName)
 
@@ -320,9 +355,16 @@ func (s *Service) Init(ctx context.Context, meta InitMeta) (*InitResult, error) 
 		}
 	}
 
-	// 3. 存 meta（含最终 Scheme）
+	// 3. 存 meta（含最终 Scheme）。
+	// 会话记录寿命 ≠ 签名时效：self 方案在 PUT 发起时续期（见 UploadDirect）；
+	// s3 方案的传输不经本进程、无法中途续期 ⇒ Init 就按 transferWindow 存活，
+	// 否则慢速大文件传完时 meta 已被 TTL 清掉 ⇒ Complete 只能报 not found。
+	metaTTL := ttl
+	if meta.Scheme == SchemeS3 && metaTTL < transferWindow {
+		metaTTL = transferWindow
+	}
 	metaJSON, _ := json.Marshal(meta)
-	if err := s.rdb.Set(ctx, fmt.Sprintf(keyUploadMeta, uploadID), metaJSON, ttl).Err(); err != nil {
+	if err := s.rdb.Set(ctx, fmt.Sprintf(keyUploadMeta, uploadID), metaJSON, metaTTL).Err(); err != nil {
 		return nil, err
 	}
 
@@ -364,8 +406,14 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 		return nil, err
 	}
 
-	// 2. 校验过期
-	if time.Now().After(meta.ExpireAt) {
+	// 2. 校验过期——**只约束数据面未完成的会话**（2026-11-03 语义修正）：
+	// 签名时效管的是「PUT 必须在 ExpireAt 前发起」，不是「Complete 必须在
+	// ExpireAt 前到达」。数据已传完（Transferred）的会话，用户传了多久不该
+	// 决定他能不能拿到分享——否则慢速大文件传完即过期、对象成孤儿（真机
+	// 2.5GB 实录）。token HMAC 在下面 3 照常校验，不因放行而松动。
+	// s3 方案服务端不见流量（Transferred 无从置位），其"发起时刻"约束由预签名
+	// URL 时效承担，完成面以 3.5 的对象存在性核实为真闸门 ⇒ 同样不在此拒。
+	if s.nowTime().After(meta.ExpireAt) && !meta.Transferred && meta.Scheme != SchemeS3 {
 		s.rdb.Del(ctx, fmt.Sprintf(keyUploadMeta, uploadID))
 		return nil, ErrUploadExpired
 	}
@@ -619,7 +667,7 @@ func (s *Service) UploadDirect(ctx context.Context, uploadID, token string, body
 		return err
 	}
 	// 2. 校验过期
-	if time.Now().After(meta.ExpireAt) {
+	if s.nowTime().After(meta.ExpireAt) {
 		s.rdb.Del(ctx, fmt.Sprintf(keyUploadMeta, uploadID))
 		return ErrUploadExpired
 	}
@@ -700,13 +748,16 @@ func (s *Service) UploadDirect(ctx context.Context, uploadID, token string, body
 		}
 		return fmt.Errorf("文件大小与申报不符（实际 %d / 申报 %d）", written, meta.FileSize)
 	}
-	// 5. 内容 SHA-256 回写 meta（Complete 时写入 file_codes.file_hash）
+	// 5. 内容 SHA-256 回写 meta（Complete 时写入 file_codes.file_hash）+
+	//    置位 Transferred（数据面完成标记，见 InitMeta.Transferred）。
+	//    ⚠️ 这次回写必须**无条件**落盘且带 completeGrace：此前按
+	//    `remaining = time.Until(ExpireAt)` 且仅在 remaining>0 时回写——慢速
+	//    上传传完时 ExpireAt 早已过去 ⇒ **回写被整个跳过** ⇒ Transferred/
+	//    FileHash 全丢、会话无从证明"数据已传完"（2026-11-03 真机 2.5GB 实录）。
 	meta.FileHash = hex.EncodeToString(hasher.Sum(nil))
+	meta.Transferred = true
 	if updated, merr := json.Marshal(meta); merr == nil {
-		remaining := time.Until(meta.ExpireAt)
-		if remaining > 0 {
-			s.rdb.Set(ctx, fmt.Sprintf(keyUploadMeta, uploadID), updated, remaining)
-		}
+		s.rdb.Set(ctx, fmt.Sprintf(keyUploadMeta, uploadID), updated, completeGrace)
 	}
 	return nil
 }
