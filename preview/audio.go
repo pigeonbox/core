@@ -84,10 +84,10 @@ func (g *AudioGenerator) GenerateThumbnail(ctx context.Context, filePath string,
 		return "", fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	// showwavespic 出单帧波形图；colors 用品牌青竹色做前景（波形是 UI 素材）
+	// showwavespic 出单帧波形图；colors 用品牌科技蓝色做前景（波形是 UI 素材）
 	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-y", "-i", filePath,
-		"-filter_complex", fmt.Sprintf("showwavespic=s=%dx%d:colors=0x0e9f6e", w, h),
+		"-filter_complex", fmt.Sprintf("showwavespic=s=%dx%d:colors=0x1677ff", w, h),
 		"-frames:v", "1", outPath,
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
