@@ -100,7 +100,7 @@ func (d *dripStream) Close() error {
 func TestStallGuardPassThrough(t *testing.T) {
 	data := bytes.Repeat([]byte("pigeonbox-"), 5000) // 50KB
 	rc := newStallGuard(newFakeStream(data, false), time.Second)
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	got, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("读取: %v", err)
@@ -117,7 +117,7 @@ func TestStallGuardSlowButFlowingNotKilled(t *testing.T) {
 	const n = 6
 	drip := newDripStream(n, 30*time.Millisecond)
 	rc := newStallGuard(drip, 80*time.Millisecond)
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	got, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("慢速持续流被误杀: %v", err)
@@ -131,7 +131,7 @@ func TestStallGuardSlowButFlowingNotKilled(t *testing.T) {
 func TestStallGuardStallFires(t *testing.T) {
 	blocking := newFakeStream([]byte("head"), true) // 4 字节后挂死
 	rc := newStallGuard(blocking, 60*time.Millisecond)
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	buf := make([]byte, 64)
 	n, err := rc.Read(buf) // 先读走头部 4 字节
@@ -200,7 +200,7 @@ func TestStallGuardUnderlyingError(t *testing.T) {
 	boom := errors.New("storage boom")
 	f := &errStream{err: boom}
 	rc := newStallGuard(f, time.Second)
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	_, err := io.ReadAll(rc)
 	if !errors.Is(err, boom) {
 		t.Fatalf("底层错误未透传: %v", err)

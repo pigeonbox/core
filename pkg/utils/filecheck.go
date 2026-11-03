@@ -35,8 +35,17 @@ func (e *FileTooLargeError) ErrCode() int { return errcode.CodeTooLarge }
 // NewFileTooLargeError 构造整文件超限错误（带业务码 + 动态文案）。
 func NewFileTooLargeError(limit int64) error { return &FileTooLargeError{Limit: limit} }
 
-// ErrFileTypeNotAllowed 文件类型不允许（黑名单命中或白名单未命中）
-var ErrFileTypeNotAllowed = errors.New("file type not allowed")
+// ErrFileTypeNotAllowed 文件类型不允许（黑名单命中或白名单未命中）。
+// typed error（ErrCode=30011）⇒ 各通道 handler 的 default 分支经
+// resp.NewTypedError 透传时不再塌成 10008「内部错误」。
+type fileTypeError struct{}
+
+func (e *fileTypeError) Error() string { return "file type not allowed" }
+
+// ErrCode 实现 app 侧 typed error 约定（见 pkg/gate.GateError）。
+func (e *fileTypeError) ErrCode() int { return errcode.CodeFileTypeDenied }
+
+var ErrFileTypeNotAllowed error = &fileTypeError{}
 
 // ErrTextTooLarge 文本分享超过大小上限
 var ErrTextTooLarge = errors.New("text share exceeds size limit")
@@ -90,6 +99,17 @@ func GetEnableMagicCheck() bool {
 		return true
 	}
 	return cfg.Upload.EnableMagicCheck
+}
+
+// GetMagicCheckSkipExts 魔数检查豁免扩展名追加项（upload.magic_check_skip_extensions）。
+// 只做**追加**：内置事实性豁免（magic.go 的 magicCheckSkipExts）恒生效，
+// 配置供站点补充特有扩展名；移除需求应走扩展名黑名单（blocked_extensions 永远优先）。
+func GetMagicCheckSkipExts() []string {
+	cfg := conf.GetGlobalConfig()
+	if cfg == nil {
+		return nil
+	}
+	return cfg.Upload.MagicCheckSkipExts
 }
 
 // IsAllowedExtension 扩展名准入判定（大小写不敏感），组合白/黑名单：

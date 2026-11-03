@@ -242,8 +242,12 @@ var globalConfigBaseline = map[string]int{
 	// 配置」范式——CalculateExpireTime/CalculateExpireCount 本就直读，生效值
 	// 取值函数与它们同文件同语义；utils 无构造注入面，改注入须把配置穿遍
 	// share/localimport/anonymous 全部调用点，与既有两处不一致且无行为收益。
-	"pkg/utils/expire.go":                      3,
-	"pkg/utils/filecheck.go":                   6,
+	"pkg/utils/expire.go": 3,
+	// pkg/utils/filecheck.go 6→7（2026-11-03 登记）：魔数豁免生效值读取
+	// （GetMagicCheckSkipExts，upload.magic_check_skip_extensions 追加项）——
+	// 与同文件既有 6 处同属「utils 工具层读全局配置」范式（utils 无构造注入面），
+	// 是新增**取值函数**而非新增消费面。
+	"pkg/utils/filecheck.go":                   7,
 	"transport/http/handler/oidc.go":           1,
 	"transport/http/handler/settings_admin.go": 1,
 }

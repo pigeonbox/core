@@ -493,6 +493,10 @@ type UploadConfig struct {
 	BlockedExtensions []string `mapstructure:"blocked_extensions" json:"blocked_extensions"`
 	// EnableMagicCheck 是否启用魔数校验（默认 true）。
 	EnableMagicCheck bool `mapstructure:"enable_magic_check" json:"enable_magic_check"`
+	// MagicCheckSkipExts 魔数检查豁免扩展名**追加项**（如 [".fpk",".ipk"]）。
+	// 内置事实性豁免（.appimage/.run/.bin/无扩展名等，见 pkg/utils/magic.go）
+	// 恒生效，本字段只做补充；要禁传某类文件用 BlockedExtensions（永远优先）。
+	MagicCheckSkipExts []string `mapstructure:"magic_check_skip_extensions" json:"magic_check_skip_extensions"`
 	// AllowedExpireStyles 允许用户选择的过期样式
 	// （minute/hour/day/week/month/year/forever/count —— count =「按取件次数」，
 	// 2026-10-22 补入：此前注释漏了它，合法集合以 pkg/utils.AllExpireStyles 为准）。

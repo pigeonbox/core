@@ -11,6 +11,7 @@
 package presign
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -637,6 +638,17 @@ func (s *Service) UploadDirect(ctx context.Context, uploadID, token string, body
 	if meta.FileSize <= 0 {
 		return fmt.Errorf("文件大小必须大于0")
 	}
+	// 3.6 内容预检（2026-11-03）：类型/魔数拒绝必须发生在**写入前**——此前只在
+	// Complete 复检，用户传 1.35GB 传完才报「文件内容与扩展名不符」，带宽全白费
+	// （真机实录：.AppImage 误杀场景）。Peek 不消费流（缓冲字节原样下行）；
+	// 不足 512 字节按实际头部判。Complete 复检保留为兜底（S3 直传不经本函数）。
+	br := bufio.NewReader(body)
+	if head, _ := br.Peek(512); len(head) > 0 {
+		if cerr := utils.CheckUploadContent(meta.FileName, head); cerr != nil {
+			return cerr
+		}
+	}
+	body = br
 	// 4. 流式写入 + 内容哈希：超出申报大小立即截断报错（防多传绕过大小校验）
 	hasher := sha256.New()
 	limited := io.LimitReader(body, meta.FileSize+1)
