@@ -11,8 +11,8 @@
 package presign
 
 import (
-	"context"
 	"bufio"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
