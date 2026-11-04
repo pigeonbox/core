@@ -3,9 +3,11 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/pigeonbox/core/repo/db/model"
+	"gorm.io/gorm"
 )
 
 func (r *FileCodeRepository) CountByUserID(ctx context.Context, userID uint) (int64, error) {
@@ -145,12 +147,39 @@ func (r *FileCodeRepository) BatchExtendByCodes(ctx context.Context, userID uint
 // 0 = 该分享不在回收站（未软删或不存在）。调用方必须对 0 显式报错——
 // 此前 0 行恢复也返回 nil，硬删后 restore 表现为 200 静默 no-op，
 // 集成误判已恢复（2026-10-08 修复；与 v0.11.1 hard-delete 同款收口）。
+//
+// 2026-11-04：**同事务内一并恢复软删子行**（与 RestoreByIDs 同口径）。
+// 背景：管理端批量删除会软删子行（app/admin/files.go）⇒ 管理员删了用户的分享、
+// 用户在回收站恢复时，若只恢复主表 ⇒ 取件页清单为空、zip 无内容、逐文件下载 404
+// （「恢复只恢复了一半」；2026-10-26 审计已在 RestoreByIDs 修过，用户面这条漏了）。
 func (r *FileCodeRepository) RestoreByCode(ctx context.Context, userID uint, code string) (int64, error) {
-	res := r.db().WithContext(ctx).Unscoped().Model(&model.FileCode{}).
-		Where("user_id = ? AND code = ? AND deleted_at IS NOT NULL", userID, code).
-		Update("deleted_at", nil)
-	if res.Error != nil {
-		return 0, res.Error
+	var restored int64
+	err := r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var fc model.FileCode
+		if err := tx.Unscoped().Where("user_id = ? AND code = ? AND deleted_at IS NOT NULL", userID, code).
+			First(&fc).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil // 不在回收站 ⇒ 0 行（调用方映射为 ErrNotInRecycleBin）
+			}
+			return err
+		}
+		res := tx.Unscoped().Model(&model.FileCode{}).
+			Where("id = ? AND deleted_at IS NOT NULL", fc.ID).
+			Update("deleted_at", nil)
+		if res.Error != nil {
+			return res.Error
+		}
+		restored = res.RowsAffected
+		// 子行同批恢复（子表 = 文件清单唯一真相源 ⇒ 与主表同生共死）
+		if err := tx.Unscoped().Model(&model.FileCodeFile{}).
+			Where("file_code_id = ? AND deleted_at IS NOT NULL", fc.ID).
+			Update("deleted_at", nil).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return res.RowsAffected, nil
+	return restored, nil
 }

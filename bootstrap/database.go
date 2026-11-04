@@ -5,9 +5,11 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
@@ -16,6 +18,7 @@ import (
 	configApp "github.com/pigeonbox/core/app/config"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -123,6 +126,94 @@ func CreateDefaultAdmin(database *gorm.DB, cfg *conf.AppConfiguration) error {
 	} else {
 		logger.Info("Default admin created with password from PB_ADMIN_PASSWORD")
 	}
+	return nil
+}
+
+// EnvAdminPasswordResetFile 一次性「管理员口令原地重置」文件路径的环境变量名。
+//
+// 平台层（fnOS/QNAP 向导）投递：把新口令写进该文件，core 启动时消费。
+// 平台层**不碰数据库**（此前是删 admin 行 ⇒ user id 变化 ⇒ 名下数据成孤儿）。
+const EnvAdminPasswordResetFile = "PB_ADMIN_PASSWORD_RESET_FILE"
+
+// ApplyPendingAdminPasswordReset 原地重置管理员口令（2026-11-04，fnos#182）。
+//
+// 背景：平台层此前的「重置管理员口令」= 删 users 表 admin 行 + core 启动时按
+// PB_ADMIN_PASSWORD 重建 ⇒ admin 的 **user id 变化** ⇒ 名下 file_codes /
+// user_api_keys 全部成孤儿（真机 88 份分享 + 3 把 Key）。
+//
+// ⇒ 口令哈希与「改密」语义归 core（bcrypt 唯一真相源）：平台层只投递新口令
+// （一次性文件），core **原地**改哈希 ⇒
+//
+//	① admin 的 user id 不变 ⇒ 名下分享/Key 归属不变（不再孤儿化）；
+//	② 旧 API Key 继续有效（API Key 鉴权不校验会话纪元，见 pkg/middleware/apikey.go）；
+//	③ 旧 JWT 失效（会话纪元 +1，与 app/user.ChangePassword 同口径）。
+//
+// 一次性语义：消费后即删除该文件 ⇒ 不会把用户后来在管理台改的口令反复冲掉。
+// 文件内容 = 新口令明文（末尾换行会被裁掉；空口令拒绝执行——否则管理员被锁在门外）。
+//
+// 无待处理文件 ⇒ 直接返回（正常启动路径）。
+func ApplyPendingAdminPasswordReset(database *gorm.DB) error {
+	if database == nil {
+		return nil
+	}
+	path := strings.TrimSpace(os.Getenv(EnvAdminPasswordResetFile))
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // 没有待处理的重置 ⇒ 正常路径
+		}
+		return fmt.Errorf("read admin password reset file %s: %w", path, err)
+	}
+	password := strings.TrimRight(string(raw), "\r\n")
+	if password == "" {
+		return fmt.Errorf("admin password reset file %s is empty (refusing to lock the admin out)", path)
+	}
+
+	// 目标账号：优先 username='admin'（平台层重置的对象）；否则取最早的管理员。
+	var admin model.User
+	if err := database.Where("username = ?", "admin").First(&admin).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("query admin user: %w", err)
+		}
+		if err := database.Where("role = ?", "admin").Order("id ASC").First(&admin).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// 库里还没有管理员：不凭空建号（PB_DISABLE_DEFAULT_ADMIN 的语义不许被绕过）
+				// ⇒ 保留文件，等管理员被创建后自然生效。
+				logger.Warn("admin password reset pending but no admin account exists; keeping the reset file",
+					zap.String("file", path))
+				return nil
+			}
+			return fmt.Errorf("query admin user: %w", err)
+		}
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hash admin password: %w", err)
+	}
+	// 原地更新：只改 password_hash + 会话纪元，**不动 id**（id 不变 ⇒ 名下数据不孤儿）
+	res := database.Model(&model.User{}).Where("id = ?", admin.ID).Updates(map[string]interface{}{
+		"password_hash": string(hashed),
+		"session_epoch": gorm.Expr("session_epoch + 1"),
+	})
+	if res.Error != nil {
+		return fmt.Errorf("update admin password: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("admin password reset matched no row (user id %d)", admin.ID)
+	}
+
+	// 消费一次性文件（删不掉只告警：下次启动会重复应用同一口令 ⇒ 幂等，纪元再 +1）
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		logger.Warn("admin password reset applied but the reset file could not be removed",
+			zap.String("file", path), zap.Error(err))
+	}
+	middleware.InvalidateIdentity(admin.ID)
+	logger.Info("admin password reset applied in place (user id preserved)",
+		zap.Uint("user_id", admin.ID))
 	return nil
 }
 

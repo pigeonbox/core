@@ -190,6 +190,12 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 			}
 			logger.Error("Failed to create default admin", zap.Error(err))
 		}
+		// 平台层投递的一次性「管理员口令原地重置」（fnos#182）：
+		// 原地改哈希（user id 不变 ⇒ 名下分享/Key 不孤儿化），消费后删文件。
+		// 失败不阻断启动：文件保留 ⇒ 下次启动自动重试（纪元 +1 幂等）。
+		if err := ApplyPendingAdminPasswordReset(database); err != nil {
+			logger.Error("Failed to apply pending admin password reset (will retry on next start)", zap.Error(err))
+		}
 	}
 
 	// 4.5 初始化预览服务（缓存目录落在已解析的数据目录下，见 initPreviewService 注释）
