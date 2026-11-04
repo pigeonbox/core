@@ -92,13 +92,44 @@ func (r *FileCodeRepository) GetByIDUnscoped(ctx context.Context, id uint) (*mod
 
 // HardDeleteByIDs 物理删除 DB 行（回收站「彻底删除」用；对象删除由调用方负责）。
 // 子文件行一并硬删（彻底删除不留软删残留）。
+//
+// 2026-11-04（core#62）：改为**同一事务 + 子先父后 + 错误不再被吞**。
+// 此前：① 父先删、子后删（顺序与「先查父 id→删子→删父」相反）；② 子表删除的
+// 错误被空赋值吞掉 ⇒ 子表删失败也照样返回成功 ⇒ 静默留孤儿行。
 func (r *FileCodeRepository) HardDeleteByIDs(ctx context.Context, ids []uint) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	res := r.db().WithContext(ctx).Unscoped().
-		Where("id IN ?", ids).Delete(&model.FileCode{})
-	_ = r.db().WithContext(ctx).Unscoped().
-		Where("file_code_id IN ?", ids).Delete(&model.FileCodeFile{}).Error
-	return res.RowsAffected, res.Error
+	var deleted int64
+	err := r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := hardDeleteChildRows(tx, ids); err != nil {
+			return err
+		}
+		res := tx.Unscoped().Where("id IN ?", ids).Delete(&model.FileCode{})
+		if res.Error != nil {
+			return res.Error
+		}
+		deleted = res.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+// hardDeleteChildRows 事务内物理删除 file_code_files 子行（主表 id 集合）。
+//
+// 子表与主表「同生共死」：主表物理删除时子表必须一起物理删除，否则
+// ① 子行成孤儿（父行不存在）；② janitor 对账引用集仍含子行路径
+// ⇒ 被删分享的物理文件永不回收（core#62）。
+//
+// 只删「物理行」（Unscoped）——软删子行同样要清：彻底删除不留软删残留。
+func hardDeleteChildRows(tx *gorm.DB, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return tx.Unscoped().
+		Where("file_code_id IN ?", ids).
+		Delete(&model.FileCodeFile{}).Error
 }

@@ -31,6 +31,7 @@ func RunDataMigrations(gormDB *gorm.DB) {
 	}
 	normalizeFilePathLayout(gormDB)
 	backfillShareFileRows(gormDB)
+	purgeOrphanChildRows(gormDB)
 	dropRetiredFileCodeColumns(gormDB)
 }
 
@@ -142,6 +143,29 @@ func backfillShareFileRows(gormDB *gorm.DB) {
 	}
 	logger.Info("data migration: backfilled share file rows",
 		zap.Int("rows", len(rows)), zap.Int("file_shares", len(parents)))
+}
+
+// purgeOrphanChildRows 清理存量孤儿子行（2026-11-04，core#62）。
+//
+// 背景：单条硬删路径 HardDeleteByCode 此前只删主表 ⇒ file_code_files 的子行
+// 永久残留（父行已物理不存在 = 孤儿行）。真机已出现存量孤儿行，且孤儿子行
+// 还在 janitor 的对账引用集里 ⇒ 被删分享的物理文件永不回收。
+// ⇒ 硬删路径修好后，存量孤儿需要一次性对账清理（本函数，幂等，启动期跑）。
+//
+// 口径：孤儿 = 子行的 file_code_id 在 file_codes 里**物理不存在**。
+// 父行是软删（回收站）**不算**孤儿——它还可恢复，子行必须留着。
+func purgeOrphanChildRows(gormDB *gorm.DB) {
+	res := gormDB.Unscoped().
+		Where("file_code_id NOT IN (?)", gormDB.Unscoped().Model(&model.FileCode{}).Select("id")).
+		Delete(&model.FileCodeFile{})
+	if res.Error != nil {
+		logger.Error("data migration: purge orphan child rows failed", zap.Error(res.Error))
+		return
+	}
+	if res.RowsAffected > 0 {
+		logger.Info("data migration: purged orphan share file rows",
+			zap.Int64("rows", res.RowsAffected))
+	}
 }
 
 // dropRetiredFileCodeColumns 删除已退役的死列。
