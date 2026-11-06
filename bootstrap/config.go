@@ -116,6 +116,11 @@ func setDefaults(v *viper.Viper) {
 	// ⚠️ 不能跟着下载令牌 TTL 走（此前 TTL+1h ⇒ 明细最多存在 1 小时 ⇒
 	// owner 第二天打开取件历史明细全空 ⇒ 逐条历史形同虚设）。
 	v.SetDefault("admin.pickup_detail_retention_days", 30)
+	// 更新检查默认**开启**（2026-11-06，5.0.0）：安全修复的到达率优先于一次出站请求。
+	// 离线时结果退化为 unknown，不是故障；GitHub 未认证配额 60 次/小时
+	// ⇒ 依赖 24h 缓存（updatecheck 包），不能每次打开后台都查。
+	v.SetDefault("update.check_enabled", true)
+	v.SetDefault("update.endpoint", "https://api.github.com/repos/pigeonbox/pigeonbox/releases/latest")
 	// P2P 联邦（M2）默认关闭；启用须显式配置 registry_url + public_url
 	v.SetDefault("federation.enabled", false)
 	v.SetDefault("federation.node_key_path", "data/federation.key")
@@ -169,6 +174,9 @@ var envBindings = map[string][]string{
 	"storage.s3.path_style": {"PB_STORAGE_S3_PATH_STYLE"},
 	// download
 	"download.s3_direct_download": {"PB_DOWNLOAD_S3_DIRECT"},
+	// update（更新检查）
+	"update.check_enabled": {"PB_UPDATE_CHECK_ENABLED"},
+	"update.endpoint":      {"PB_UPDATE_ENDPOINT"},
 	// observability
 	"observability.metrics.enabled": {"PB_METRICS_ENABLED"},
 	"observability.metrics.path":    {"PB_METRICS_PATH"},
