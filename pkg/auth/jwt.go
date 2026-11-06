@@ -33,6 +33,10 @@ type Claims struct {
 	// Epoch 会话纪元快照：签发时用户的 session_epoch。改密/封禁/降权会使
 	// DB 纪元 +1，纪元不匹配的旧 token 即时失效（认证中间件回查比对）。
 	Epoch int `json:"sess_epoch,omitempty"`
+	// SessionID 登录会话标识（5.2.0）：对应 user_sessions 一行。
+	// 空 = 升级前签发的老令牌（或会话表故障时的降级签发）⇒ 认证侧跳过
+	// 会话回查，只走纪元判定 —— 否则升级瞬间全员被踢下线。
+	SessionID string `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -77,13 +81,20 @@ func SetSessionExpiry(d time.Duration) {
 // SessionExpiry 当前会话时长（测试/诊断用）。
 func SessionExpiry() time.Duration { return sessionExpiry }
 
-// GenerateToken 生成 JWT token
+// GenerateToken 生成 JWT token（不带会话标识：兼容既有调用点）。
 func GenerateToken(userID uint, username, role string) (string, error) {
+	return GenerateTokenWithSession(userID, username, role, "")
+}
+
+// GenerateTokenWithSession 生成带会话标识的 JWT（登录/刷新令牌时使用）。
+// sessionID 为空时退化为无 sid 令牌（会话表写入失败也照常登录）。
+func GenerateTokenWithSession(userID uint, username, role, sessionID string) (string, error) {
 	claims := &Claims{
-		UserID:   userID,
-		Username: username,
-		Role:     role,
-		Epoch:    currentEpoch(userID),
+		UserID:    userID,
+		Username:  username,
+		Role:      role,
+		SessionID: sessionID,
+		Epoch:     currentEpoch(userID),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionExpiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

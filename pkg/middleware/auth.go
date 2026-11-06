@@ -75,6 +75,9 @@ func SetJWTClaims(c *app.RequestContext, claims *auth.Claims) {
 	c.Set("username", claims.Username)
 	c.Set("role", claims.Role)
 	c.Set("auth_type", "jwt")
+	// 5.2.0：当前会话标识（升级前签发的老令牌为空串）。
+	// handler 侧「登录设备」列表据此标出「本机」，避免把自己列成可踢的设备。
+	c.Set("session_id", claims.SessionID)
 }
 
 // SetIdentityHeaders 身份响应头三连（X-User-ID/X-Username/X-Role）。
@@ -103,6 +106,13 @@ type IdentityRecord struct {
 	Status string
 	Role   string
 	Epoch  int
+	// Sessions 该用户**当前仍然有效**的会话 sid 集合（5.2.0）。
+	// nil = 装配点未提供（跳过会话校验，只走纪元判定）；空 map = 该用户
+	// 没有任何有效会话 ⇒ 带 sid 的令牌一律拒绝。
+	//
+	// 为什么不每请求查一次库：认证是最热的路径，会话校验搭 30s 身份缓存
+	// 的便车；撤销会话时立刻 InvalidateIdentity ⇒ 生效延迟就是 0（不是 30s）。
+	Sessions map[string]bool
 }
 
 var (
@@ -185,6 +195,11 @@ func identityFresh(ctx context.Context, claims *auth.Claims) bool {
 		return false // 查询失败 fail-closed（与 API Key 回查语义一致）
 	}
 	if rec.Status != "active" || rec.Epoch != claims.Epoch {
+		return false
+	}
+	// 会话回查（5.2.0）：带 sid 的令牌必须命中「仍然有效」的会话行。
+	// 无 sid（升级前签发）跳过 —— 由纪元/登出黑名单兜底，避免升级即全员下线。
+	if claims.SessionID != "" && rec.Sessions != nil && !rec.Sessions[claims.SessionID] {
 		return false
 	}
 	claims.Role = rec.Role

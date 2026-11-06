@@ -65,6 +65,10 @@ var tables = []TableSpec{
 	{Name: "system_configs", Model: &SystemConfigRecord{}, AutoIncrement: true},
 	{Name: "notifies", Model: &Notify{}, AutoIncrement: true},
 	{Name: "pickup_charges", Model: &PickupCharge{}, AutoIncrement: true},
+	// 5.2.0 账号与信任：登录会话表 + 找回密码一次性令牌表。
+	// 二者都以 users.id 为归属键 ⇒ 必须排在 users 之后（导入顺序）。
+	{Name: "user_sessions", Model: &UserSession{}, AutoIncrement: true},
+	{Name: "password_reset_tokens", Model: &PasswordResetToken{}, AutoIncrement: true},
 }
 
 // Tables 返回全部领域模型的登记清单（**副本**，调用方改不动内部状态）。

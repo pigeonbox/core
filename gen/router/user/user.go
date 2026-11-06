@@ -27,10 +27,27 @@ func Register(r *server.Hertz) {
 		_user.POST("/login", append(_loginMw(), user.Login)...)
 		_user.PUT("/profile", append(_updateprofileMw(), user.UpdateProfile)...)
 		_user.POST("/register", append(_registerMw(), user.Register)...)
+		_user.GET("/sessions", append(_usersessionsMw(), user.UserSessions)...)
 		_user.GET("/stats", append(_userstatsMw(), user.UserStats)...)
 		{
 			_api_keys := _user.Group("/api-keys", _api_keysMw()...)
 			_api_keys.DELETE("/:id", append(_deleteapikeyMw(), user.DeleteAPIKey)...)
+		}
+		{
+			_password := _user.Group("/password", _passwordMw()...)
+			_password.POST("/forgot", append(_forgotpasswordMw(), user.ForgotPassword)...)
+			_password.POST("/reset", append(_resetpasswordMw(), user.ResetPassword)...)
+		}
+		{
+			_sessions := _user.Group("/sessions", _sessionsMw()...)
+			_sessions.DELETE("/:id", append(_revokesessionMw(), user.RevokeSession)...)
+			_sessions.POST("/revoke-all", append(_revokeallsessionsMw(), user.RevokeAllSessions)...)
+		}
+		{
+			_totp := _user.Group("/totp", _totpMw()...)
+			_totp.POST("/disable", append(_totpdisableMw(), user.TotpDisable)...)
+			_totp.POST("/enable", append(_totpenableMw(), user.TotpEnable)...)
+			_totp.POST("/setup", append(_totpsetupMw(), user.TotpSetup)...)
 		}
 	}
 }

@@ -12,7 +12,6 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	usermodel "github.com/pigeonbox/contracts/gen/user"
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/pkg/auth"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -32,7 +31,22 @@ import (
 var (
 	ErrUsernameExists = errors.New("username already exists")
 	ErrEmailExists    = errors.New("email already exists")
+
+	// 登录面的两条业务拒绝（5.2.0 收口）。原先各登录入口各写一份文案，
+	// 二验闸接进来后需要「口令对了但码没给」与「口令错了」分开处理
+	// ⇒ 文案收成哨兵，handler 用 errors.Is 分流。
+	ErrBadCredentials  = errors.New("用户名或密码错误")
+	ErrAccountDisabled = errors.New("用户账号已被禁用")
 )
+
+// Mailer 邮件发送窄接口（找回密码用；bootstrap 注入 notify.SMTPMailer）。
+//
+// 只要 Enabled + SendTo 两个方法：本域不关心模板、附件、收件人解析，
+// 也不希望为了发一封系统信把 notify 域的整包依赖拉进 app/user。
+type Mailer interface {
+	Enabled() bool
+	SendTo(to, subject, body string) error
+}
 
 type CreateUserReq struct {
 	Username string
@@ -64,7 +78,15 @@ type Service struct {
 	repo         *dao.UserRepository
 	apiKeyRepo   *dao.UserAPIKeyRepository
 	fileCodeRepo *dao.FileCodeRepository
-	defaults     DefaultsProvider
+	// sessionRepo / resetRepo 5.2.0：登录会话与找回令牌。
+	// nil = 该能力未装配（单测/轻量环境），调用方按「能力不可用」处理，
+	// 不得当成「零条会话」（前者允许登录降级，后者会把全员判成已撤销）。
+	sessionRepo *dao.SessionRepository
+	resetRepo   *dao.PasswordResetRepository
+	defaults    DefaultsProvider
+	mailer      Mailer
+	// baseURL 站级对外地址（拼找回链接）；空则退回 conf.Server.BaseURL。
+	baseURL string
 }
 
 func NewService(gormDB *gorm.DB) *Service {
@@ -72,7 +94,23 @@ func NewService(gormDB *gorm.DB) *Service {
 		repo:         dao.NewUserRepository(gormDB),
 		apiKeyRepo:   dao.NewUserAPIKeyRepository(gormDB),
 		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
+		sessionRepo:  dao.NewSessionRepository(gormDB),
+		resetRepo:    dao.NewPasswordResetRepository(gormDB),
 	}
+}
+
+// SetMailer 注入邮件发送器（bootstrap 装配调用；nil = 找回密码不可用）。
+func (s *Service) SetMailer(m Mailer) { s.mailer = m }
+
+// SetBaseURL 注入站级对外地址（bootstrap 装配调用）。
+func (s *Service) SetBaseURL(u string) { s.baseURL = strings.TrimSpace(u) }
+
+// EmailResetAvailable 邮箱找回密码是否可用（/api/config capabilities 用）。
+//
+// 判据是「配了 SMTP」而不是「有没有用户登记邮箱」：前者是站级开关，
+// 后者是每个账号自己的事 —— 把入口按后者显隐会让人以为功能随机消失。
+func (s *Service) EmailResetAvailable() bool {
+	return s.mailer != nil && s.mailer.Enabled()
 }
 
 // SetDefaultsProvider 注入系统级默认值来源（bootstrap 装配调用）。
@@ -256,62 +294,24 @@ func (s *Service) List(ctx context.Context, page, pageSize int) ([]*model.UserRe
 	return resps, total, nil
 }
 
-// Login 用户登录
+// Login 用户登录（不带二验码的兼容入口）。
+//
+// 二验开启的账号走这里会得到 TotpRequiredError（40012）——调用方需要
+// 显式转向 LoginWithTOTP 把码一起带上。
 func (s *Service) Login(ctx context.Context, username, password string) (*model.UserResp, string, error) {
-	user, err := s.repo.GetByUsername(ctx, username)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, "", errors.New("用户名或密码错误")
-		}
-		return nil, "", err
-	}
-
-	// 验证密码
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return nil, "", errors.New("用户名或密码错误")
-	}
-
-	// 检查用户状态
-	if user.Status != "active" {
-		return nil, "", errors.New("用户账号已被禁用")
-	}
-
-	// 生成 JWT Token
-	token, err := auth.GenerateToken(user.ID, user.Username, user.Role)
-	if err != nil {
-		return nil, "", errors.New("生成令牌失败")
-	}
-
-	return user.ToResp(), token, nil
+	return s.LoginWithTOTP(ctx, username, password, LoginContext{})
 }
 
-// LoginByEmail 通过邮箱登录
+// LoginByEmail 通过邮箱登录（口令 + 可选的二验码，语义与 LoginWithTOTP 一致）。
 func (s *Service) LoginByEmail(ctx context.Context, email, password string) (*model.UserResp, string, error) {
 	user, err := s.repo.GetByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, "", errors.New("邮箱或密码错误")
+			return nil, "", ErrBadCredentials
 		}
 		return nil, "", err
 	}
-
-	// 验证密码
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
-		return nil, "", errors.New("邮箱或密码错误")
-	}
-
-	// 检查用户状态
-	if user.Status != "active" {
-		return nil, "", errors.New("用户账号已被禁用")
-	}
-
-	// 生成 JWT Token
-	token, err := auth.GenerateToken(user.ID, user.Username, user.Role)
-	if err != nil {
-		return nil, "", errors.New("生成令牌失败")
-	}
-
-	return user.ToResp(), token, nil
+	return s.finishLogin(ctx, user, password, LoginContext{})
 }
 
 // ChangePassword 修改密码

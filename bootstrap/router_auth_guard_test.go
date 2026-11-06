@@ -134,7 +134,14 @@ var mwContract = map[string][]string{
 	"user._updateprofileMw":              {"AuthMiddleware"},
 	"user._userfilesMw":                  {"AuthMiddleware"},
 	"user._userinfoMw":                   {"AuthMiddleware"},
-	"user._userstatsMw":                  {"AuthMiddleware"},
+	// 账号与信任（5.2.0）：二次验证与会话管理都是**登录后**的能力面。
+	"user._totpsetupMw":         {"AuthMiddleware"},
+	"user._totpenableMw":        {"AuthMiddleware"},
+	"user._totpdisableMw":       {"AuthMiddleware"},
+	"user._usersessionsMw":      {"AuthMiddleware"},
+	"user._revokesessionMw":     {"AuthMiddleware"},
+	"user._revokeallsessionsMw": {"AuthMiddleware"},
+	"user._userstatsMw":         {"AuthMiddleware"},
 }
 
 // publicRoutes：必须保持**匿名可达**的生成路由 → 理由。
@@ -195,6 +202,10 @@ var publicRoutes = map[string]string{
 	"POST /anonymous/retrieve":      "匿名取件凭证（只发凭证不扣次）",
 	"GET /anonymous/search/:code":   "匿名取件搜索",
 	"GET /anonymous/download/:code": "匿名取件下载",
+
+	// —— 找回密码（5.2.0；匿名：忘了密码的人此刻正是未登录状态）——
+	"POST /user/password/forgot": "申请找回密码（恒成功防枚举，鉴权在 service 之外无从加门槛）",
+	"POST /user/password/reset":  "凭一次性邮件 token 重置密码（token 本身即凭据）",
 
 	// —— 会话（令牌在 handler 内校验，中间件层不设门槛）——
 	"POST /api/v1/user/refresh": "会话刷新（handler 内校验令牌；缺令牌回 401）",

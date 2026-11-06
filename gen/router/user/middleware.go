@@ -79,3 +79,71 @@ func _userfilesMw() []app.HandlerFunc {
 		middleware.AuthMiddleware(),
 	}
 }
+
+// ==================== 账号与信任（5.2.0）====================
+//
+// 鉴权口径（与 IDL 声明逐条对应，改动即 CI 红）：
+//   - 二次验证三端点 + 会话三端点：必须登录（AuthMiddleware）
+//   - 找回密码两端点：**匿名可达** —— 忘了密码的人此刻正是未登录状态，
+//     给它套登录门槛等于把这个功能做成死门。
+
+func _usersessionsMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		middleware.AuthMiddleware(),
+	}
+}
+
+func _passwordMw() []app.HandlerFunc {
+	// 分组本身不设门槛（下面两条路由各自声明）
+	return nil
+}
+
+func _forgotpasswordMw() []app.HandlerFunc {
+	// 匿名：申请找回密码（恒成功，防账号枚举在 service 内保证）
+	return nil
+}
+
+func _resetpasswordMw() []app.HandlerFunc {
+	// 匿名：凭一次性 token 重置密码（token 本身就是凭据）
+	return nil
+}
+
+func _sessionsMw() []app.HandlerFunc {
+	// 分组本身不设门槛（下面两条路由各自声明）
+	return nil
+}
+
+func _revokesessionMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		middleware.AuthMiddleware(),
+	}
+}
+
+func _revokeallsessionsMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		middleware.AuthMiddleware(),
+	}
+}
+
+func _totpMw() []app.HandlerFunc {
+	// 分组本身不设门槛（下面三条路由各自声明）
+	return nil
+}
+
+func _totpdisableMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		middleware.AuthMiddleware(),
+	}
+}
+
+func _totpenableMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		middleware.AuthMiddleware(),
+	}
+}
+
+func _totpsetupMw() []app.HandlerFunc {
+	return []app.HandlerFunc{
+		middleware.AuthMiddleware(),
+	}
+}

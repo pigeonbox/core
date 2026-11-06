@@ -153,6 +153,11 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"POST /api/v1/user/shares/import-local",
 		// ===== 部署自检快照（2026-10-30 手写；管理面，供官方 CLI pb doctor 消费）=====
 		"GET /admin/diagnostics",
+		// ===== 账号与信任（5.2.0；user 域生成路由）=====
+		// 二次验证三端点 + 登录设备三端点（登录后可用）+ 找回密码两端点（匿名）
+		"POST /user/totp/setup", "POST /user/totp/enable", "POST /user/totp/disable",
+		"GET /user/sessions", "DELETE /user/sessions/:id", "POST /user/sessions/revoke-all",
+		"POST /user/password/forgot", "POST /user/password/reset",
 		// ===== 定时自动备份（2026-11-06 手写；5.1.0；管理面）=====
 		// 列表+状态 / 下载包（二进制流）/ 立即备份（后台跑，立刻返回）
 		"GET /admin/backups", "GET /admin/backups/:name", "POST /admin/backups/run",

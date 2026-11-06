@@ -126,7 +126,22 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 		if err != nil {
 			return nil, err
 		}
-		return &middleware.IdentityRecord{Status: u.Status, Role: u.Role, Epoch: u.SessionEpoch}, nil
+		// 会话集合随身份快照一起取出（5.2.0）：认证是最热的路径，每请求查一次
+		// user_sessions 就是给自己加一次写放大以外的读放大。搭 30s 缓存便车后，
+		// 「撤销会话」靠 InvalidateIdentity 立刻生效 ⇒ 有效延迟仍是 0。
+		//
+		// 查询失败 ⇒ **整条身份回查失败**（fail-closed）。不能退回「跳过会话校验」
+		// 那种「查不动就放行」的口径：那等于会话表一抖动，被踢掉的设备全部复活。
+		sessions, serr := dao.NewSessionRepository(database).ActiveSessionIDs(ctx, userID)
+		if serr != nil {
+			return nil, serr
+		}
+		return &middleware.IdentityRecord{
+			Status:   u.Status,
+			Role:     u.Role,
+			Epoch:    u.SessionEpoch,
+			Sessions: sessions,
+		}, nil
 	})
 	auth.SetEpochLoader(func(userID uint) int {
 		u, err := dao.NewUserRepository(database).GetByID(context.Background(), userID)

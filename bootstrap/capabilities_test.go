@@ -37,14 +37,16 @@ func TestPublicCapabilitySnapshot_OnlyPublicSafeFields(t *testing.T) {
 	assert.False(t, full.Federation, "联邦不在公开快照里（顶层 federationEnabled 才是它的家）")
 	assert.True(t, full.RedisMode == "redis", "完整快照才带 Redis 模式")
 
-	// 公开面下发的 JSON **恰好四个键** —— 管理面事实（Redis 模式/存储后端）
+	// 公开面下发的 JSON **恰好五个键** —— 管理面事实（Redis 模式/存储后端）
 	// 连空串形态都不许泄出去（`redis_mode:""` 既不是事实也不是可辨识的「未知」）。
 	raw, err := json.Marshal(pub)
 	require.NoError(t, err)
 	var keys map[string]any
 	require.NoError(t, json.Unmarshal(raw, &keys))
-	assert.Len(t, keys, 4, "公开能力段只允许四个键：%s", string(raw))
-	for _, k := range []string{"deployment_mode", "public_url_set", "setup_token_required", "federation_delivery"} {
+	assert.Len(t, keys, 5, "公开能力段只允许五个键：%s", string(raw))
+	for _, k := range []string{"deployment_mode", "public_url_set", "setup_token_required", "federation_delivery",
+		// 5.2.0：邮箱找回密码是否可用（有 SMTP 才为 true）
+		"email_password_reset"} {
 		assert.Contains(t, keys, k)
 	}
 	assert.NotContains(t, keys, "redis_mode")

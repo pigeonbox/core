@@ -460,6 +460,13 @@ func (s *Service) CreateForUserSimple(ctx context.Context, userID uint, title, c
 // 运行期热重建会调用 ⇒ 必须原子换指针（见 Service.mailer 的说明）。
 func (s *Service) SetMailer(m *SMTPMailer) { s.mailer.Store(m) }
 
+// Mailer 当前生效的邮件发送器（nil = 未配置）。
+//
+// 暴露给装配点是**故意**的：找回密码需要发信，但 app/user 不该依赖 notify 域。
+// 返回的是当前指针，所以 admin 改 SMTP 设置触发热重建后，取用方读到的就是
+// 新实例（不需要重启，也不需要重新注入）。
+func (s *Service) Mailer() *SMTPMailer { return s.mailer.Load() }
+
 // ==================== Webhook 外部通知渠道 ====================
 
 // SetWebhookURL 注入 Webhook 推送地址（bootstrap 从 notify.webhook.url / PB_WEBHOOK_URL 注入；
