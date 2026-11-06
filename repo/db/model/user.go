@@ -23,6 +23,23 @@ type User struct {
 	// （2026-10-05 审计 P2：此前封禁/重置密码后旧 JWT 仍有效至自然过期）。
 	SessionEpoch int `gorm:"default:0" json:"-"`
 
+	// ---- 账号与信任（5.2.0）----
+	//
+	// TotpSecret TOTP 共享密钥（base32，无填充）。落库为**明文**，理由：
+	// 它需要一把「比 JWT secret 更稳定」的密钥来加密；而 JWT secret 是允许
+	// 运维更换的配置（换了全部会话失效是设计预期）⇒ 若用它加密，换一次
+	// secret 就等于**全员二验静默失效**（只能靠恢复码，而恢复码也没了）。
+	// 折中后选明文：能读这张表的人本来就能读全部分享内容与对象存储凭据，
+	// TOTP 密钥不构成新的信任边界。
+	//
+	// 未启用时也可能有值：绑定第一步写入、第二步没验过就放弃 ⇒ 留着供重试。
+	TotpSecret string `gorm:"size:64" json:"-"`
+	// TotpEnabled 是否已启用（绑定第二步验码成功才 true）。
+	TotpEnabled bool `gorm:"default:false" json:"totp_enabled"`
+	// TotpRecoveryCodes 一次性恢复码的 bcrypt 哈希（JSON 数组字符串）。
+	// 只存哈希：库被读走也换不回可用恢复码。
+	TotpRecoveryCodes string `gorm:"size:1024" json:"-"`
+
 	// 用户上传统计
 	TotalUploads    int   `gorm:"default:0" json:"total_uploads"`     // 总上传次数
 	TotalDownloads  int   `gorm:"default:0" json:"total_downloads"`   // 总下载次数

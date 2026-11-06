@@ -11,11 +11,14 @@ import (
 	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/loop"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	adminApp "github.com/pigeonbox/core/app/admin"
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
+	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db"
+	"github.com/pigeonbox/core/repo/db/dao"
 )
 
 // defaultPickupDetailRetentionDays 取件明细默认留存天数（兜底：全局配置未就绪时）。
@@ -96,6 +99,50 @@ func startExpiredFileCleanup(svc *adminApp.Service) {
 	}))
 }
 
+// tasksDB 后台任务取的全局 DB 句柄（装配层显式句柄，棘轮规则 10 的唯一访问点）。
+//
+// 收成一个函数而不是各处直取：规则 10 按**访问点**计数且只许减不许增
+// ⇒ 每加一个后台任务就多一个访问点，而那些访问点全是同一次取用。
+func tasksDB() *gorm.DB { return db.GetDB() }
+
+// startAccountTrustCleanup 账号与信任域的过期数据清理（5.2.0；6 小时周期，
+// 首跑延迟 15 分钟错开 janitor）。
+//
+// 清两样东西，判据都是「**时间已过**」而不是「已撤销」：
+//
+//	· user_sessions：created_at 超过 2× 会话时长（默认 14 天）的会话行。
+//	  会话即使未撤销，其 JWT 也早已过期 ⇒ 行留着只会让「登录设备」列表
+//	  越滚越长，把真正在线的设备挤出视野。
+//	· password_reset_tokens：过期 24h 后的令牌（留一天是为了让「我昨天点的
+//	  链接怎么失效了」有据可查，超出即无价值）。
+//
+// 撤销过的会话行**不清**（软撤销是审计留痕，与硬删的取舍不同）：它们的
+// created_at 迟早超过窗口，届时一并物理删除——被删掉的是「已记不清的旧
+// 会话」，不影响任何在线判定。
+func startAccountTrustCleanup() {
+	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+		Name:       "account-trust-cleanup",
+		Interval:   6 * time.Hour,
+		FirstDelay: 15 * time.Minute,
+	}, func(ctx context.Context) {
+		handle := tasksDB()
+		if handle == nil {
+			return
+		}
+		sessionCut := time.Now().Add(-2 * auth.SessionExpiry())
+		if n, err := dao.NewSessionRepository(handle).DeleteOlderThan(ctx, sessionCut); err != nil {
+			logger.Error("session cleanup failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("stale login sessions purged", zap.Int64("count", n))
+		}
+		if n, err := dao.NewPasswordResetRepository(handle).DeleteExpired(ctx, time.Now().Add(-24*time.Hour)); err != nil {
+			logger.Error("password reset token cleanup failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("expired password reset tokens purged", zap.Int64("count", n))
+		}
+	}))
+}
+
 // startMaintenanceJanitor 孤儿文件对账 + 日志保留清理（24h 周期，首跑延迟 10 分钟
 // 等启动期写入稳定，延迟可被停机打断）。local 后端真删孤儿文件；远端后端仅跳过
 // （报告策略见 janitor）。
@@ -109,7 +156,7 @@ func startMaintenanceJanitor() {
 		retention = config.Admin.LogRetentionDays
 		pickupDetailDays = config.Admin.PickupDetailRetentionDays
 	}
-	j := adminApp.NewJanitor(db.GetDB(), getBootstrapStorageService(), retention) // 装配层显式句柄
+	j := adminApp.NewJanitor(tasksDB(), getBootstrapStorageService(), retention) // 装配层显式句柄
 	// 管理端孤儿端点（POST /admin/storage/clean-presign-orphans 与
 	// GET /admin/storage/insights 的孤儿计数）复用同一 janitor 实例
 	storageHandler.SetJanitor(j)

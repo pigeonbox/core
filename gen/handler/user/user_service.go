@@ -154,10 +154,35 @@ func Login(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// 调用 service 进行登录验证
-	userInfo, token, err := getUserService().Login(ctx, req.Username, req.Password)
+	// 调用 service 进行登录验证（5.2.0：带上二验码 + 设备信息登记会话）
+	userInfo, token, err := getUserService().LoginWithTOTP(ctx, req.Username, req.Password,
+		userservice.LoginContext{
+			TotpCode:  req.GetTotpCode(),
+			IP:        middleware.ClientIP(c),
+			UserAgent: string(c.UserAgent()),
+		})
 	if err != nil {
+		// 二验分流（**顺序不能反**，两条都是 typed 错误）：
+		//   ① 40012 需要验证码 = 口令已经对了，**不是失败** ⇒ 不计锁定、不返回 401；
+		//      前端据此弹第二个输入框。当成失败会让「输一次码」把账号锁掉。
+		//   ② 40013 验证码无效 = 真失败 ⇒ 计入锁定桶（否则二验码可无限试）。
+		var need *userservice.TotpRequiredError
+		if errors.As(err, &need) {
+			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
+				"code":    errcode.CodeTotpRequired,
+				"message": err.Error(),
+			})
+			return
+		}
 		_, _ = lock.RecordFailure(ctx, lockKey)
+		var bad *userservice.TotpInvalidError
+		if errors.As(err, &bad) {
+			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
+				"code":    errcode.CodeTotpInvalid,
+				"message": err.Error(),
+			})
+			return
+		}
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
 			"code":    errcode.CodeUnauthorized,
 			"message": err.Error(),
@@ -240,9 +265,16 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 			Status:    1,
 			CreatedAt: user.CreatedAt.Format("2006-01-02 15:04:05"),
 			Role:      &user.Role,
+			// 5.2.0：安全设置页按这一位显隐「绑定 / 解绑二次验证」入口。
+			// 必须放在 /user/info（不是登录响应）：登录响应的读者是登录流程，
+			// 而这里才是「当前账号的安全状态」的权威面。
+			TotpEnabled: boolPtr(getUserService().TotpEnabled(ctx, userID)),
 		},
 	})
 }
+
+// boolPtr 取址（optional bool 字段用；Go 没有取字面量地址的语法）。
+func boolPtr(v bool) *bool { return &v }
 
 // UpdateProfile .
 // @router /user/profile [PUT]

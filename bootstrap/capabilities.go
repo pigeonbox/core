@@ -84,6 +84,9 @@ type CapabilitySnapshot struct {
 	// StorageDegraded 是否发生降级（配置的后端 ≠ 生效后端 ⇒ 远端构造失败回落 local）。
 	// ⚠️ 这是**真实故障的信号**：用户以为在用 S3，实际全落在本地盘上。
 	StorageDegraded bool `json:"storage_degraded"`
+	// EmailPasswordReset 邮箱自助找回密码是否可用（5.2.0；站级 SMTP 已配置）。
+	// 公开面同样下发（匿名可见也无害：有「忘记密码」入口这件事不泄露任何账号）。
+	EmailPasswordReset bool `json:"email_password_reset"`
 }
 
 // redisModeOf 生效的 Redis 模式：redis | memory。
@@ -149,6 +152,11 @@ func capabilitySnapshot(ctx context.Context) CapabilitySnapshot {
 	snap.FederationDelivery = fed.Enabled && len(fed.DeliveryPeers) > 0
 	snap.PublicURLSet = effectivePublicURL(ctx) != ""
 	snap.SetupTokenRequired = effectiveSetupToken() != ""
+	// 邮箱找回密码（5.2.0）：站级 SMTP 是否可用。取**装配实例**的判定，
+	// 不回读配置——SMTP 热重建后 mailer 指针会换，配置回显可能已陈旧。
+	if userSvcInstance != nil {
+		snap.EmailPasswordReset = userSvcInstance.EmailResetAvailable()
+	}
 
 	// 存储单例在 config 为 nil 时不可构造（构造要读 config.Storage）⇒ 跳过。
 	if config == nil {
@@ -181,6 +189,12 @@ type PublicCapabilities struct {
 	// ⚠️ 只暴露「能不能用」，**不暴露对端身份**（谁、在哪）⇒ 访客看得见
 	// 功能入口，但看不到管理员配了对端。
 	FederationDelivery bool `json:"federation_delivery"`
+	// EmailPasswordReset 邮箱自助找回密码是否可用（5.2.0）。
+	//
+	// 判据 = 站级 SMTP 是否已配置。false 时前端**隐藏**「忘记密码」入口——
+	// 让用户点进一个注定恒成功但永远收不到信的流程，是最糟的形态
+	// （他会反复重试并以为站点坏了）。
+	EmailPasswordReset bool `json:"email_password_reset"`
 }
 
 // publicCapabilitySnapshot 公开面（/api/config）下发的能力子集。
@@ -193,6 +207,7 @@ func publicCapabilitySnapshot(ctx context.Context) PublicCapabilities {
 		PublicURLSet:       full.PublicURLSet,
 		SetupTokenRequired: full.SetupTokenRequired,
 		FederationDelivery: full.FederationDelivery,
+		EmailPasswordReset: full.EmailPasswordReset,
 	}
 }
 

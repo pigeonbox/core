@@ -194,6 +194,12 @@ func initThriftIDLServices(database *gorm.DB) {
 	// + 存储配额强制检查（user_quota / 用户级 max_storage_quota）
 	userSvc := userService.NewService(database)
 	userSvc.SetDefaultsProvider(adminDefaultsAdapter{})
+	// 5.2.0 账号与信任：找回密码需要发信 + 站级地址（拼一次性链接）。
+	// 注入的是**适配器**而不是当前 mailer 指针：admin 改 SMTP 设置会热重建
+	// SMTPMailer 实例，指针式注入会让 user 域永远拿着旧实例（改完不生效）。
+	userSvcInstance = userSvc
+	userSvc.SetMailer(notifyMailerAdapter{svc: notifyApp})
+	userSvc.SetBaseURL(bootstrapBaseURL())
 	shareSvc.SetUserService(userSvc)
 	shareSvc.SetQuotaChecker(userSvc)
 	// user 面 handler 同实例注入：注册开关/配额默认值经 DefaultsProvider 桥到
@@ -405,6 +411,7 @@ func initThriftIDLServices(database *gorm.DB) {
 		async.GoSafe(startAPIKeyExpiryNotify)
 		// 存储对账 + 日志保留（治理 2026-10-03）：24h 周期，启动 10 分钟后首跑
 		async.GoSafe(startMaintenanceJanitor)
+		async.GoSafe(startAccountTrustCleanup)
 		// 定时自动备份（5.1.0）：默认关闭（backup.enabled=false ⇒ 函数内自检
 		// 直接返回）；开启后「目标时刻已过 + 当天无包」才导出，一天一份。
 		// 先装配（显式传入 DB 与存储句柄），再起循环；未启用时装配照样完成，
@@ -430,6 +437,37 @@ var notifySvcInstance *notifyAppService.Service
 
 // requestSvcInstance 寄件码服务实例（initThriftIDLServices 装配）
 var requestSvcInstance *requestApp.Service
+
+// userSvcInstance 装配级 user 服务（能力快照读 SMTP 可用性用，5.2.0）。
+//
+// 只读用：业务路径一律走 gen/handler/user 的 SetUserService 注入实例，
+// 不要再从这里取来做业务调用（两处取值必然漂移）。
+var userSvcInstance *userService.Service
+
+// notifyMailerAdapter 把 notify 域的**当前** SMTP 发送器转成 app/user 需要的窄接口。
+//
+// 存在的理由：找回密码要发信，但 app/user 不该 import notify（跨域依赖）。
+// 每次调用都现读 notify 服务的指针 ⇒ admin 改 SMTP 设置触发的热重建自动生效。
+type notifyMailerAdapter struct{ svc *notifyAppService.Service }
+
+func (a notifyMailerAdapter) Enabled() bool {
+	if a.svc == nil {
+		return false
+	}
+	m := a.svc.Mailer()
+	return m != nil && m.Enabled()
+}
+
+func (a notifyMailerAdapter) SendTo(to, subject, body string) error {
+	if a.svc == nil {
+		return fmt.Errorf("notify service 未装配")
+	}
+	m := a.svc.Mailer()
+	if m == nil || !m.Enabled() {
+		return fmt.Errorf("SMTP 未启用（host 为空）")
+	}
+	return m.SendTo(to, subject, body)
+}
 
 // bootstrapBaseURL 对外基础地址（server.base_url 优先，否则 host:port）
 func bootstrapBaseURL() string {
