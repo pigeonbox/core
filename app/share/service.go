@@ -951,6 +951,29 @@ func (s *Service) FindShareByUploadID(ctx context.Context, uploadID string) (*mo
 	return fc, nil
 }
 
+// FindShareByUploadIDOwnedBy 按上传会话 ID 回读**属于调用方**的已建分享
+// （幂等回读的属主限定版，2026-11-06 P0 修复）。
+//
+// 与 FindShareByUploadID 的唯一差别是**多一道属主判据**。上传完成面必须用它：
+// upload_id 由客户端自报的 file_hash 派生 ⇒ 可被他人算出 ⇒ 无限定的回读等于
+// 「谁猜到 upload_id 谁拿走别人的分享码」。语义与代价说明见
+// dao.FileCodeRepository.FirstByUploadIDOwnedBy。
+//
+// 未命中返回 (nil, nil)（调用方按「首次」继续建自己的分享）。
+func (s *Service) FindShareByUploadIDOwnedBy(ctx context.Context, uploadID string, userID *uint, ownerIP string) (*model.FileCode, error) {
+	if uploadID == "" {
+		return nil, nil
+	}
+	fc, err := s.fileCodeRepo.FirstByUploadIDOwnedBy(ctx, uploadID, userID, ownerIP)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return fc, nil
+}
+
 // ListPickups 取某分享的逐条取件明细（owner 侧「取件历史」用）。
 //
 // 数据源 = 计次记录表（一次取件 = 一行）⇒ 多文件逐个下载/断点续传不会被

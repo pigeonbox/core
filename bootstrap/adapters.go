@@ -344,11 +344,15 @@ func (a presignShareAdapter) CreateShare(ctx context.Context, req *presignApp.Sh
 	}, nil
 }
 
-// FindShareByUploadID 按上传会话 ID 回读已建分享（上传完成面幂等复用：
-// 同一 upload_id 二次 Complete 复用同一个分享，不新建 ⇒ owner 的取件次数
-// 额度不被翻倍。2026-10-24 审计，core v0.32.6）。
-func (a presignShareAdapter) FindShareByUploadID(ctx context.Context, uploadID string) (string, error) {
-	fc, err := a.svc.FindShareByUploadID(ctx, uploadID)
+// FindShareByUploadIDOwnedBy 按上传会话 ID 回读**属于调用方**的已建分享
+// （上传完成面幂等复用：同一 upload_id 二次 Complete 复用同一个分享，不新建
+// ⇒ owner 的取件次数额度不被翻倍。2026-10-24 审计，core v0.32.6）。
+//
+// 属主限定为 2026-11-06 P0 修复：upload_id 可由 file_hash 推导 ⇒ 无限定回读
+// 会把他人分享码交出去。判据落在 dao（登录按 user_id、匿名按 user_id IS NULL
+// 且 owner_ip 相等），此处只做窄接口转接。
+func (a presignShareAdapter) FindShareByUploadIDOwnedBy(ctx context.Context, uploadID string, userID *uint, ownerIP string) (string, error) {
+	fc, err := a.svc.FindShareByUploadIDOwnedBy(ctx, uploadID, userID, ownerIP)
 	if err != nil || fc == nil {
 		return "", err
 	}

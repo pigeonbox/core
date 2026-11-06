@@ -33,8 +33,9 @@ type mockShareService struct {
 	existingShareCode string
 }
 
-// FindShareByUploadID 回读已建分享（幂等复用路径；默认未命中）。
-func (m *mockShareService) FindShareByUploadID(ctx context.Context, uploadID string) (string, error) {
+// FindShareByUploadIDOwnedBy 回读已建分享（幂等复用路径；默认未命中）。
+// 属主判据在本桩内部不建模——桩只验「命中即复用、未命中即新建」的编排。
+func (m *mockShareService) FindShareByUploadIDOwnedBy(ctx context.Context, uploadID string, userID *uint, ownerIP string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.existingShareCode, nil

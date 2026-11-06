@@ -212,7 +212,15 @@ func Init(ctx context.Context, c *app.RequestContext) {
 		zap.Int64("file_size", int64(req.FileSize)),
 	)
 
+	// 会话属主（2026-11-06）：Complete 的幂等回读与多文件绑定的 object_key
+	// 归属校验都要用。此前 InitMeta 不带身份 ⇒ 两处判据都无从下手。
+	var metaUserID uint
+	if gateUserID != nil {
+		metaUserID = *gateUserID
+	}
 	meta := presignapp.InitMeta{
+		UserID:       metaUserID,
+		OwnerIP:      middleware.ClientIP(c),
 		FileName:     req.FileName,
 		FileSize:     req.FileSize,
 		ContentType:  req.ContentType,

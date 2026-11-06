@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/oekit/pkg/pathx"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/app/chunk"
+	presignApp "github.com/pigeonbox/core/app/presign"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
@@ -89,6 +91,22 @@ var multiChunkSvcInstance *chunk.Service
 
 // SetMultiChunkService 注入多文件绑定用 chunk 会话查询服务（bootstrap 调用）。
 func SetMultiChunkService(s *chunk.Service) { multiChunkSvcInstance = s }
+
+var multiPresignSvcInstance *presignApp.Service
+
+// SetMultiPresignService 注入多文件绑定用的 presign 会话查询服务（bootstrap 调用）。
+// 用途：校验 object_key 归属（见 multiObjectKeyOwnedByCaller）。
+func SetMultiPresignService(s *presignApp.Service) { multiPresignSvcInstance = s }
+
+// multiPresign 多文件绑定的 presign 会话查询
+func multiPresign() *presignApp.Service {
+	if multiPresignSvcInstance == nil {
+		// fail-fast：归属校验不能「查不到服务就放行」——那等于把 object_key
+		// 的归属判据静默降级为无判据。
+		panic("presign service not initialized: SetMultiPresignService must be called before serving")
+	}
+	return multiPresignSvcInstance
+}
 
 // multiChunkSvc 多文件绑定的 chunk 会话查询
 func multiChunkSvc() *chunk.Service {
@@ -197,7 +215,14 @@ func newRelPath(originalName string) (uuidName, rel string) {
 	return utils.NewUploadRelPath(originalName)
 }
 
-// cleanupStored 失败回滚：删除已落存储的文件（best-effort）
+// cleanupStored 失败回滚：删除**本请求刚创建的**存储文件（best-effort）。
+//
+// ⚠️ 入参必须是「本请求创建的路径」清单（调用点用 created，不是 bound）。
+// 2026-11-06 P1 修复：此前回滚遍历的是 bound——它**混着 object_key 引用**，
+// 而 object_key 指向的是别人先前上传好的对象（presign 会话产物）⇒
+// 构造一个「先引用他人 object_key、再跟一个非法条目」的请求即可让校验失败、
+// 触发回滚，把**他人的文件物理删掉**（无需任何权限，只需知道 key）。
+// 回滚只该回收自己造出来的东西；引用型条目的生命周期不归本请求。
 func cleanupStored(ctx context.Context, st storage.StorageInterface, entries []shareService.StoredFileEntry) {
 	if st == nil {
 		return
@@ -363,6 +388,9 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 	st := manageStorage
 	chunkSvc := multiChunkSvc()
 	bound := make([]shareService.StoredFileEntry, 0, len(body.Entries))
+	// created 只装**本请求创建的**路径（chunk 合并产物）；bound 还混着
+	// object_key 引用（他人对象）。失败回滚只能遍历 created，见 cleanupStored。
+	created := make([]shareService.StoredFileEntry, 0, len(body.Entries))
 	mergedUploadIDs := make([]string, 0, len(body.Entries))
 
 	// 第一遍：收集申报大小做匿名配额预检（fail-fast，先于合并落盘）
@@ -388,13 +416,14 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 		case e.UploadID != "":
 			entry, uploadID, ok := bindChunkEntry(ctx, c, chunkSvc, st, e.UploadID, p.Encrypted)
 			if !ok {
-				cleanupStored(ctx, st, bound)
+				cleanupStored(ctx, st, created)
 				for _, id := range mergedUploadIDs {
 					_ = st.CleanChunks(ctx, id)
 				}
 				return
 			}
 			bound = append(bound, *entry)
+			created = append(created, *entry)
 			if uploadID != "" {
 				mergedUploadIDs = append(mergedUploadIDs, uploadID)
 			}
@@ -410,7 +439,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 			// 连带误杀含 ".." 的合法名，且对 "uploads\x" 这类形态给不出结论。
 			cleanKey, ok := pathx.SanitizeRelStrict(e.ObjectKey)
 			if !ok || !strings.HasPrefix(cleanKey, "uploads/") {
-				cleanupStored(ctx, st, bound)
+				cleanupStored(ctx, st, created)
 				c.JSON(consts.StatusBadRequest, map[string]interface{}{
 					"code":    errcode.CodeInvalidParam,
 					"message": fmt.Sprintf("object_key 非法（仅接受 uploads/ 下服务端生成的对象）: %s", e.ObjectKey),
@@ -419,7 +448,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 			}
 			name := utils.SanitizeFileName(e.FileName)
 			if name == "" || !utils.IsAllowedExtension(name) {
-				cleanupStored(ctx, st, bound)
+				cleanupStored(ctx, st, created)
 				c.JSON(consts.StatusBadRequest, map[string]interface{}{
 					"code":    errcode.CodeFileTypeDenied,
 					"message": fmt.Sprintf("文件类型禁止上传: %s", e.FileName),
@@ -428,10 +457,21 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 			}
 			size, serr := st.GetFileSize(ctx, cleanKey)
 			if serr != nil || size <= 0 {
-				cleanupStored(ctx, st, bound)
+				cleanupStored(ctx, st, created)
 				c.JSON(consts.StatusBadRequest, map[string]interface{}{
 					"code":    errcode.CodeInvalidParam,
 					"message": fmt.Sprintf("对象不存在或大小异常: %s", e.ObjectKey),
+				})
+				return
+			}
+			// 归属校验（2026-11-06 P1）：此前只验「路径合法 + 对象存在」⇒
+			// 拿到他人的 object_key 就能把**别人的文件**绑成自己的分享
+			// （配合上面的回滚缺陷还能物理删除）。⇒ 反查 presign 会话判属主。
+			if !multiObjectKeyOwnedByCaller(ctx, c, cleanKey) {
+				cleanupStored(ctx, st, created)
+				c.JSON(consts.StatusForbidden, map[string]interface{}{
+					"code":    errcode.CodeForbidden,
+					"message": fmt.Sprintf("无权绑定该对象（不是本会话上传的）: %s", e.ObjectKey),
 				})
 				return
 			}
@@ -460,7 +500,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 		Note:         p.Note,
 	})
 	if err != nil {
-		cleanupStored(ctx, st, bound)
+		cleanupStored(ctx, st, created)
 		for _, id := range mergedUploadIDs {
 			_ = st.CleanChunks(ctx, id)
 		}
@@ -570,6 +610,57 @@ func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.
 		Size:     actualSize,
 		FileHash: fileHash,
 	}, uploadID, true
+}
+
+// multiObjectKeyOwnedByCaller 校验 object_key 属于当前调用方的 presign 会话。
+//
+// 判据（缺一不可）：
+//  1. 对象键能解析出 uploadID，且会话仍存活（GetMeta 命中）；
+//  2. 会话记录的 ObjectKey 与提交的 key **逐字一致**——挡住「拿自己的合法
+//     会话 ID + 换成他人 key」的拼接；
+//  3. 属主一致：登录用户比对 user_id；匿名比对 owner_ip。
+//
+// 兼容：2026-11-06 之前建的会话不落身份（UserID/OwnerIP 皆空）⇒ 无属主可判，
+// 放行。窗口受 presign 会话 TTL 硬约束（默认 1h）。
+func multiObjectKeyOwnedByCaller(ctx context.Context, c *app.RequestContext, objectKey string) bool {
+	uploadID := presignUploadIDFromObjectKey(objectKey)
+	if uploadID == "" {
+		return false
+	}
+	meta, err := multiPresign().GetMeta(ctx, uploadID)
+	if err != nil || meta == nil {
+		return false
+	}
+	if meta.ObjectKey != objectKey {
+		return false
+	}
+	if meta.UserID == 0 && meta.OwnerIP == "" {
+		return true // 历史会话：无属主记录可判
+	}
+	var callerUserID *uint
+	if uid, ok := middleware.UserIDFromContext(ctx); ok {
+		callerUserID = &uid
+	}
+	if meta.UserID != 0 {
+		return callerUserID != nil && *callerUserID == meta.UserID
+	}
+	return callerUserID == nil && middleware.ClientIP(c) == meta.OwnerIP
+}
+
+// presignUploadIDFromObjectKey 从服务端生成的对象键
+// （uploads/YYYY/MM/DD/<uploadID><ext>，见 presign.genObjectKey）解析 uploadID。
+// 解析不出来 ⇒ 返回空串（调用方按「不属于任何会话」拒绝）。
+func presignUploadIDFromObjectKey(objectKey string) string {
+	base := path.Base(objectKey)
+	ext := path.Ext(base)
+	if ext == "" {
+		return ""
+	}
+	id := strings.TrimSuffix(base, ext)
+	if id == "" || strings.ContainsAny(id, "./\\") {
+		return ""
+	}
+	return id
 }
 
 // multiOwnedByCaller 绑定归属校验（薄委托 chunk.OwnedByCaller 单一实现）：

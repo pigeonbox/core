@@ -46,7 +46,7 @@ func (g *stubShareGateway) CreateShare(_ context.Context, req *presignapp.ShareC
 	return &presignapp.ShareCreateResp{Code: "SHARE01", PickupCode: "PICK01"}, nil
 }
 
-func (g *stubShareGateway) FindShareByUploadID(_ context.Context, uploadID string) (string, error) {
+func (g *stubShareGateway) FindShareByUploadIDOwnedBy(_ context.Context, uploadID string, _ *uint, _ string) (string, error) {
 	g.lookups++
 	if g.forgetAfter > 0 && g.lookups >= g.forgetAfter {
 		return "", nil

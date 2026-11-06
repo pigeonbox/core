@@ -99,11 +99,15 @@ func (l *Lockout) CheckLocked(ctx context.Context, key string) (int, bool) {
 		return 0, false
 	}
 	if l.rdb != nil {
-		ttl, err := l.rdb.TTL(ctx, lockKeyPrefix+key).Result()
-		if err == nil && ttl > 0 {
+		// ⚠️ 不能「Redis 说没锁就直接放行」（2026-11-06 修 fail-open）：
+		// RecordFailure 在 Redis 故障时**回落到 l.mem 记账**（见下方），
+		// 而这里此前 Redis 一出错（TTL 返回 error）就 return 0,false
+		// ⇒ 故障期「失败次数照记、锁定判定恒放行」⇒ 爆破防护事实上关闭。
+		// ⇒ 只有 Redis **明确**给出正 TTL 才短路；其余一律继续查内存兜底，
+		// 两者取「较长」语义（谁锁得更久听谁的）。
+		if ttl, err := l.rdb.TTL(ctx, lockKeyPrefix+key).Result(); err == nil && ttl > 0 {
 			return int(ttl.Seconds()) + 1, true
 		}
-		return 0, false
 	}
 	if locked, remain := l.mem.CheckLocked(key); locked {
 		return int(remain.Seconds()) + 1, true

@@ -199,7 +199,9 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 	// 内部闸门及 select/download/preview 面共享 (IP, 取件码) 失败计数）
 	lock := middleware.GetDefaultLockout()
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), req.Code)
-	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
+	// 预检并入**按 IP 的枚举维度**（2026-11-06）：只查 (IP, 码) 会漏掉「枚举已
+	// 把这个 IP 锁上」的情形——预检放行、域内闸门再拒，白跑一次业务查询。
+	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), req.Code); locked {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
 			"message": "尝试过于频繁，已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",

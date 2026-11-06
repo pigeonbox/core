@@ -31,16 +31,59 @@ func PickupLockKey(clientIP, code string) string {
 	return middleware.LookupLockKey(PickupScope, clientIP, code)
 }
 
-// RecordPickupFailure 在统一键上记一次失败（供「码不存在」等到达不了
-// CheckPickup 的路径做枚举防护记账，语义与旧 handler 层记账一致）。
-func RecordPickupFailure(ctx context.Context, clientIP, code string) {
-	_, _ = middleware.GetDefaultLockout().RecordFailure(ctx, PickupLockKey(clientIP, code))
+// PickupEnumScope 取件码**枚举**的按 IP 维度 scope。
+//
+// 为什么需要独立维度（2026-11-06 审计 P2）：既有统一键是 (IP, 码)，而枚举攻击的
+// 特征恰恰是**每次换一个码** ⇒ 每个码各自一份计数，谁也到不了阈值 ⇒ 记账写了、
+// 却永远锁不上人 ⇒ 枚举防护形同虚设（"记了但没人统计"）。枚举的对手是 IP，
+// 不是码 ⇒ 同一 IP 在窗口内的累计失败达到阈值即锁定该 IP（拒绝一切码）。
+//
+// 代价（已知并接受）：同一出口 IP 后的多人（NAT/办公网）共享这份预算；阈值是
+// security.lockout 的全局口径（默认 10 次/300s，锁 600s），正常用户不会在 5 分钟
+// 内连试 10 个**不同**的码，故可接受——否则枚举面只剩限流桶这一道软防线。
+const PickupEnumScope = "pickup-enum"
+
+// PickupEnumLockKey 按 IP 的枚举锁定键（不含码维度——这正是它与
+// PickupLockKey 的差别）。
+func PickupEnumLockKey(clientIP string) string {
+	return middleware.FormatLockKey(PickupEnumScope, clientIP)
 }
 
-// PickupLockedRemain 查询统一键的剩余锁定秒数（handler 快速 429 预检用；
+// RecordPickupFailure 记一次「码不存在」类失败（供到达不了 CheckPickup 的
+// 路径做枚举防护记账）。
+//
+// 同时记两个维度：① (IP, 码) 保持与历史/其他入口一致的口径；② **(IP) 枚举维度**
+// ——后者才是枚举攻击真正会触发的那个计数（换码也能累计）。空 IP 只记码维度
+// （无 IP 时所有匿名来源会挤进同一个键，锁一个人等于锁全网）。
+func RecordPickupFailure(ctx context.Context, clientIP, code string) {
+	lock := middleware.GetDefaultLockout()
+	_, _ = lock.RecordFailure(ctx, PickupLockKey(clientIP, code))
+	if clientIP != "" {
+		_, _ = lock.RecordFailure(ctx, PickupEnumLockKey(clientIP))
+	}
+}
+
+// PickupEnumLockedRemain 查询按 IP 枚举维度的剩余锁定秒数。
+func PickupEnumLockedRemain(ctx context.Context, clientIP string) (int, bool) {
+	if clientIP == "" {
+		return 0, false
+	}
+	return middleware.GetDefaultLockout().CheckLocked(ctx, PickupEnumLockKey(clientIP))
+}
+
+// PickupLockedRemain 查询入口锁定的剩余秒数（handler 快速 429 预检用；
 // 未锁定返回 (0, false)）。
+//
+// **两个维度取较长**（2026-11-06）：(IP, 码) 与按 IP 的枚举维度任一命中都该 429
+// ——只查前者会让 handler 预检漏掉"枚举已把该 IP 锁上"的情形（预检放行、
+// 域内闸门再拒，白跑一次业务查询）。
 func PickupLockedRemain(ctx context.Context, clientIP, code string) (int, bool) {
-	return middleware.GetDefaultLockout().CheckLocked(ctx, PickupLockKey(clientIP, code))
+	lock := middleware.GetDefaultLockout()
+	remain, locked := lock.CheckLocked(ctx, PickupLockKey(clientIP, code))
+	if enumRemain, enumLocked := PickupEnumLockedRemain(ctx, clientIP); enumLocked && enumRemain > remain {
+		return enumRemain, true
+	}
+	return remain, locked
 }
 
 // PickupState 取件目标分享的状态快照（域侧从 model.FileCode 映射；
@@ -103,11 +146,17 @@ func CheckPickup(ctx context.Context, st PickupState, req PickupCheck) PickupDec
 	case st.NotReady:
 		return PickupDecision{Verdict: PickupNotReady}
 	}
+	lock := middleware.GetDefaultLockout()
+	// 枚举维度先判（2026-11-06）：换码也逃不掉。位置刻意排在"是否需要密码"
+	// 之前——枚举者命中的往往是**无密码**分享，若把这道闸放在密码段里，
+	// 无密码分享的枚举会整条绕过去。
+	if enumRemain, enumLocked := PickupEnumLockedRemain(ctx, req.ClientIP); enumLocked {
+		return PickupDecision{Verdict: PickupLocked, LockRemain: enumRemain}
+	}
 	if !st.RequireAuth || req.AuthedByToken {
 		return PickupDecision{Verdict: PickupAllowed}
 	}
 
-	lock := middleware.GetDefaultLockout()
 	lockKey := PickupLockKey(req.ClientIP, req.Code)
 	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
 		return PickupDecision{Verdict: PickupLocked, LockRemain: remain}
@@ -126,5 +175,10 @@ func CheckPickup(ctx context.Context, st PickupState, req PickupCheck) PickupDec
 		return PickupDecision{Verdict: PickupPasswordWrong}
 	}
 	lock.Reset(ctx, lockKey)
+	// 成功也清枚举计数：走到了这里说明凭据是真的（不是猜出来的），
+	// 留着它只会让「事后正常取件」被历史误输连坐。
+	if req.ClientIP != "" {
+		lock.Reset(ctx, PickupEnumLockKey(req.ClientIP))
+	}
 	return PickupDecision{Verdict: PickupAllowed}
 }

@@ -185,13 +185,18 @@ type ShareCreateResp struct {
 // share 域适配器；避免 app 跨域 import）。
 type ShareServiceInterface interface {
 	CreateShare(ctx context.Context, req *ShareCreateReq) (*ShareCreateResp, error)
-	// FindShareByUploadID 按上传会话 ID 回读已建分享的**分享码**（上传完成面的
-	// **幂等键**：同一 upload_id 二次 Complete 必须复用同一个分享，而不是再建
-	// 一条 ⇒ 否则 owner 的「最多取 N 次」额度翻倍。2026-10-24 审计，
-	// core v0.32.6）。未命中返回 ("", nil)。
+	// FindShareByUploadIDOwnedBy 按上传会话 ID 回读**属于调用方**的已建分享的
+	// 分享码（上传完成面的**幂等键**：同一 upload_id 二次 Complete 必须复用
+	// 同一个分享，而不是再建一条 ⇒ 否则 owner 的「最多取 N 次」额度翻倍。
+	// 2026-10-24 审计，core v0.32.6）。
+	//
+	// ⚠️ 必须带属主判据（2026-11-06 P0）：upload_id 由客户端自报的 file_hash
+	// 派生 ⇒ 他人可算出 ⇒ 无限定的回读等于「谁猜到 upload_id 谁拿走别人的分享码」。
+	// 属主不符按未命中处理（返回 "", nil），调用方随后建自己的分享。
+	// ⇒ 原无限定的 FindShareByUploadID 已从本接口删除，避免调用点再次选错。
 	//
 	// 只回分享码（base URL 由消费侧自算）⇒ 窄接口保持窄。
-	FindShareByUploadID(ctx context.Context, uploadID string) (string, error)
+	FindShareByUploadIDOwnedBy(ctx context.Context, uploadID string, userID *uint, ownerIP string) (string, error)
 }
 
 // NewService 创建 service。rdb nil 归一化：typed-nil 接口会骗过
@@ -258,7 +263,13 @@ type InitMeta struct {
 	Scheme      string    `json:"scheme"`
 	ExpireAt    time.Time `json:"expire_at"`
 	Complete    bool      `json:"complete"`
+	// UserID/OwnerIP 会话属主（2026-11-06 起落库）。用途有二：
+	//   1. Complete 的幂等回读必须按属主限定（upload_id 可被他方算出/复用）；
+	//   2. 多文件绑定的 object_key 归属校验（否则可把他人对象绑成自己的分享）。
+	// 历史会话这两个字段为空 ⇒ 相关判据按「无属主记录」兼容放行（窗口受
+	// 会话 TTL 约束，≤1h）。
 	UserID      uint      `json:"user_id"`
+	OwnerIP     string    `json:"owner_ip,omitempty"`
 	ExpireValue int32     `json:"expire_value"`
 	ExpireStyle string    `json:"expire_style"`
 	RequireAuth bool      `json:"require_auth"`
@@ -494,7 +505,15 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 	//   · 本次把标记挪到建分享**之后** ⇒ 建分享失败 ⇒ 未标记 ⇒ 可重试；
 	//     已标记 ⇒ 分享必然已存在 ⇒ 回读复用（幂等）。
 	if meta.Complete {
-		existingCode, ferr := s.shareService.FindShareByUploadID(ctx, meta.UploadID)
+		// 属主限定（2026-11-06 P0）：upload_id 可由 file_hash 推导 ⇒ 无限定的
+		// 回读会把**他人**的分享码返回给当前调用方。meta 自带建会话时的身份
+		// （登录 user_id / 匿名 owner_ip），据此判定「是不是我自己建的那条」。
+		var ownerUserID *uint
+		if meta.UserID != 0 {
+			uid := meta.UserID
+			ownerUserID = &uid
+		}
+		existingCode, ferr := s.shareService.FindShareByUploadIDOwnedBy(ctx, meta.UploadID, ownerUserID, ownerIP)
 		if ferr == nil && existingCode != "" {
 			base := baseurl.Resolve(ctx, s.resolveBaseURL(ctx))
 			return &CompleteResult{

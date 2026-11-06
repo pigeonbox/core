@@ -62,7 +62,15 @@ func TestChunkUploadComplete_Idempotent(t *testing.T) {
 	g := newIdemEnv(t)
 
 	const uploadID = "IDEM-CHUNK-1"
-	// 已存在的分享（同一 upload_id）—— 模拟「第一次 complete 已建成」
+	// 已存在的分享（同一 upload_id）—— 模拟「第一次 complete 已建成」。
+	//
+	// ⚠️ OwnerIP 必须与调用方身份一致（2026-11-06 P0 修复的配套）：
+	// 幂等回读已改为**按属主限定**（FirstByUploadIDOwnedBy），属主不符一律视为
+	// 「没建过」⇒ 按首次流程建调用方自己的分享。
+	// ut.PerformRequest 的直连对端恒为 0.0.0.0（无真实连接）⇒ middleware.ClientIP
+	// 给出 "0.0.0.0"——本用例这个匿名调用方的身份就是它。真实分享行恒带解析后的
+	// IP（share/sharebytes.go 以 opts.OwnerIP 落库），这里补齐字段是为了让用例
+	// 反映**真实行形状**；断言目标（幂等复用同一个码、不新建第二条）一字未改。
 	require.NoError(t, g.Create(&model.FileCode{
 		Code:         "EXIST01",
 		Text:         "big.zip",
@@ -70,6 +78,7 @@ func TestChunkUploadComplete_Idempotent(t *testing.T) {
 		UUIDFileName: "big.zip",
 		Size:         30,
 		UploadID:     uploadID,
+		OwnerIP:      "0.0.0.0",
 	}).Error)
 	// 上传会话控制记录（chunk_index = -1 才是控制行，见 dao.GetByUploadID）
 	require.NoError(t, g.Create(&model.UploadChunk{

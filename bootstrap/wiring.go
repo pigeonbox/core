@@ -369,6 +369,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	previewHandler.SetService(previewSvcInstance)
 	customHandler.SetPreviewService(previewSvcInstance) // 缩略图取件面（GET /preview/:code/thumb）同实例
 	customHandler.SetMultiChunkService(chunkSvc)        // 多文件绑定 chunk 会话查询(此前每调自建掩盖漏注入)
+	customHandler.SetMultiPresignService(presignSvc)    // 多文件绑定 object_key 归属校验（2026-11-06：无此注入则无法判他人对象）
 
 	// 6.5 MCP server（AI 客户端集成）：统计/维护走全站唯一 admin 实例，
 	//     分享创建走 share service（复用配额/审核链路）、文件下载走全站存储实例、

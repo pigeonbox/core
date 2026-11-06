@@ -114,7 +114,9 @@ const limiterIdleTTL = 10 * time.Minute
 
 // RateLimiter 限流管理器
 type RateLimiter struct {
-	mu sync.Mutex
+	// mu 为读写锁：cfg 只由 UpdateConfig（写锁）整体替换，热路径只读快照
+	// ⇒ 读侧用 RLock 才能既无竞态又不让限流串行化。
+	mu sync.RWMutex
 	// limiters 各 scope 的 per-IP 桶托管（oekit KeyedLimiter：TTL 自动清死桶，
 	// 替代旧手搓双层 map + lastAccess 追踪 + GC 协程）
 	limiters map[scope]*ratelimit.KeyedLimiter
@@ -210,6 +212,27 @@ func (rl *RateLimiter) gc() {
 	}
 }
 
+// snapshotCfg 取配置快照。**cfg 的一切读取都必须经此**，不得直接读 rl.cfg。
+//
+// 2026-11-06 修数据竞态：cfg 在 UpdateConfig 里持锁写，而 allow / addBlock /
+// allowRedis 此前**无锁读** ⇒ 与配置热更并发时是 data race（-race 可复现），
+// 且可能读到「cfg 已是新值、limiters 还是旧桶」的撕裂态（新 qps 配旧桶 ⇒
+// 限流值短暂不符，排查时极难归因）。改快照后写入仍是整体替换，语义不变。
+func (rl *RateLimiter) snapshotCfg() RateLimitConfig {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	return rl.cfg
+}
+
+// snapshotRedis 取 Redis 句柄快照（SetRedis 持写锁替换 ⇒ 读侧必须经此）。
+// 与 cfg 同一竞态面：「rl.rdb 判空 + 使用」这种写法在装配期 SetRedis 与
+// 流量并发时同样是 data race。
+func (rl *RateLimiter) snapshotRedis() *redisCmds {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	return rl.rdb
+}
+
 // getLimiter 获取（或由 KeyedLimiter 惰性创建）某 IP 在某 scope 下的桶
 func (rl *RateLimiter) getLimiter(s scope, ip string) ratelimit.Limiter {
 	rl.mu.Lock()
@@ -227,8 +250,8 @@ func blockKey(s scope, ip string) string { return string(s) + "|" + ip }
 // isBlocked 检查（内存 + Redis 双层）
 func (rl *RateLimiter) isBlocked(ctx context.Context, s scope, ip string) bool {
 	key := blockKey(s, ip)
-	if rl.rdb != nil {
-		if n, err := rl.rdb.Exists(ctx, "pb:rl:block:"+key).Result(); err == nil && n > 0 {
+	if rdb := rl.snapshotRedis(); rdb != nil {
+		if n, err := rdb.Exists(ctx, "pb:rl:block:"+key).Result(); err == nil && n > 0 {
 			return true
 		}
 	}
@@ -240,7 +263,7 @@ func (rl *RateLimiter) isBlocked(ctx context.Context, s scope, ip string) bool {
 
 // addBlock 写入封禁（内存 + Redis，取两者较长）
 func (rl *RateLimiter) addBlock(ctx context.Context, s scope, ip string) {
-	secs := rl.cfg.BlockSeconds
+	secs := rl.snapshotCfg().BlockSeconds
 	if secs <= 0 {
 		return
 	}
@@ -250,14 +273,14 @@ func (rl *RateLimiter) addBlock(ctx context.Context, s scope, ip string) {
 	rl.blocked[key] = until
 	rl.blockedTotal++
 	rl.mu.Unlock()
-	if rl.rdb != nil {
-		rl.rdb.Set(ctx, "pb:rl:block:"+key, "1", time.Duration(secs)*time.Second)
+	if rdb := rl.snapshotRedis(); rdb != nil {
+		rdb.Set(ctx, "pb:rl:block:"+key, "1", time.Duration(secs)*time.Second)
 	}
 }
 
 // allowRedis Redis 固定窗口计数（1s 窗口，INCR + 首次 EXPIRE）
-func (rl *RateLimiter) allowRedis(ctx context.Context, s scope, ip string) bool {
-	qps := s.qpsOf(rl.cfg)
+func (rl *RateLimiter) allowRedis(ctx context.Context, rdb *redisCmds, s scope, ip string) bool {
+	qps := s.qpsOf(rl.snapshotCfg())
 	if qps <= 0 {
 		qps = 1
 	}
@@ -265,7 +288,7 @@ func (rl *RateLimiter) allowRedis(ctx context.Context, s scope, ip string) bool 
 	// 计数 + 首次命中才设 TTL：**原子**（收编到 oekit/redisx 的
 	// Counter.IncrWithTTL）——此前是手写两步 Incr + if n==1 { Expire }，
 	// 两步之间失败 ⇒ 计数键永不过期 ⇒ 该 IP 永久被限。
-	n, err := rl.rdb.IncrWithTTL(ctx, key, 1, 2*time.Second)
+	n, err := rdb.IncrWithTTL(ctx, key, 1, 2*time.Second)
 	if err != nil {
 		// Redis 故障：回退进程内 bucket
 		limiter := rl.getLimiter(s, ip)
@@ -276,15 +299,16 @@ func (rl *RateLimiter) allowRedis(ctx context.Context, s scope, ip string) bool 
 
 // allow 检查 IP 在某 scope 下是否被允许
 func (rl *RateLimiter) allow(ctx context.Context, s scope, ip string) bool {
-	if !rl.cfg.Enabled {
+	cfg := rl.snapshotCfg()
+	if !cfg.Enabled {
 		return true
 	}
 	if rl.isBlocked(ctx, s, ip) {
 		return false
 	}
 	var ok bool
-	if rl.cfg.UseRedis && rl.rdb != nil {
-		ok = rl.allowRedis(ctx, s, ip)
+	if rdb := rl.snapshotRedis(); cfg.UseRedis && rdb != nil {
+		ok = rl.allowRedis(ctx, rdb, s, ip)
 	} else {
 		limiter := rl.getLimiter(s, ip)
 		ok = limiter == nil || limiter.Allow()
@@ -297,15 +321,16 @@ func (rl *RateLimiter) allow(ctx context.Context, s scope, ip string) bool {
 
 // SnapshotConfig 返回当前配置副本（并发安全，admin 接口用）
 func (rl *RateLimiter) SnapshotConfig() RateLimitConfig {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
 	return rl.cfg
 }
 
 // ProbeAllow 独立探测（不落内存 limiter 状态，admin /test 实测用）。
 // probeIP 以 "_test" 后缀隔离，避免污染真实客户端的限流计数。
 func (rl *RateLimiter) ProbeAllow(ctx context.Context, s scope, probeIP string) bool {
-	if !rl.cfg.Enabled {
+	cfg := rl.snapshotCfg()
+	if !cfg.Enabled {
 		return true
 	}
 	// 复用 allow 的判定路径，但封禁/计数写入都带 _test 键
@@ -313,8 +338,8 @@ func (rl *RateLimiter) ProbeAllow(ctx context.Context, s scope, probeIP string) 
 		return false
 	}
 	var ok bool
-	if rl.cfg.UseRedis && rl.rdb != nil {
-		ok = rl.allowRedis(ctx, s, probeIP)
+	if rdb := rl.snapshotRedis(); cfg.UseRedis && rdb != nil {
+		ok = rl.allowRedis(ctx, rdb, s, probeIP)
 	} else {
 		limiter := rl.getLimiter(s, probeIP)
 		ok = limiter == nil || limiter.Allow()
@@ -361,7 +386,8 @@ func backendName(useRedis bool, hasRDB bool) string {
 //   - scope: 限流维度（global / upload / download / login）
 func (rl *RateLimiter) Middleware(s scope) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
-		if !rl.cfg.Enabled {
+		// 快照读（2026-11-06）：热路径不直接读 rl.cfg，见 snapshotCfg。
+		if !rl.snapshotCfg().Enabled {
 			ctx.Next(c)
 			return
 		}

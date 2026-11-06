@@ -600,15 +600,25 @@ func expectedChunkHash(c *app.RequestContext) string {
 	return strings.ToLower(string(c.FormValue("hash")))
 }
 
-// ownedByCaller 归属校验（身份从 c.Get 提取，与本组中间件注入路径一致）
-func ownedByCaller(info *model.UploadChunk, c *app.RequestContext) bool {
+// callerIdentity 提取调用方身份（登录用户 ID + 可信代理解析后的 IP）。
+//
+// 归属校验（ownedByCaller）与完成面的**幂等回读**必须走同一个口径——两处判据
+// 一旦分叉，就会出现「校验按 A 的规则通过、回读按 B 的规则取行」的越权面
+// （2026-11-06 P0 正是这种形态：校验认了复活后的新属主，回读却不看属主）。
+func callerIdentity(c *app.RequestContext) (*uint, string) {
 	var callerUserID *uint
 	if uid, exists := c.Get("user_id"); exists {
 		if uidUint, ok := uid.(uint); ok {
 			callerUserID = &uidUint
 		}
 	}
-	return chunkService.OwnedByCaller(info, middleware.ClientIP(c), string(c.GetHeader("X-Upload-Token")), callerUserID)
+	return callerUserID, middleware.ClientIP(c)
+}
+
+// ownedByCaller 归属校验（身份从 c.Get 提取，与本组中间件注入路径一致）
+func ownedByCaller(info *model.UploadChunk, c *app.RequestContext) bool {
+	callerUserID, callerIP := callerIdentity(c)
+	return chunkService.OwnedByCaller(info, callerIP, string(c.GetHeader("X-Upload-Token")), callerUserID)
 }
 
 // validUploadID 上传ID字符白名单：合法来源仅 UUID 与 MD5/SHA-256 十六进制
@@ -688,7 +698,13 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	// 真机实测：13 条带 upload_id 的分享里已有 **1 组重复** ⇒ 已在生产数据发生。
 	//
 	// 位置在**合并之前**：重试不该再把分片合并一遍（浪费 IO + 多一份物理文件）。
-	if existing, ferr := getShareService().FindShareByUploadID(ctx, uploadID); ferr == nil && existing != nil {
+	// ⚠️ 属主限定（2026-11-06 P0）：upload_id 由客户端自报的 file_hash 派生
+	// ⇒ 他人可算出；而上面的 init 复活路径会把会话属主改写成**当前调用方**
+	// ⇒ 归属校验通过。此时若按 upload_id 无限定回读，就会把**受害者**的分享码
+	// 交给调用方（连同其取件额度/备注）。⇒ 回读必须带属主判据：命中的是
+	// 「我自己建过的那条」才幂等复用，否则按首次流程建调用方自己的分享。
+	callerUserID, callerIP := callerIdentity(c)
+	if existing, ferr := getShareService().FindShareByUploadIDOwnedBy(ctx, uploadID, callerUserID, callerIP); ferr == nil && existing != nil {
 		// 会话状态可能没同步（上次 ShareFile 成功但 CompleteUpload 失败）⇒ 补标记
 		_ = getChunkService().CompleteUpload(ctx, uploadID)
 		c.JSON(consts.StatusOK, &chunkmodel.ChunkUploadCompleteResp{

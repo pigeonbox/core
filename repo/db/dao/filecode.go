@@ -71,6 +71,46 @@ func (r *FileCodeRepository) FirstByUploadID(ctx context.Context, uploadID strin
 	return &fileCode, nil
 }
 
+// FirstByUploadIDOwnedBy 按上传会话 ID 回读**属于该调用方**的已建分享
+// （上传完成面的幂等回读，2026-11-06 P0 修复）。
+//
+// 背景（P0，一句话）：upload_id 是**客户端自报的可推导值**——分片通道
+// `uploadID := req.FileHash`（gen/handler/chunk），直传通道同理 ⇒ **任何拿着
+// 同一份文件的人都能算出他人的 upload_id**。而 init 对「已完成会话」的复活
+// 路径会把 owner_ip / user_id 改写成**新调用方**（这是 2026-10-30 修复
+// 「同一文件 7 天内无法重传」的刻意设计，见 app/chunk/session_completed_conflict_test.go）
+// ⇒ 随后的归属校验 ownedByCaller 会**通过** ⇒ 若幂等回读仍用无限定的
+// FirstByUploadID ⇒ **把受害者的分享码交给攻击者**（连带其取件额度与备注）。
+//
+// ⇒ 回读必须自带属主判据：
+//   - 登录身份：`user_id = ?`；
+//   - 匿名身份：`user_id IS NULL AND owner_ip = ?`；空 IP 不参与匹配——
+//     否则两个都取不到 IP 的调用方会互相命中（把修复重新打穿）。
+//
+// 属主不符 ⇒ 返回 gorm.ErrRecordNotFound（视为「没建过」）⇒ 调用方按首次
+// 流程建**自己**的分享。代价：匿名用户**跨网络**重试会建出第二条分享（旧行为
+// 是复用它人的）。这是安全与幂等之间必须换的一侧：宁可多一条自己的行，
+// 不可把别人的行交出去。
+func (r *FileCodeRepository) FirstByUploadIDOwnedBy(ctx context.Context, uploadID string, userID *uint, ownerIP string) (*model.FileCode, error) {
+	if uploadID == "" {
+		return nil, gorm.ErrRecordNotFound
+	}
+	q := r.db().WithContext(ctx).Where("upload_id = ? AND deleted_at IS NULL", uploadID)
+	if userID != nil {
+		q = q.Where("user_id = ?", *userID)
+	} else {
+		if ownerIP == "" {
+			return nil, gorm.ErrRecordNotFound
+		}
+		q = q.Where("user_id IS NULL AND owner_ip = ?", ownerIP)
+	}
+	var fileCode model.FileCode
+	if err := q.Order("id ASC").First(&fileCode).Error; err != nil {
+		return nil, err
+	}
+	return &fileCode, nil
+}
+
 // GetByCodeFolded 大小写折叠检索（UPPER 归一；码表全 ASCII，sqlite/mysql/pg 通吃）。
 // 调用方必须先精确 GetByCode 未命中再兜底本方法，热路径不恒走函数查询；
 // 多行同码不同大小写时按 id 升序取最早一条，保证结果确定性。

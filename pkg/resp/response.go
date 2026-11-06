@@ -85,19 +85,14 @@ func SuccessWithMessage(c *app.RequestContext, message string, data interface{})
 	})
 }
 
-// Error 旧版 errors 码的错误响应（兼容老调用方）
-func Error(c *app.RequestContext, code int) {
-	httpStatus := consts.StatusOK
-	if code == errors.CodeUnauthorized {
-		httpStatus = consts.StatusUnauthorized
-	}
-	c.JSON(httpStatus, Response{
-		Code:    code,
-		Message: errors.GetMessage(code),
-		TraceID: getOrGenTraceID(c),
-	})
-}
-
+// 2026-11-06 清理：Error / ErrorWithData / BadRequest / Unauthorized /
+// NotFound 五个旧 envelope 帮手在全仓（含测试）**零调用**，已删除。
+// 实际错误出口只剩三条：NewErrorWithMessage（业务码+文案）/
+// NewErrorByCode（业务码，文案查表）/ NewTypedError（typed error 透传）。
+//
+// 为什么值得删：这些帮手不带 httpStatusForCode 映射，一律 200 或
+// "仅 Unauthorized 特殊对待"——与新口径（业务码→HTTP 状态统一映射）并存时，
+// 新代码随手挑到它们就会产出「HTTP 200 里塞错误码」的老形状。
 func ErrorWithMessage(c *app.RequestContext, code int, message string) {
 	httpStatus := consts.StatusOK
 	if code == errors.CodeUnauthorized {
@@ -106,19 +101,6 @@ func ErrorWithMessage(c *app.RequestContext, code int, message string) {
 	c.JSON(httpStatus, Response{
 		Code:    code,
 		Message: message,
-		TraceID: getOrGenTraceID(c),
-	})
-}
-
-func ErrorWithData(c *app.RequestContext, code int, message string, data interface{}) {
-	httpStatus := consts.StatusOK
-	if code == errors.CodeUnauthorized {
-		httpStatus = consts.StatusUnauthorized
-	}
-	c.JSON(httpStatus, Response{
-		Code:    code,
-		Message: message,
-		Data:    data,
 		TraceID: getOrGenTraceID(c),
 	})
 }
@@ -186,8 +168,12 @@ func httpStatusForCode(code int) int {
 	case code == errcode.CodeShareBlocked, code == errcode.CodeSharePendingReview,
 		code == errcode.CodeUploadDisabled, code == errcode.CodeIPBlocked:
 		return consts.StatusForbidden
-	case code == errcode.CodeContentRejected:
-		return consts.StatusBadRequest
+	// ⚠️ 本 case 已删除（2026-11-06 修重复分支）：同一 switch 里
+	// CodeContentRejected 出现过两次，此处（400）在下方 403 之前 ⇒ 下方
+	// **永远不可能命中**（Go 按顺序匹配，重复 case 合法但不报错）。
+	// 内容审核拒绝语义上是「禁止分享」（与 CodeShareBlocked 同类），统一保留
+	// 下方 403 分支；否则「内容违规」会被报成 400 参数错误，前端与运维都会
+	// 按「传参有问题」去排查。
 	case code == errcode.CodeDownloadToken, code == errcode.CodeSharePasswordWrong, code == errcode.CodePasswordWrong:
 		return consts.StatusUnauthorized
 	case code == errcode.CodeMethodNotAllowed:
@@ -281,27 +267,6 @@ func Page(c *app.RequestContext, list interface{}, total int64, page, pageSize i
 		Page:     page,
 		PageSize: pageSize,
 	})
-}
-
-func BadRequest(c *app.RequestContext, message string) {
-	if message == "" {
-		message = errors.GetMessage(errors.CodeBadRequest)
-	}
-	ErrorWithMessage(c, errors.CodeBadRequest, message)
-}
-
-func Unauthorized(c *app.RequestContext, message string) {
-	if message == "" {
-		message = errors.GetMessage(errors.CodeUnauthorized)
-	}
-	ErrorWithMessage(c, errors.CodeUnauthorized, message)
-}
-
-func NotFound(c *app.RequestContext, message string) {
-	if message == "" {
-		message = errors.GetMessage(errors.CodeNotFound)
-	}
-	ErrorWithMessage(c, errors.CodeNotFound, message)
 }
 
 func InternalError(c *app.RequestContext, message string) {

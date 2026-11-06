@@ -520,6 +520,10 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 			resp.NewTypedError(c, blocked)
 			return
 		}
+		// 枚举防护记账（2026-11-06）：码解析不出来到不了闸门，在此按 IP 记一次
+		// ——**换码也会累计**（见 gate.PickupEnumScope），否则本入口的枚举探测
+		// 完全没有成本上限（限流桶只限 QPS，不限总次数）。
+		gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
 		c.JSON(consts.StatusNotFound, map[string]interface{}{
 			"code":    errcode.CodeNotFound,
 			"message": "分享不存在或已过期",
@@ -531,7 +535,8 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	// 匿名取件/preview 面共享 (IP, code) 失败计数）
 	lock := middleware.GetDefaultLockout()
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
-	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
+	// 预检并入按 IP 的枚举维度（见 pkg/gate.PickupLockedRemain）
+	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), fileCode.Code); locked {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
 			"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain),
@@ -758,7 +763,8 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 	// preview 面共享 (IP, code) 失败计数——此前独立 scope "download"）
 	lock := middleware.GetDefaultLockout()
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
-	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
+	// 预检并入按 IP 的枚举维度（见 pkg/gate.PickupLockedRemain）
+	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), fileCode.Code); locked {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
 			"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain),
