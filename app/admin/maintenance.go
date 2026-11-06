@@ -66,15 +66,13 @@ func (s *Service) CleanExpiredFiles(ctx context.Context) (int64, int64, error) {
 		// 多文件分享子文件一并清理（P0 多文件；失败不阻断 DB 删除）；
 		// 秒传共享对象保护（2026-10-12）：删前查引用，被其他分享共享时保留物理文件
 		if s.storage != nil {
-			if children, cerr := childRepo.ListByFileCodeID(ctx, file.ID); cerr == nil {
+			// Unscoped（含软删行）：物理对象要清全；子行 DB 软删由 dao 级联（同生共死）
+			if children, cerr := childRepo.ListByFileCodeIDIncludingDeleted(ctx, file.ID); cerr == nil {
 				for _, c := range children {
 					if c.FilePath == "" {
 						continue
 					}
 					s.deletePhysicalIfUnreferenced(ctx, c.FilePath, file.ID)
-				}
-				if len(children) > 0 {
-					_ = childRepo.SoftDeleteByFileCodeIDs(ctx, []uint{file.ID})
 				}
 			}
 		}

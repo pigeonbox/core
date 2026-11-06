@@ -136,17 +136,38 @@ func (r *FileCodeRepository) GetUserSharesWithFilter(ctx context.Context, userID
 
 // BatchSoftDeleteByCodes 按 code 列表软删除（限定 userID 防止越权）
 // 返回 (受影响行数, error)
+//
+// 同事务连带软删子行（「同生共死」，见 softDeleteChildRows）：用户面回收站入口
+// 此前只软删主表 ⇒ 「软删」状态在用户路径与管理端路径下子行状态不一致。
+// 级联的 id 集合按 user_id + code + 存活态圈定 ⇒ 越权与已软删行不会被波及。
 func (r *FileCodeRepository) BatchSoftDeleteByCodes(ctx context.Context, userID uint, codes []string) (int, error) {
 	if len(codes) == 0 {
 		return 0, nil
 	}
-	res := r.db().WithContext(ctx).Model(&model.FileCode{}).
-		Where("user_id = ? AND code IN ?", userID, codes).
-		Update("deleted_at", time.Now())
-	if res.Error != nil {
-		return 0, res.Error
+	var affected int64
+	err := r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var ids []uint
+		if err := tx.Model(&model.FileCode{}).
+			Where("user_id = ? AND code IN ?", userID, codes).
+			Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if err := softDeleteChildRows(tx, ids); err != nil {
+			return err
+		}
+		res := tx.Model(&model.FileCode{}).
+			Where("user_id = ? AND code IN ?", userID, codes).
+			Update("deleted_at", time.Now())
+		if res.Error != nil {
+			return res.Error
+		}
+		affected = res.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return int(res.RowsAffected), nil
+	return int(affected), nil
 }
 
 // BatchExtendByCodes 批量延期

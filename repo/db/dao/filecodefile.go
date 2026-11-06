@@ -40,6 +40,18 @@ func (r *FileCodeFileRepository) ListByFileCodeID(ctx context.Context, fileCodeI
 	return files, err
 }
 
+// ListByFileCodeIDIncludingDeleted 按 FileCodeID 列出子文件（含软删行）。
+// **删除/清理流专用**（purge/物理回收要处理软删子行的对象）；取件/展示面
+// 一律用 ListByFileCodeID（默认作用域），否则回收站里的文件会漏出来。
+func (r *FileCodeFileRepository) ListByFileCodeIDIncludingDeleted(ctx context.Context, fileCodeID uint) ([]*model.FileCodeFile, error) {
+	var files []*model.FileCodeFile
+	err := r.db().WithContext(ctx).Unscoped().
+		Where("file_code_id = ?", fileCodeID).
+		Order("sort_order ASC, id ASC").
+		Find(&files).Error
+	return files, err
+}
+
 // GetByID 取单个子文件行。
 func (r *FileCodeFileRepository) GetByID(ctx context.Context, id uint) (*model.FileCodeFile, error) {
 	var f model.FileCodeFile

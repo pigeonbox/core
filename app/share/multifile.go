@@ -238,15 +238,19 @@ func (s *Service) GetShareChild(ctx context.Context, code string, fileID uint) (
 	return fc, child, nil
 }
 
-// deletePhysicalChildren 删除分享的全部子文件（物理 + 软删子行）。
+// deletePhysicalChildren 删除分享的全部子文件（物理对象）。
 // 物理删除失败记日志不阻断（与既有删除语义一致，孤儿由 janitor 对账）。
+//
+// 子行列举用 **Unscoped**（含软删行）：调用方（DeleteFileByCode）先经
+// DeleteByIDTx 软删父行+子行（同生共死，dao 级联）⇒ 默认作用域会漏掉子行
+// ⇒ 其物理对象成孤儿（远端后端永久残留）。子行的 DB 软删由 dao 级联负责。
 func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
-	children, err := s.fileFileRepo.ListByFileCodeID(ctx, fileCodeID)
-	if err != nil {
-		logger.CtxWarn(ctx, "list children for delete failed", "file_code_id", fileCodeID, "err", err)
+	if s.storage == nil {
 		return
 	}
-	if s.storage == nil {
+	children, err := s.fileFileRepo.ListByFileCodeIDIncludingDeleted(ctx, fileCodeID)
+	if err != nil {
+		logger.CtxWarn(ctx, "list children for delete failed", "file_code_id", fileCodeID, "err", err)
 		return
 	}
 	for _, c := range children {
@@ -255,9 +259,6 @@ func (s *Service) deletePhysicalChildren(ctx context.Context, fileCodeID uint) {
 		}
 		// 秒传共享对象保护（2026-10-12）：删前查引用，多分享共享同一物理文件时保留
 		s.deletePhysicalIfUnreferenced(ctx, c.FilePath, fileCodeID)
-	}
-	if err := s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{fileCodeID}); err != nil {
-		logger.CtxWarn(ctx, "soft delete child rows failed", "file_code_id", fileCodeID, "err", err)
 	}
 }
 

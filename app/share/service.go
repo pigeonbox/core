@@ -610,8 +610,7 @@ func (s *Service) applyPending(ctx context.Context, id uint, code, reason, owner
 		target = model.StatusBlocked
 		if _, berr := s.SetShareStatus(ctx, []uint{id}, target); berr != nil {
 			logger.CtxError(ctx, "pending fallback blocked failed, removing share", "code", code, "err", berr)
-			_ = s.fileFileRepo.SoftDeleteByFileCodeIDs(ctx, []uint{id}) // 文本分享无子行，no-op
-			_ = s.fileCodeRepo.Delete(ctx, id)
+			_ = s.fileCodeRepo.Delete(ctx, id) // 软删父行；子行由 dao 同事务级联（同生共死）
 			return "", &ContentRejectedError{}
 		}
 	}
