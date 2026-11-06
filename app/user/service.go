@@ -14,6 +14,7 @@ import (
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
+	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -450,11 +451,23 @@ func (s *Service) GetStats(ctx context.Context, userID uint) (*model.UserStats, 
 		fileCount = 0
 	}
 
+	// 存储占用用 file_codes 实时聚合，与 CheckQuota 同源（app/user/service.go
+	// CheckQuota 一直用 GetTotalSizeByUserID）。users.total_storage 是只增不减的
+	// 漂移计数器 ⇒ 用户页显示的「已用空间」与配额判定会互相矛盾。
+	totalStorage := user.TotalStorage
+	if v, aggErr := s.fileCodeRepo.GetTotalSizeByUserID(ctx, userID); aggErr == nil {
+		totalStorage = v
+	} else {
+		// 聚合失败不阻塞统计（保留计数器值），但要留痕：静默回退会让漂移重新隐身
+		logger.CtxWarn(ctx, "aggregate user storage failed, keep counter value",
+			"user_id", userID, "err", aggErr)
+	}
+
 	return &model.UserStats{
 		UserID:         user.ID,
 		TotalUploads:   user.TotalUploads,
 		TotalDownloads: user.TotalDownloads,
-		TotalStorage:   user.TotalStorage,
+		TotalStorage:   totalStorage,
 		FileCount:      int(fileCount),
 	}, nil
 }

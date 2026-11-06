@@ -25,6 +25,36 @@ func (r *FileCodeRepository) GetTotalSizeByUserID(ctx context.Context, userID ui
 	return totalSize, err
 }
 
+// GetTotalSizesByUserIDs 批量取多个用户的**实时**存储占用（字节）。
+//
+// 与 GetTotalSizeByUserID 同口径（Model 查询自动带 deleted_at IS NULL ⇒ 软删
+// 分享不计入），只是把「一次一用户」合成一次 GROUP BY：管理台用户列表每页
+// 都要这里的数字，逐个查会变成 N+1。
+//
+// 返回值只含**有分享记录**的用户；调用方按 missing=0 处理（没分享=占 0 字节）。
+func (r *FileCodeRepository) GetTotalSizesByUserIDs(ctx context.Context, userIDs []uint) (map[uint]int64, error) {
+	sizes := make(map[uint]int64, len(userIDs))
+	if len(userIDs) == 0 {
+		return sizes, nil
+	}
+	var rows []struct {
+		UserID uint
+		Total  int64
+	}
+	err := r.db().WithContext(ctx).Model(&model.FileCode{}).
+		Select("user_id, COALESCE(SUM(size), 0) AS total").
+		Where("user_id IN ?", userIDs).
+		Group("user_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		sizes[row.UserID] = row.Total
+	}
+	return sizes, nil
+}
+
 func (r *FileCodeRepository) GetByUserID(ctx context.Context, userID uint, fileID uint) (*model.FileCode, error) {
 	var fileCode model.FileCode
 	err := r.db().WithContext(ctx).Where("id = ? AND user_id = ?", fileID, userID).First(&fileCode).Error

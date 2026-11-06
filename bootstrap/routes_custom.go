@@ -20,6 +20,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	mcpApp "github.com/pigeonbox/core/app/mcp"
 	oidcApp "github.com/pigeonbox/core/app/oidc"
+	"github.com/pigeonbox/core/conf"
 	presignHandler "github.com/pigeonbox/core/gen/handler/presign"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -34,6 +35,9 @@ import (
 // 根目录 router.go（死代码）中的逻辑正式接线，使单二进制 / Docker 部署
 // 即可打开前端页面并使用全部功能。
 func customizedRegister(r *server.Hertz) {
+	// 生效配置 = 包级 config。⚠️ 它必须由 Bootstrap 在**全部 overlay 之后**
+	// 重新指向生效快照（见 BootstrapWithOptions 第 5.x 步）：注册期门控
+	// （ui.expose_openapi / ui.robots_text / mcp.enabled / 部署面）读的就是它。
 	// ===== OpenAPI 文档（Swagger UI）=====
 	// ui.expose_openapi=false 时不注册（404）：端点全清单对攻击者是现成的
 	// 侦察地图；前端 /api-docs 页是唯一消费方，生产不需要时可整体关闭。
@@ -62,7 +66,12 @@ func customizedRegister(r *server.Hertz) {
 	// ===== robots.txt（对标上游 SEO 可配；输出 ui.robots_text）=====（公开面）
 	if config.ServesPublicPlane() {
 		r.GET("/robots.txt", func(ctx context.Context, c *app.RequestContext) {
+			// 运行期生效值（管理台 ui.robots_text 改了立刻生效）：全局快照含
+			// DB overlay；快照缺席（单测裸装）时回退启动期包级 config。
 			content := config.UI.RobotsText
+			if cur := conf.Snapshot(); cur != nil {
+				content = cur.UI.RobotsText
+			}
 			if content == "" {
 				content = "User-agent: *\nDisallow: /\n"
 			}

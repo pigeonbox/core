@@ -329,6 +329,22 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 		c.Next(ctx)
 	})
 
+	// 5.x 让包级 config 指向**生效快照**（yaml < DB < env 的最终结果）。
+	//
+	// 第 0 步 RestoreAdminSettings / restoreRuntimeStorage / ReapplyEnvOverrides
+	// 全部走 conf.UpdateGlobalConfig 的 **copy-on-write 换指针**（2026-10-31 起）⇒
+	// 换完之后包级 config 仍是第 1 步 initConfig 的**原始 yaml 对象**。而注册期
+	// 门控读的就是它：ui.expose_openapi（/openapi.json 注不注册）、ui.robots_text、
+	// mcp.enabled、federation.enabled、部署面判定。⇒ 管理台关掉 API 文档后
+	// **重启也不生效**（线上 4.9.0 实录：持久化 expose_openapi=false，/openapi.json
+	// 仍 200）。
+	// 注意 Config 是 conf.AppConfiguration 的**类型别名** ⇒ 这里只是重新指向，
+	// 不复制、不产生两套真相；后续热更新仍由 COW 换新快照（本指针保持启动视图，
+	// 运行期该读实时值的地方读 conf.Snapshot()/配置中心）。
+	if applied := conf.Snapshot(); applied != nil {
+		config = applied
+	}
+
 	// 6. 注册路由（按部署模式选组，见 deployment.go；IDL 生成链 scripts/gen-router.sh）
 	registerGeneratedRoutes(h)
 
