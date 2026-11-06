@@ -170,6 +170,16 @@ func customizedRegister(r *server.Hertz) {
 	// public 副本不注册（ServesAdminPlane 门控 + public 的 /admin/* 门卫双保险）。
 	if config.ServesAdminPlane() {
 		r.GET("/admin/diagnostics", middleware.AdminOrAdminKey(), diagnosticsHandler)
+
+		// ===== 定时自动备份（5.1.0；管理面）=====
+		// 列表 + 状态、下载单个包、立即备份。
+		//
+		// 下载必须**经这里**而不是让前端直连文件系统：备份包含整库快照与全部
+		// 对象（可能几十 GB），把它挂成静态目录等于把「全站数据副本」暴露在
+		// 无鉴权路径上。这里走 AdminOrAdminKey 门禁，名字再过一遍白名单。
+		r.GET("/admin/backups", middleware.AdminOrAdminKey(), listBackupsHandler)
+		r.GET("/admin/backups/:name", middleware.AdminOrAdminKey(), downloadBackupHandler)
+		r.POST("/admin/backups/run", middleware.AdminOrAdminKey(), runBackupHandler)
 	}
 
 	// ===== 前端构建产物静态资源 =====

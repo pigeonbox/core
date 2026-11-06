@@ -59,6 +59,7 @@ type AppConfiguration struct {
 	Federation    FederationConfig    `mapstructure:"federation"`
 	Deployment    DeploymentConfig    `mapstructure:"deployment"`
 	Update        UpdateConfig        `mapstructure:"update"`
+	Backup        BackupConfig        `mapstructure:"backup"`
 }
 
 // 部署模式取值（deployment.mode / env PB_DEPLOY_MODE）。
@@ -801,6 +802,51 @@ type UpdateConfig struct {
 	// 允许自建镜像（企业内网），但**必须 https**（localhost 例外）。
 	// env: PB_UPDATE_ENDPOINT
 	Endpoint string `mapstructure:"endpoint"`
+}
+
+// BackupConfig 定时自动备份（2026-11-06，5.1.0）。
+//
+// # 为什么要有
+//
+// 规划稿的主线判断是「功能面已不是瓶颈，版本到达率是」。备份同理：
+// `pigeonbox backup export` 早就存在，但它要求**人**记住一条命令、挑一个停机
+// 窗口、自己管保留份数 ⇒ 实际结果是「装了备份能力，却从来没跑过」，
+// 灾备的价值等于零。
+//
+// ⇒ 把「备份」从一次运维动作，变成**默认可以一直开着**的定时任务：按天导出、
+// 自动保留最近 N 份、失败告警但绝不删旧包。
+//
+// # 为什么默认关闭
+//
+// 它**写盘**（一个实例的完整对象副本，可能是几十 GB），且写在哪由部署形态决定
+// （NAS 的卷、容器的可写层、K8s 的 emptyDir 语义完全不同）。默认开一个新的
+// 大写入源，会让「升级到 5.1.0」变成一次风险动作 ⇒ 默认 false，文档里明确
+// 建议开，并在管理台把「当前未启用」写清楚。
+//
+// # 与离线子命令的关系
+//
+// 同一套 app/backup 代码（同一个包格式、同一份 manifest 语义）⇒ 定时产出的
+// 包与手工导出的包**可以互相恢复**，不存在「自动备份的包只有自动流程认」。
+type BackupConfig struct {
+	// Enabled 是否启用定时自动备份。默认 false。env: PB_BACKUP_ENABLED
+	Enabled bool `mapstructure:"enabled"`
+	// Dir 备份包落盘目录。留空 ⇒ `<app.datapath>/backups`（**绝对路径**，
+	// 不按进程 CWD 解析——同 preview 缓存教训：NAS/容器/systemd 的 CWD 都
+	// 不指向数据目录，相对路径必然 EACCES）。env: PB_BACKUP_DIR
+	Dir string `mapstructure:"dir"`
+	// Keep 保留最近多少份（按文件名里的时间戳倒序）。`0 或负数 = 不限`。
+	// 默认 7。env: PB_BACKUP_KEEP
+	//
+	// ⚠️ 语义是「成功备份之后才清理」，且**绝不因为磁盘不足而删旧包**：
+	// 旧包是唯一的退路，用退路换空间等于把灾备变成事故放大器。
+	Keep int `mapstructure:"keep"`
+	// At 每天的备份时刻（本地时区，`HH:MM`）。默认 03:00。env: PB_BACKUP_AT
+	//
+	// 用「目标时刻已过 + 当天还没有包」判定到期，而不是「每隔 24h 跑一次」：
+	// 后者在实例重启后会漂移（每次都从头计时）⇒ 一台每天凌晨重启的机器
+	// **永远不会备份**。前者靠文件名里的日期自证幂等，重启/补跑都收敛到
+	// 「一天一份」。
+	At string `mapstructure:"at"`
 }
 
 // MetricsConfig Prometheus 指标配置
