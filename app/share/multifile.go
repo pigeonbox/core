@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pigeonbox/core/app/moderation"
@@ -43,6 +44,8 @@ type ShareFileItem struct {
 	Name     string `json:"name"`
 	Size     int64  `json:"size"`
 	FileHash string `json:"file_hash"`
+	// RelDir 分享内相对目录（空 = 根；5.3.0 目录上传）。取件页按它建目录树。
+	RelDir string `json:"rel_dir"`
 }
 
 // maxMultiFiles 单个分享的文件数上限（防滥用；upload.max_files_per_share 可调）
@@ -75,6 +78,22 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 			return nil, errors.New("文件路径为空")
 		}
 		totalSize += e.Size
+	}
+
+	// 同目录同名文件：显式拒绝（5.3.0 目录上传）。
+	//
+	// 判重键必须是**完整相对路径**而不是文件名：目录上传之后，「不同目录下的
+	// 同名文件」是常态（a/readme.txt 与 b/readme.txt），按文件名判重会把正常
+	// 上传打成 400。反过来「同一目录下同名」在浏览器侧根本选不出来，一旦出现
+	// 只能是客户端拼错了 rel_dir ⇒ 报错比静默改名好：改名后清单与用户选的
+	// 文件夹对不上，用户没有任何线索能定位。
+	seenPath := make(map[string]struct{}, len(req.Entries))
+	for _, e := range req.Entries {
+		key := e.RelDir + "/" + e.FileName
+		if _, dup := seenPath[key]; dup {
+			return nil, fmt.Errorf("分享内存在重复文件：%s", strings.TrimPrefix(key, "/"))
+		}
+		seenPath[key] = struct{}{}
 	}
 
 	// 单用户单次上传总大小上限 + 存储配额（合计一次校验/扣检）
@@ -135,6 +154,7 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 		children = append(children, &model.FileCodeFile{
 			FileCodeID:   fileCode.ID,
 			FileName:     e.FileName,
+			RelDir:       e.RelDir,
 			UUIDFileName: uniqueNameOf(e.RelPath),
 			FilePath:     e.RelPath,
 			Size:         e.Size,
@@ -210,6 +230,7 @@ func (s *Service) shareFileItems(ctx context.Context, fc *model.FileCode) ([]*Sh
 			Name:     c.DisplayName(),
 			Size:     c.Size,
 			FileHash: c.FileHash,
+			RelDir:   c.RelDir,
 		})
 	}
 	return items, nil

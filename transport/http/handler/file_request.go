@@ -73,7 +73,8 @@ func GuestSubmitFiles(ctx context.Context, c *app.RequestContext) {
 	}
 	st := manageStorage
 	// 访客投递为明文上传，不跳过魔数校验（encrypted=false）
-	stored, ok := saveUploadEntries(ctx, c, st, files, false)
+	// 访客投递不做目录上传（投递方只有一条扁平的文件列表语义）⇒ dirs 传 nil
+	stored, ok := saveUploadEntries(ctx, c, st, files, nil, false)
 	if !ok {
 		return
 	}

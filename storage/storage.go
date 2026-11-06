@@ -495,6 +495,9 @@ type StoredFileEntry struct {
 	RelPath string
 	// FileName 原始文件名（消毒后，仅展示）
 	FileName string
+	// RelDir 分享内相对目录（"a/b"，空 = 根；5.3.0 目录上传）。
+	// 只在多文件分享里有意义——单文件通道恒为空。
+	RelDir string
 	// Size 实际大小（handler 已复核）
 	Size int64
 	// FileHash SHA-256（可空：哈希失败不阻断分享）

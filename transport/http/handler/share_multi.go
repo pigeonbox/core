@@ -37,6 +37,9 @@ type multiBindEntry struct {
 	UploadID  string `json:"upload_id"`
 	ObjectKey string `json:"object_key"`
 	FileName  string `json:"file_name"`
+	// RelDir 分享内相对目录（"a/b"，空 = 根；5.3.0 目录上传）。
+	// 客户端可控 ⇒ 与 object_key 同一严格档消毒，见 sanitizeShareRelDir。
+	RelDir string `json:"rel_dir"`
 }
 
 // collectMultiBindDeclaredSize 汇总本次 multi-bind 的**申报总大小**（配额预检用）。
@@ -286,7 +289,9 @@ func MultiShareDirect(ctx context.Context, c *app.RequestContext) {
 	}
 
 	st := manageStorage
-	stored, ok := saveUploadEntries(ctx, c, st, files, p.Encrypted)
+	// 目录上传（5.3.0）：dirs 与 files 同序（跟随 webkitRelativePath）；
+	// 扁平上传不带该字段 ⇒ nil ⇒ 全部落在根目录（与 5.3.0 之前完全一致）。
+	stored, ok := saveUploadEntries(ctx, c, st, files, form.Value["dirs"], p.Encrypted)
 	if !ok {
 		return
 	}
@@ -411,7 +416,20 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	for _, e := range body.Entries {
+	// 目录上传（5.3.0）：rel_dir 整批先消毒，非法即整单拒绝——
+	// 必须在**任何落盘/合并之前**，否则非法目录会连带把已合并的分片白做一次。
+	relDirs := make([]string, len(body.Entries))
+	for i, e := range body.Entries {
+		clean, derr := sanitizeShareRelDir(e.RelDir)
+		if derr != nil {
+			cleanupStored(ctx, st, created)
+			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": derr.Error()})
+			return
+		}
+		relDirs[i] = clean
+	}
+
+	for i, e := range body.Entries {
 		switch {
 		case e.UploadID != "":
 			entry, uploadID, ok := bindChunkEntry(ctx, c, chunkSvc, st, e.UploadID, p.Encrypted)
@@ -422,6 +440,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 				}
 				return
 			}
+			entry.RelDir = relDirs[i]
 			bound = append(bound, *entry)
 			created = append(created, *entry)
 			if uploadID != "" {
@@ -479,6 +498,7 @@ func MultiShareBind(ctx context.Context, c *app.RequestContext) {
 				RelPath:  cleanKey,
 				FileName: name,
 				Size:     size,
+				RelDir:   relDirs[i],
 			})
 		}
 	}

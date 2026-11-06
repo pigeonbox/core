@@ -49,7 +49,10 @@ func (s *Service) ZipStream(ctx context.Context, fc *model.FileCode) (io.ReadClo
 	entries := make([]zipItem, 0, len(children))
 	for _, c := range children {
 		entries = append(entries, zipItem{
-			name: zipSafeName(c.DisplayName(), usedNames(entries)),
+			// 目录结构保留（5.3.0 目录上传）：条目名 = 消毒后的相对目录 + 文件名。
+			// 重名判定对**完整路径**做——不同目录下的同名文件本就该共存，
+			// 按裸文件名去重会把 a/readme.txt 改名成 "readme(1).txt" 并塞到根下。
+			name: zipPath(c.FullName(), usedNames(entries)),
 			rel:  c.FilePath,
 		})
 	}
@@ -146,6 +149,54 @@ func usedNames(entries []zipItem) []string {
 		names = append(names, e.name)
 	}
 	return names
+}
+
+// zipPath zip 内条目路径：**保留**用户目录结构，但逐段消毒。
+//
+// 入参是 FileCodeFile.FullName()（用户视角相对路径）——单一口径：取件页显示的
+// 层级与 zip 里的层级必须同源，否则「页面看到的路径」与「解压出来的路径」会
+// 各自漂移（这类漂移在真机上通常要等用户投诉才发现）。
+//
+// 安全面不放松（Zip Slip）：每一段都过 zipSafeName 的单段消毒，"." / ".." / 空段
+// 一律丢弃 ⇒ 拼出来的路径不可能逃出解压根目录。目录上传的 rel_dir 在入库前已
+// 过 pathx.SanitizeRelStrict，这里是**第二道**——存量行与直接写库的数据不经过
+// 那道闸。
+//
+// 去重按**完整路径**：a/readme.txt 与 b/readme.txt 是两个条目，互不干扰；
+// 旧的按裸文件名去重会把后者改名并塞到根下（目录结构当场丢失）。
+func zipPath(fullName string, used []string) string {
+	segs := make([]string, 0, 4)
+	for _, seg := range strings.Split(strings.ReplaceAll(fullName, "\\", "/"), "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			continue
+		}
+		segs = append(segs, zipSafeName(seg, nil))
+	}
+	if len(segs) == 0 {
+		segs = []string{"file"}
+	}
+	final := strings.Join(segs, "/")
+	if !zipNameTaken(final, used) {
+		return final
+	}
+	ext := path.Ext(final)
+	base := strings.TrimSuffix(final, ext)
+	for i := 1; ; i++ {
+		cand := fmt.Sprintf("%s(%d)%s", base, i, ext)
+		if !zipNameTaken(cand, used) {
+			return cand
+		}
+	}
+}
+
+// zipNameTaken 完整路径是否已被占用
+func zipNameTaken(name string, used []string) bool {
+	for _, u := range used {
+		if u == name {
+			return true
+		}
+	}
+	return false
 }
 
 // zipSafeName zip 内展示名：去目录（防 Zip Slip）、去控制字符、重名追加序号。
