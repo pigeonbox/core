@@ -39,6 +39,15 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 	// 无记录回退 yaml app 段（修复首页展示 yaml 旧品牌名的分裂）
 	name, description := config.App.Name, config.App.Description
 	effectiveDownload := config.Download
+	// UI 段生效值：管理后台持久化（ui.*）优先，缺省回退**当前**全局快照。
+	// ⚠️ 不能直读包级 config 的 UI 段：2026-10-31 全局配置改为 copy-on-write
+	// 换指针后，`config` 指向的是**被换掉的旧对象** ⇒ 管理台持久化的外观设置
+	// 永远读不到（线上实录：DB 里 ui.accent_color=#409eff，/api/config 却下发
+	// 空串 ⇒ 前端 syncAccent 无值可用 ⇒「改颜色不生效」）。
+	ui := config.UI
+	if cur := conf.Snapshot(); cur != nil {
+		ui = cur.UI
+	}
 	// 站点公网地址（2026-10-22）：管理后台 base.public_url 优先，缺省回退
 	// env/yaml 的 server.base_url；都没有 = 未配置（前端回退浏览器当前 origin）。
 	// 与 share/presign 域的 baseURL provider 同源（bootstrap/wiring.go 的
@@ -58,6 +67,10 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		beamBaseURL = strings.TrimSpace(cfg.Base.BeamBaseURL)
 		if cfg.Download != nil {
 			effectiveDownload = *cfg.Download
+		}
+		// 持久化 UI 段优先（nil=未在线设置 ⇒ 保留上面快照里的 yaml/env 值）
+		if cfg.UI != nil {
+			ui = *cfg.UI
 		}
 	}
 	// 分享传输生效默认（transfer 段）：overlay 后的全局 conf，与建分享
@@ -119,10 +132,10 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		// OIDC 登录按钮开关（P2 SSO；security.oidc.enabled）
 		"oidcEnabled": conf.GetGlobalConfig().Security.OIDC.Enabled,
 		// 管理入口可见性（ui.show_admin_addr，缺省=展示；/admin 路由始终可达，仅控制页脚入口展示）
-		"showAdminAddr": config.UI.ShowAdminAddrEnabled(),
+		"showAdminAddr": ui.ShowAdminAddrEnabled(),
 		// 管理入口路径段（ui.admin_path/PB_UI_ADMIN_PATH，缺省 admin）：前端按此
 		// 注册 hash 路由——自定义后 /admin 不再可达（入口混淆，非安全边界）
-		"adminPath": config.UI.AdminPathOrDefault(),
+		"adminPath": ui.AdminPathOrDefault(),
 		// 直传设置下发（前端通道决策）：匿名 presign 直传开关 + 直传阈值(MB)。
 		// 管理后台持久化段优先，无记录回退全局 conf（缺省=开启/100MB）
 		"presignPolicy": effectiveDownload.PresignPolicyOrDefault(),
@@ -136,10 +149,10 @@ func publicConfigHandler(ctx context.Context, c *app.RequestContext) {
 		"codeCaseInsensitive": effectiveDownload.CodeFoldEnabled(),
 		// API 文档开关（ui.expose_openapi）：false 时后端 /openapi.json 404，
 		// 前端据此隐藏 API 文档入口并将 /api-docs 页降级为未开启提示
-		"apiDocsEnabled": config.UI.ExposeOpenAPI,
+		"apiDocsEnabled": ui.ExposeOpenAPI,
 		// 安全版主题（serve 时白名单校验：非 http(s) URL / 非 #hex 颜色整体忽略）
-		"background":  safeImageURL(config.UI.Background),
-		"accentColor": safeHexColor(config.UI.AccentColor),
+		"background":  safeImageURL(ui.Background),
+		"accentColor": safeHexColor(ui.AccentColor),
 		// 能力自描述（2026-10-30）：「本面支持什么」的一份真相源。
 		// 公开面只放匿名可见也无害的四项（部署模式 / 站点地址是否配置 /
 		// 首启是否要令牌 / 跨站投递是否可用）；存储后端、Redis 模式等管理面

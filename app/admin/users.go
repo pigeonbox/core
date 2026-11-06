@@ -22,8 +22,36 @@ func (s *Service) GetUsers(ctx context.Context, page, pageSize int) ([]*model.Us
 	for i, user := range users {
 		resps[i] = user.ToResp()
 	}
+	s.applyEffectiveStorage(ctx, resps)
 
 	return resps, total, nil
+}
+
+// applyEffectiveStorage 把列表里的「存储占用」覆盖为 file_codes 的**实时聚合**。
+//
+// 为什么不用 users.total_storage：那是个只增不减的漂移计数器——删分享、管理员
+// 删用户、换账号重传都不会回退它（线上实录：某用户计数器 4.9GB 而 file_codes
+// 里 0 行；另一用户计数器 8MB 实际 0）。配额判定 CheckQuota 与用户侧 GetStats
+// 早已改用实时聚合 ⇒ 列表再读计数器就是**两套真相**：列表说超配额、上传却放行。
+//
+// 聚合失败不阻塞列表（保留计数器原值并留日志），避免统计抖动把用户页打崩。
+func (s *Service) applyEffectiveStorage(ctx context.Context, resps []*model.UserResp) {
+	if len(resps) == 0 {
+		return
+	}
+	ids := make([]uint, 0, len(resps))
+	for _, r := range resps {
+		ids = append(ids, r.ID)
+	}
+	sizes, err := s.fileCodeRepo.GetTotalSizesByUserIDs(ctx, ids)
+	if err != nil {
+		logger.CtxWarn(ctx, "aggregate user storage failed, keep counter value",
+			"users", len(ids), "err", err)
+		return
+	}
+	for _, r := range resps {
+		r.TotalStorage = sizes[r.ID] // 无分享记录 ⇒ 0
+	}
 }
 
 // DeleteUser 删除用户（级联软删其全部分享记录；此前"先删用户文件"逻辑被注释）
@@ -72,6 +100,8 @@ func (s *Service) ListUsersFiltered(ctx context.Context, f UserListFilter) ([]*m
 	for i, u := range users {
 		resps[i] = u.ToResp()
 	}
+	s.applyEffectiveStorage(ctx, resps)
+
 	return resps, total, nil
 }
 
