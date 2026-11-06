@@ -66,6 +66,33 @@ type DiagnosticsReport struct {
 	Setup DiagnosticsSetup `json:"setup"`
 	// Capabilities 能力快照（生效值）。
 	Capabilities CapabilitySnapshot `json:"capabilities"`
+	// Update 更新状态（是否有新版本）。
+	//
+	// ⚠️ 这是**唯一会出站**的一段：默认 24h 缓存，缓存新鲜时不发请求；
+	// 离线 / 超时 / 上游异常一律退化成 `source=unknown`，**不是故障**
+	// （`pb doctor` 必须把「不知道」和「坏了」分开报）。
+	Update UpdateStatus `json:"update"`
+}
+
+// UpdateStatus 更新状态（与 app/updatecheck.Result 同形，单独定义是为了
+// 让 diagnostics 的 wire 形状不依赖那个包的类型演化）。
+type UpdateStatus struct {
+	// Current 当前构建版本。
+	Current string `json:"current"`
+	// Latest 上游最新版本（未知时为空）。
+	Latest string `json:"latest,omitempty"`
+	// Available 是否有更新。
+	Available bool `json:"available"`
+	// Source github | disabled | unknown。
+	Source string `json:"source"`
+	// CheckedAt 数据取得时间（缓存命中时为缓存时间）。
+	CheckedAt time.Time `json:"checked_at,omitempty"`
+	// Stale 本次请求失败、返回的是过期缓存。
+	Stale bool `json:"stale,omitempty"`
+	// URL 上游 release 页面。
+	URL string `json:"url,omitempty"`
+	// Error 取不到最新版本的原因。
+	Error string `json:"error,omitempty"`
 }
 
 // DiagnosticsDatabase 数据库连通性。
@@ -193,6 +220,21 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 	report.Setup.TokenSource = setupTokenSource()
 
 	report.Capabilities = capabilitySnapshot(ctx)
+
+	// ===== 更新状态 =====
+	// 放在最后：它可能出站（未命中缓存时最多 5s），前面的检查结论不该被它拖慢
+	// 的顺序影响；同时即使它超时，也不影响本报告其余部分的可用性。
+	upd := updateCheckResult(ctx)
+	report.Update = UpdateStatus{
+		Current:   upd.Current,
+		Latest:    upd.Latest,
+		Available: upd.Available,
+		Source:    upd.Source,
+		CheckedAt: upd.CheckedAt,
+		Stale:     upd.Stale,
+		URL:       upd.URL,
+		Error:     upd.Error,
+	}
 	return report
 }
 

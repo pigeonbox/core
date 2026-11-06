@@ -58,6 +58,7 @@ type AppConfiguration struct {
 	Admin         AdminConfig         `mapstructure:"admin"`
 	Federation    FederationConfig    `mapstructure:"federation"`
 	Deployment    DeploymentConfig    `mapstructure:"deployment"`
+	Update        UpdateConfig        `mapstructure:"update"`
 }
 
 // 部署模式取值（deployment.mode / env PB_DEPLOY_MODE）。
@@ -783,6 +784,23 @@ func (c *UIConfig) AdminPathOrDefault() string {
 // ObservabilityConfig 可观测性配置（metrics；分布式追踪见路线图，未实现前不暴露配置）
 type ObservabilityConfig struct {
 	Metrics MetricsConfig `mapstructure:"metrics"`
+}
+
+// UpdateConfig 更新检查（2026-11-06，5.0.0）。
+//
+// 只回答「这台机器落后了没有」，**不执行**任何升级动作——下载、替换二进制、
+// 重启都归各平台打包层（fpk / qpkg / ipk / 镜像）。
+//
+// ⚠️ 默认**开启**：安全修复的到达率比一次出站请求重要。请求只带公开版本号，
+// 不含站点 id / 分享码 / 用户 / 部署模式。离线时结果退化为 `unknown`，
+// 而不是故障（NAS 常常没有出站网络，把离线报成故障会让人以为部署坏了）。
+type UpdateConfig struct {
+	// CheckEnabled 是否启用更新检查。默认 true。env: PB_UPDATE_CHECK_ENABLED
+	CheckEnabled bool `mapstructure:"check_enabled"`
+	// Endpoint 上游查询地址，默认 GitHub Releases API。
+	// 允许自建镜像（企业内网），但**必须 https**（localhost 例外）。
+	// env: PB_UPDATE_ENDPOINT
+	Endpoint string `mapstructure:"endpoint"`
 }
 
 // MetricsConfig Prometheus 指标配置
