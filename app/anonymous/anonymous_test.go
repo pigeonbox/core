@@ -29,7 +29,7 @@ func newTestService(t *testing.T) (*Service, *miniredis.Miniredis, *gorm.DB) {
 
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, g.AutoMigrate(&model.FileCode{}))
+	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.FileCodeFile{})) // 子表：软删级联「同生共死」要用（生产库必有此表）
 	// glebarez/sqlite 的 :memory: 每条连接是独立库；取件码落库后并发铸造会多连接
 	// 并取，必须钉死单连接（同 share/service_test.go newTestDB 的既有教训）
 	sqlDB, err := g.DB()

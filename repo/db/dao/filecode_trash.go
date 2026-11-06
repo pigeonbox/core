@@ -8,10 +8,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// DeleteByIDTx 事务内软删单条分享主记录（原子性由事务保证；
+// DeleteByIDTx 事务内软删单条分享（主记录 + 子行，原子性由事务保证；
 // app 层经此删除，不再直接持有 gorm 会话）。
 func (r *FileCodeRepository) DeleteByIDTx(ctx context.Context, id uint) error {
 	return r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := softDeleteChildRows(tx, []uint{id}); err != nil {
+			return err
+		}
 		return tx.Delete(&model.FileCode{}, id).Error
 	})
 }
@@ -47,7 +50,8 @@ func (r *FileCodeRepository) CountSoftDeleted(ctx context.Context) (int64, error
 // 仅作用于当前处于软删态的行；返回受影响行数（主表口径）。
 //
 // ⚠️ 2026-10-26 审计修复（P1）：子表 file_code_files 是**文件清单的唯一真相源**
-// （v0.32.14 起虚拟行退役），删除侧（admin.BatchDeleteFiles）会**软删子行**；
+// （v0.32.14 起虚拟行退役），删除侧会**软删子行**（2026-11-06 起全部软删路径
+// 在 dao 层同事务级联，见 softDeleteChildRows）；
 // 此前恢复只 UPDATE 主表 ⇒ 子行仍软删 ⇒ 恢复后取件页清单为空、zip 无内容、
 // 逐文件下载 404（「恢复」只恢复了一半）。
 // ⇒ 同一事务内一并恢复该批分享的软删子行。
@@ -116,6 +120,19 @@ func (r *FileCodeRepository) HardDeleteByIDs(ctx context.Context, ids []uint) (i
 		return 0, err
 	}
 	return deleted, nil
+}
+
+// softDeleteChildRows 事务内软删 file_code_files 子行（主表 id 集合）。
+//
+// 「同生共死」的软删侧：凡软删父行必同事务软删子行（此前只有 app 层散落 4 处
+// 在物理清理分支里补刀，且以 storage!=nil 为前提 ⇒ 用户面回收站入口
+// BatchSoftDeleteByCodes 与单条 DeleteByIDTx 完全不级联 ⇒ 同一个「软删」状态
+// 出现两种子行状态）。已软删的子行再删一次是 no-op（幂等）。
+func softDeleteChildRows(tx *gorm.DB, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return tx.Where("file_code_id IN ?", ids).Delete(&model.FileCodeFile{}).Error
 }
 
 // hardDeleteChildRows 事务内物理删除 file_code_files 子行（主表 id 集合）。

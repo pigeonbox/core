@@ -13,13 +13,27 @@ import (
 
 // ==================== 管理端增强（批量操作 / 富统计） ====================
 
-// BatchDeleteByIDs 批量删除（软删），返回受影响行数
+// BatchDeleteByIDs 批量删除（软删，连带软删子行「同生共死」），返回受影响行数
 func (r *FileCodeRepository) BatchDeleteByIDs(ctx context.Context, ids []uint) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	res := r.db().WithContext(ctx).Where("id IN ?", ids).Delete(&model.FileCode{})
-	return int(res.RowsAffected), res.Error
+	var affected int64
+	err := r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := softDeleteChildRows(tx, ids); err != nil {
+			return err
+		}
+		res := tx.Where("id IN ?", ids).Delete(&model.FileCode{})
+		if res.Error != nil {
+			return res.Error
+		}
+		affected = res.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
 // UpdateExpireByID 管理员改单条过期时间/剩余次数

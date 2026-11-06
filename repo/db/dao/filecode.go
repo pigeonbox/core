@@ -200,12 +200,24 @@ func (r *FileCodeRepository) UpdateColumns(ctx context.Context, id uint, updates
 	return r.db().WithContext(ctx).Model(&model.FileCode{}).Where("id = ?", id).Updates(updates).Error
 }
 
+// Delete 软删单条分享（连带软删子行「同生共死」，与 DeleteByIDTx 同口径）。
 func (r *FileCodeRepository) Delete(ctx context.Context, id uint) error {
-	return r.db().WithContext(ctx).Delete(&model.FileCode{}, id).Error
+	return r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := softDeleteChildRows(tx, []uint{id}); err != nil {
+			return err
+		}
+		return tx.Delete(&model.FileCode{}, id).Error
+	})
 }
 
+// DeleteByFileCode 软删单条分享（连带软删子行「同生共死」）。
 func (r *FileCodeRepository) DeleteByFileCode(ctx context.Context, fileCode *model.FileCode) error {
-	return r.db().WithContext(ctx).Delete(fileCode).Error
+	return r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := softDeleteChildRows(tx, []uint{fileCode.ID}); err != nil {
+			return err
+		}
+		return tx.Delete(fileCode).Error
+	})
 }
 
 func (r *FileCodeRepository) Count(ctx context.Context) (int64, error) {
@@ -262,6 +274,8 @@ func (r *FileCodeRepository) GetExpiredFiles(ctx context.Context) ([]*model.File
 	return expiredFiles, err
 }
 
+// DeleteExpiredFiles 软删过期分享（连带软删子行「同生共死」）。
+// 逐条独立事务：单条失败不阻断其余（下轮重试），与既有语义一致。
 func (r *FileCodeRepository) DeleteExpiredFiles(ctx context.Context, expiredFiles []*model.FileCode) (int, error) {
 	if len(expiredFiles) == 0 {
 		return 0, nil
@@ -269,7 +283,13 @@ func (r *FileCodeRepository) DeleteExpiredFiles(ctx context.Context, expiredFile
 
 	count := 0
 	for _, file := range expiredFiles {
-		if err := r.db().WithContext(ctx).Delete(file).Error; err != nil {
+		err := r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := softDeleteChildRows(tx, []uint{file.ID}); err != nil {
+				return err
+			}
+			return tx.Delete(file).Error
+		})
+		if err != nil {
 			continue // 记录错误但继续处理其他文件
 		}
 		count++

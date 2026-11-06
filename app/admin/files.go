@@ -99,7 +99,7 @@ func (s *Service) PurgeFiles(ctx context.Context, ids []uint) (int64, error) {
 		if fp := file.GetFilePath(); fp != "" {
 			s.deletePhysicalIfUnreferenced(ctx, fp, id)
 		}
-		if children, cerr := s.fileFileRepo.ListByFileCodeID(ctx, id); cerr == nil {
+		if children, cerr := s.fileFileRepo.ListByFileCodeIDIncludingDeleted(ctx, id); cerr == nil {
 			for _, c := range children {
 				if c.FilePath != "" {
 					s.deletePhysicalIfUnreferenced(ctx, c.FilePath, id)
@@ -257,16 +257,14 @@ func (s *Service) BatchDeleteFiles(ctx context.Context, ids []uint) (int, error)
 			continue
 		}
 		if s.storage != nil {
-			if children, cerr := childRepo.ListByFileCodeID(ctx, id); cerr == nil {
+			// Unscoped（含软删行）：同批里可能有此前已软删子行的分享，物理对象照样要清
+			if children, cerr := childRepo.ListByFileCodeIDIncludingDeleted(ctx, id); cerr == nil {
 				for _, c := range children {
 					if c.FilePath == "" {
 						continue
 					}
 					// 秒传共享对象保护（2026-10-12）：删前查引用
 					s.deletePhysicalIfUnreferenced(ctx, c.FilePath, id)
-				}
-				if len(children) > 0 {
-					_ = childRepo.SoftDeleteByFileCodeIDs(ctx, []uint{id})
 				}
 			}
 		}
