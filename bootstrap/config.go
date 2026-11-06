@@ -121,6 +121,14 @@ func setDefaults(v *viper.Viper) {
 	// ⇒ 依赖 24h 缓存（updatecheck 包），不能每次打开后台都查。
 	v.SetDefault("update.check_enabled", true)
 	v.SetDefault("update.endpoint", "https://api.github.com/repos/pigeonbox/pigeonbox/releases/latest")
+	// 定时自动备份（2026-11-06，5.1.0）默认**关闭**：它写盘且写在哪由部署形态
+	// 决定，默认开一个新的大写入源会让升级变成风险动作。
+	// keep 默认 7；`<=0 = 不限`（安全方向：误配 0 不该删光备份）。
+	// at 默认 03:00 本地时：用「目标时刻已过 + 当天无包」判定到期，
+	// 不用「每 24h 一次」⇒ 每天重启的机器也照样会备份。
+	v.SetDefault("backup.enabled", false)
+	v.SetDefault("backup.keep", 7)
+	v.SetDefault("backup.at", "03:00")
 	// P2P 联邦（M2）默认关闭；启用须显式配置 registry_url + public_url
 	v.SetDefault("federation.enabled", false)
 	v.SetDefault("federation.node_key_path", "data/federation.key")
@@ -177,6 +185,11 @@ var envBindings = map[string][]string{
 	// update（更新检查）
 	"update.check_enabled": {"PB_UPDATE_CHECK_ENABLED"},
 	"update.endpoint":      {"PB_UPDATE_ENDPOINT"},
+	// backup（定时自动备份，5.1.0）
+	"backup.enabled": {"PB_BACKUP_ENABLED"},
+	"backup.dir":     {"PB_BACKUP_DIR"},
+	"backup.keep":    {"PB_BACKUP_KEEP"},
+	"backup.at":      {"PB_BACKUP_AT"},
 	// observability
 	"observability.metrics.enabled": {"PB_METRICS_ENABLED"},
 	"observability.metrics.path":    {"PB_METRICS_PATH"},

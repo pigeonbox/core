@@ -66,6 +66,11 @@ type DiagnosticsReport struct {
 	Setup DiagnosticsSetup `json:"setup"`
 	// Capabilities 能力快照（生效值）。
 	Capabilities CapabilitySnapshot `json:"capabilities"`
+	// Backup 定时自动备份状态（5.1.0）。
+	//
+	// 放诊断而不是只放管理台：灾备是否在跑，与 DB/存储是否可用属同一类
+	// 「部署事实」——用户问「我这台机器有备份吗」时，答案应该一条命令能拿到。
+	Backup AutoBackupStatus `json:"backup"`
 	// Update 更新状态（是否有新版本）。
 	//
 	// ⚠️ 这是**唯一会出站**的一段：默认 24h 缓存，缓存新鲜时不发请求；
@@ -220,6 +225,10 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 	report.Setup.TokenSource = setupTokenSource()
 
 	report.Capabilities = capabilitySnapshot(ctx)
+
+	// ===== 定时自动备份 =====
+	// **纯本地**（列一次目录 + 读内存状态），不出站、不触发备份 ⇒ 放哪都安全。
+	report.Backup = autoBackupStatus()
 
 	// ===== 更新状态 =====
 	// 放在最后：它可能出站（未命中缓存时最多 5s），前面的检查结论不该被它拖慢

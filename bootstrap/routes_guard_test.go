@@ -153,6 +153,9 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"POST /api/v1/user/shares/import-local",
 		// ===== 部署自检快照（2026-10-30 手写；管理面，供官方 CLI pb doctor 消费）=====
 		"GET /admin/diagnostics",
+		// ===== 定时自动备份（2026-11-06 手写；5.1.0；管理面）=====
+		// 列表+状态 / 下载包（二进制流）/ 立即备份（后台跑，立刻返回）
+		"GET /admin/backups", "GET /admin/backups/:name", "POST /admin/backups/run",
 	}
 
 	// 1. 契约内路由必须全部已注册

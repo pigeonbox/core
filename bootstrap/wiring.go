@@ -405,6 +405,12 @@ func initThriftIDLServices(database *gorm.DB) {
 		async.GoSafe(startAPIKeyExpiryNotify)
 		// 存储对账 + 日志保留（治理 2026-10-03）：24h 周期，启动 10 分钟后首跑
 		async.GoSafe(startMaintenanceJanitor)
+		// 定时自动备份（5.1.0）：默认关闭（backup.enabled=false ⇒ 函数内自检
+		// 直接返回）；开启后「目标时刻已过 + 当天无包」才导出，一天一份。
+		// 先装配（显式传入 DB 与存储句柄），再起循环；未启用时装配照样完成，
+		// 管理台的备份卡片仍能显示目录与已有包。
+		initAutoBackup(database, bootstrapStorage)
+		async.GoSafe(startAutoBackup)
 		// 联邦邀请定时同步（core#32）：周期把待推口令送给已配置对端。
 		// 零行为前提：p2p.federation.sync.enabled=false ⇒ 不起跑（函数内自检）。
 		async.GoSafe(func() { startFederationSync(inviteMailbox, config.App.Name) })

@@ -90,6 +90,18 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 		Reason:  "非 JSON 包络：预览缩略图**二进制文件流**（thrift IDL 的 JSON 包络表达不了，与 /qrcode 同列）；取件闸门与 /preview/:code 完全同链（authorizePickup），密码经 X-Share-Password 头",
 		Pending: false,
 	},
+	"GET /admin/backups": {
+		Reason:  "运维面：返回「备份状态 + 包列表」，与 GET /admin/diagnostics 同类（部署事实快照）。备份包本身是文件而不是业务实体，且包格式由 app/backup 单一真相源定义",
+		Pending: false,
+	},
+	"GET /admin/backups/:name": {
+		Reason:  "运维面：下载备份包 = **二进制流**（application/gzip + Content-Disposition），非 JSON 包络 ⇒ IDL 表达不了",
+		Pending: false,
+	},
+	"POST /admin/backups/run": {
+		Reason:  "运维面：触发一次导出，**立刻返回**（真正的导出在后台跑，几十 GB 不能挂在 HTTP 请求上）⇒ 语义是「投递一个操作」而非业务写操作",
+		Pending: false,
+	},
 	"GET /admin/diagnostics": {
 		Reason:  "平台面：部署自检快照（2026-10-30），供官方 CLI `pb doctor` 消费——只读的运行事实集合（DB/存储/Redis/版本/部署模式/首启状态），不是业务 API；管理面鉴权（AdminOrAdminKey）",
 		Pending: false,
