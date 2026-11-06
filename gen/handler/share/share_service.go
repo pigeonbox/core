@@ -676,11 +676,19 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		if items, lerr := getShareService().ListShareFiles(ctx, code); lerr == nil && len(items) > 0 {
 			files := make([]*sharemodel.ShareFileItem, 0, len(items))
 			for _, it := range items {
-				files = append(files, &sharemodel.ShareFileItem{
+				item := &sharemodel.ShareFileItem{
 					ID:   int64(it.ID),
 					Name: it.Name,
 					Size: it.Size,
-				})
+				}
+				// rel_dir 是 optional（5.3.0 起）：扁平分享与存量分享都没有这个值。
+				// 空串时**不设指针**——否则老客户端会看到一堆 rel_dir="" 的文件，
+				// 而「根目录」与「空目录名」在 wire 上是两件事。
+				if it.RelDir != "" {
+					relDir := it.RelDir
+					item.RelDir = &relDir
+				}
+				files = append(files, item)
 			}
 			data.Files = files
 			isMulti := len(items) > 1

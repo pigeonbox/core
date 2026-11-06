@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"mime/multipart"
 	"strconv"
+	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/oekit/pkg/pathx"
 	"github.com/pigeonbox/contracts/errcode"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/pkg/resp"
@@ -58,17 +60,72 @@ func paramID(c *app.RequestContext, label string) (uint, bool) {
 	return uint(id64), true
 }
 
+// maxShareRelDirRunes 分享内相对目录长度上限（字符数）。
+// 取 200 而非列宽 255：MySQL 的 varchar(255) 按**字符**计，但 sqlite 侧是 TEXT
+// 不截断 ⇒ 一旦超过列宽，只有 MySQL 部署会炸，属于「本地全绿、上线才红」的形态。
+const maxShareRelDirRunes = 200
+
+// sanitizeShareRelDir 分享内相对目录消毒（空串 = 根）。
+//
+// 入参源自浏览器的 webkitRelativePath，**完全客户端可控**，因此与 object_key
+// 同一严格档：pathx.SanitizeRelStrict 统一把 "" 当分隔符，并拒绝绝对路径 /
+// UNC / Windows 盘符 / 显式 ".." 段。
+//
+// 为什么这里必须严格：这些目录段最终会进 zip 条目名（zipPath）⇒ 放过一个 ".."
+// 就是 Zip Slip：用户解压时文件被写到压缩包外的目录里。
+//
+// 超长直接拒绝而不是截断：截断会把两个不同目录折叠成同一个，用户看到的是
+// 「我的文件跑到别的目录里去了」，比明确报错难查得多。
+func sanitizeShareRelDir(raw string) (string, error) {
+	dir := strings.TrimSpace(raw)
+	if dir == "" {
+		return "", nil
+	}
+	clean, ok := pathx.SanitizeRelStrict(dir)
+	if !ok {
+		return "", fmt.Errorf("目录路径非法（不允许绝对路径/盘符/上跳段）: %s", dir)
+	}
+	if n := len([]rune(clean)); n > maxShareRelDirRunes {
+		return "", fmt.Errorf("目录路径过长（%d 字符，上限 %d）: %s", n, maxShareRelDirRunes, clean)
+	}
+	return clean, nil
+}
+
 // saveUploadEntries 校验并落盘 multipart 文件列表（多文件直传/访客投递共用）。
 // 逐文件：文件名消毒 → 扩展名白名单 → 单文件大小上限 → 魔数一致性
 // （encrypted=true 跳过：E2E 密文头为随机字节，必然不过魔数表）→ 唯一相对
 // 路径落盘。任一失败：回滚已落盘文件、写错误响应并返回 ok=false。
-func saveUploadEntries(ctx context.Context, c *app.RequestContext, st storage.StorageInterface, files []*multipart.FileHeader, encrypted bool) ([]shareService.StoredFileEntry, bool) {
+func saveUploadEntries(ctx context.Context, c *app.RequestContext, st storage.StorageInterface, files []*multipart.FileHeader, dirs []string, encrypted bool) ([]shareService.StoredFileEntry, bool) {
 	var stored []shareService.StoredFileEntry
 	reject := func(bizCode int, msg string) {
 		cleanupStored(ctx, st, stored)
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": bizCode, "message": msg})
 	}
-	for _, fh := range files {
+
+	// 目录上传（5.3.0）：dirs 与 files **同序**，缺省（nil）表示扁平上传。
+	//
+	// 数量不一致直接拒绝而不是「尽量对齐」：错位一格会把每个文件塞进隔壁的
+	// 目录，而落库结果看起来完全正常（没有任何报错线索可回查）。
+	relDirs := make([]string, len(files))
+	if len(dirs) > 0 {
+		if len(dirs) != len(files) {
+			c.JSON(consts.StatusBadRequest, map[string]interface{}{
+				"code":    errcode.CodeInvalidParam,
+				"message": fmt.Sprintf("dirs 与 files 数量不一致（%d vs %d）", len(dirs), len(files)),
+			})
+			return nil, false
+		}
+		for i, d := range dirs {
+			clean, derr := sanitizeShareRelDir(d)
+			if derr != nil {
+				c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": derr.Error()})
+				return nil, false
+			}
+			relDirs[i] = clean
+		}
+	}
+
+	for i, fh := range files {
 		name := utils.SanitizeFileName(fh.Filename)
 		if !utils.IsAllowedExtension(name) {
 			reject(errcode.CodeFileTypeDenied, fmt.Sprintf("文件类型禁止上传: %s", name))
@@ -103,6 +160,7 @@ func saveUploadEntries(ctx context.Context, c *app.RequestContext, st storage.St
 		stored = append(stored, shareService.StoredFileEntry{
 			RelPath:  result.FilePath,
 			FileName: name,
+			RelDir:   relDirs[i],
 			Size:     result.FileSize,
 			FileHash: result.FileHash,
 		})
