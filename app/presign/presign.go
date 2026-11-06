@@ -268,11 +268,11 @@ type InitMeta struct {
 	//   2. 多文件绑定的 object_key 归属校验（否则可把他人对象绑成自己的分享）。
 	// 历史会话这两个字段为空 ⇒ 相关判据按「无属主记录」兼容放行（窗口受
 	// 会话 TTL 约束，≤1h）。
-	UserID      uint      `json:"user_id"`
-	OwnerIP     string    `json:"owner_ip,omitempty"`
-	ExpireValue int32     `json:"expire_value"`
-	ExpireStyle string    `json:"expire_style"`
-	RequireAuth bool      `json:"require_auth"`
+	UserID      uint   `json:"user_id"`
+	OwnerIP     string `json:"owner_ip,omitempty"`
+	ExpireValue int32  `json:"expire_value"`
+	ExpireStyle string `json:"expire_style"`
+	RequireAuth bool   `json:"require_auth"`
 	// PasswordHash 为 require_auth=true 时分享密码的 bcrypt 哈希(明文不落存储)
 	PasswordHash string `json:"password_hash,omitempty"`
 	// FileHash 直传完成后服务端计算的 SHA-256（写入 file_codes.file_hash，秒传依据）

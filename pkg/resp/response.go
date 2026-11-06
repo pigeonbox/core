@@ -93,6 +93,7 @@ func SuccessWithMessage(c *app.RequestContext, message string, data interface{})
 // 为什么值得删：这些帮手不带 httpStatusForCode 映射，一律 200 或
 // "仅 Unauthorized 特殊对待"——与新口径（业务码→HTTP 状态统一映射）并存时，
 // 新代码随手挑到它们就会产出「HTTP 200 里塞错误码」的老形状。
+
 func ErrorWithMessage(c *app.RequestContext, code int, message string) {
 	httpStatus := consts.StatusOK
 	if code == errors.CodeUnauthorized {
