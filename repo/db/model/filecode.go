@@ -42,6 +42,14 @@ type FileCode struct {
 	// Status 管控状态，默认 normal；blocked/pending_review 拒绝取件（索引覆盖管理端按状态筛选）
 	Status string `gorm:"size:20;default:'normal';index:idx_file_codes_status_expired,priority:1" json:"status"`
 
+	// ExpiryRemindedAt 「分享即将过期」提醒已发出的时间（可空；5.5.0 的去重标记）。
+	//
+	// 为什么用列而不是「查站内信表去重」：提醒的粒度是**每个分享各一次**，
+	// 而站内信里只有取件码 ⇒ 反查要扫正文内容串（索引失效，且文案一改就失配）。
+	// 列是 O(1) 判据，并且天然对齐「过期时间被延长 ⇒ 清标记 ⇒ 可再次提醒」这条语义
+	// （清标记在 dao 的延期方法里做，见 filecode_admin.go / filecode_usershares.go）。
+	ExpiryRemindedAt *time.Time `json:"expiry_reminded_at"`
+
 	FileHash  string `gorm:"size:64" json:"file_hash"`
 	IsChunked bool   `gorm:"default:false" json:"is_chunked"`
 	// UploadID 分片会话 ID。

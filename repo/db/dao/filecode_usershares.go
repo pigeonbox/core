@@ -185,6 +185,9 @@ func (r *FileCodeRepository) BatchExtendByCodes(ctx context.Context, userID uint
 		// 次数设为 -1（无限）让延期后能继续取
 		updates["expired_count"] = -1
 	}
+	// 延期 = 一个新的到期日 ⇒ 清掉「已提醒」标记，让新一轮到期还能提醒（5.5.0）。
+	// 不清的话：分享被延长后又悄悄到期，寄件人再也不会收到任何提示。
+	updates["expiry_reminded_at"] = nil
 	res := r.db().WithContext(ctx).Model(&model.FileCode{}).
 		Where("user_id = ? AND code IN ?", userID, codes).
 		Updates(updates)

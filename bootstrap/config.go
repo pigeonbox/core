@@ -92,6 +92,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.api_token.enabled", true)
 	v.SetDefault("security.api_token.per_key_qps", 20)
 	v.SetDefault("security.api_token.per_key_burst", 40)
+	// notify.expiry_reminder（分享到期提醒，5.5.0）：默认关 —— 主动打扰要显式开启。
+	// 提前量 24h 与巡检 60min 是「一天一次、提前一天」的最保守组合。
+	v.SetDefault("notify.expiry_reminder.enabled", false)
+	v.SetDefault("notify.expiry_reminder.advance_hours", 24)
+	v.SetDefault("notify.expiry_reminder.interval_minutes", 60)
 	v.SetDefault("rate_limit.enabled", true)
 	v.SetDefault("rate_limit.global_qps", 100)
 	v.SetDefault("rate_limit.upload_qps", 10)
@@ -223,6 +228,10 @@ var envBindings = map[string][]string{
 	"notify.telegram.chat_id":   {"PB_TELEGRAM_CHAT_ID"},
 	"notify.bark.server_url":    {"PB_BARK_SERVER_URL"},
 	"notify.bark.device_key":    {"PB_BARK_DEVICE_KEY"},
+	// notify.expiry_reminder（分享到期提醒，5.5.0）
+	"notify.expiry_reminder.enabled":          {"PB_NOTIFY_EXPIRY_REMINDER_ENABLED"},
+	"notify.expiry_reminder.advance_hours":    {"PB_NOTIFY_EXPIRY_REMINDER_ADVANCE_HOURS"},
+	"notify.expiry_reminder.interval_minutes": {"PB_NOTIFY_EXPIRY_REMINDER_INTERVAL_MINUTES"},
 	// mcp
 	"mcp.enabled":       {"PB_MCP_ENABLED"},
 	"mcp.allow_guest":   {"PB_MCP_ALLOW_GUEST"},
