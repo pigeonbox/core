@@ -18,17 +18,21 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"gorm.io/gorm"
 
-	"github.com/oekit/concurrency/singleflight"
+	"github.com/oekit/pkg/cache"
 	"github.com/oekit/pkg/httpjson"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
+
+// discoveryTTL 发现文档缓存窗。发现文档的端点集几乎不变（IdP 换端点是运维事件），
+// stale-if-error 档兜 IdP 抖动：回源失败时回退已过期历史真值，登录面不因 IdP
+// 的 discovery 抖动整面不可用。
+const discoveryTTL = time.Hour
 
 // ErrAccountDisabled 匹配命中的本地账号已被禁用（回调不发 JWT，2026-10-08 加固）
 var ErrAccountDisabled = errors.New("OIDC 登录被拒绝：账号已被禁用")
@@ -62,10 +66,10 @@ type Service struct {
 	cfg    Config
 	client *http.Client
 
-	mu     sync.RWMutex
-	disc   *discovery
-	discAt time.Time
-	discSF *singleflight.Flight[*discovery] // 缓存过期时的并发拉取合并（防登录风暴打 IdP）
+	// disc 发现文档单值缓存（oekit/pkg v0.37.0 SingleValue 红利收编）：TTL/
+	// 并发单飞合并/stale-if-error 全由库钉死，替代手搓 mu+disc+discAt+
+	// singleflight 双检三件套。
+	disc *cache.SingleValue[discovery]
 
 	userRepo *dao.UserRepository
 }
@@ -78,12 +82,28 @@ func NewService(gormDB *gorm.DB, cfg Config) *Service {
 	if cfg.FrontendCallback == "" {
 		cfg.FrontendCallback = "/#/oidc/callback"
 	}
-	return &Service{
+	s := &Service{
 		cfg:      cfg,
 		client:   &http.Client{Timeout: 15 * time.Second},
-		discSF:   singleflight.New[*discovery](),
 		userRepo: dao.NewUserRepository(gormDB),
 	}
+	// Source 返回 discovery 值类型；本形态恒有真值（端点缺失在 fetch 内判错
+	// 返回 err，不落 null marker）。
+	s.disc = cache.NewSingleValue(cache.SingleValueConfig[discovery]{
+		TTL: discoveryTTL,
+		Source: func(ctx context.Context) (*discovery, error) {
+			d, err := s.fetchDiscovery(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &d, nil
+		},
+		// 单值条目不值得常驻清扫协程；stale-if-error 兜 IdP 抖动——
+		// 回源失败时回退已过期历史真值，登录面不因 discovery 瞬断整面不可用。
+		NoBackgroundSweep: true,
+		StaleIfError:      true,
+	})
+	return s
 }
 
 // Enabled 是否启用
@@ -103,45 +123,26 @@ func (s *Service) FrontendCallback() string {
 	return s.cfg.FrontendCallback + sep + "token="
 }
 
-// discover 发现端点（缓存 1 小时；过期后并发回调经 singleflight 合并为一次拉取）
+// discover 取发现文档（SingleValue 全托管：命中直接返回；过期后并发经内置
+// 单飞合并为一次回源；回源失败 stale-if-error 回退历史真值——IdP 抖动不再
+// 让登录面整面不可用，pkg v0.37.0 红利收编）。
 func (s *Service) discover(ctx context.Context) (*discovery, error) {
-	if d := s.cachedDiscovery(); d != nil {
-		return d, nil
-	}
-	d, err := s.discSF.Do(ctx, "discovery", func(ctx context.Context) (*discovery, error) {
-		// 双检:排队等待期间可能已被同批调用刷新
-		if d := s.cachedDiscovery(); d != nil {
-			return d, nil
-		}
-		issuer := strings.TrimSuffix(s.cfg.Issuer, "/")
-		wellKnown := issuer + "/.well-known/openid-configuration"
-		var d discovery
-		if err := httpjson.DoJSON(ctx, s.client, httpjson.Request{URL: wellKnown}, &d); err != nil {
-			return nil, fmt.Errorf("OIDC discovery 失败: %w", err)
-		}
-		if d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" {
-			return nil, errors.New("OIDC discovery 缺少必要端点")
-		}
-		s.mu.Lock()
-		s.disc = &d
-		s.discAt = time.Now()
-		s.mu.Unlock()
-		return &d, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return d, nil
+	return s.disc.Get(ctx)
 }
 
-// cachedDiscovery 返回未过期的缓存发现结果（nil = 未命中）。
-func (s *Service) cachedDiscovery() *discovery {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.disc != nil && time.Since(s.discAt) < time.Hour {
-		return s.disc
+// fetchDiscovery 实际回源：拉 discovery 文档并校验必要端点（错误不缓存，
+// 端点缺失不落 null marker——本形态恒有真值，取不到即失败）。
+func (s *Service) fetchDiscovery(ctx context.Context) (discovery, error) {
+	issuer := strings.TrimSuffix(s.cfg.Issuer, "/")
+	wellKnown := issuer + "/.well-known/openid-configuration"
+	var d discovery
+	if err := httpjson.DoJSON(ctx, s.client, httpjson.Request{URL: wellKnown}, &d); err != nil {
+		return d, fmt.Errorf("OIDC discovery 回源失败: %w", err)
 	}
-	return nil
+	if d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" {
+		return d, errors.New("OIDC discovery 缺少必要端点")
+	}
+	return d, nil
 }
 
 // TestDiscovery 管理端「测试连接」：验证 issuer 的 discovery 端点可达且合法。
