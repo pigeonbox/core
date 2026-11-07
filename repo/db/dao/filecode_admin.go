@@ -41,6 +41,8 @@ func (r *FileCodeRepository) UpdateExpireByID(ctx context.Context, id uint, expi
 	updates := map[string]interface{}{}
 	if expireAt != nil {
 		updates["expired_at"] = *expireAt
+		// 管理员改了到期时间 ⇒ 清「已提醒」标记（同 BatchExtendByCodes，5.5.0）。
+		updates["expiry_reminded_at"] = nil
 	}
 	if expiredCount != nil {
 		updates["expired_count"] = *expiredCount
@@ -58,7 +60,11 @@ func (r *FileCodeRepository) BatchExtendByIDsAdmin(ctx context.Context, ids []ui
 	}
 	res := r.db().WithContext(ctx).Model(&model.FileCode{}).
 		Where("id IN ?", ids).
-		Updates(map[string]interface{}{"expired_at": newExpireAt, "expired_count": -1})
+		Updates(map[string]interface{}{
+			"expired_at":         newExpireAt,
+			"expired_count":      -1,
+			"expiry_reminded_at": nil, // 延期 ⇒ 允许再次提醒（5.5.0）
+		})
 	return int(res.RowsAffected), res.Error
 }
 

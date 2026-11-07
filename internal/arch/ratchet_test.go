@@ -209,15 +209,19 @@ func TestSingletonConsumers(t *testing.T) {
 var globalConfigBaseline = map[string]int{
 	// app/config 两文件 = 配置中心自 admin 独立成域的所有权转移
 	// （原 app/admin/config.go:3 + service.go:1 → config 域 1+3，同批 overlay 重构净减 0）
-	"app/admin/stats.go":                     1,
-	"app/config/config.go":                   1,
-	"app/config/service.go":                  3,
-	"app/share/localfiles.go":                2,
-	"app/share/localimport.go":               1,
-	"app/share/service.go":                   1,
-	"app/storage/service.go":                 1,
-	"app/user/service.go":                    2,
-	"bootstrap/bootstrap.go":                 1,
+	"app/admin/stats.go":       1,
+	"app/config/config.go":     1,
+	"app/config/service.go":    3,
+	"app/share/localfiles.go":  2,
+	"app/share/localimport.go": 1,
+	"app/share/service.go":     1,
+	"app/storage/service.go":   1,
+	"app/user/service.go":      2,
+	"bootstrap/bootstrap.go":   1,
+	// 分享到期提醒循环（5.5.0）：开关与两个数字是管理台热改的配置，而循环在启动时
+	// 注册、无法重启换参数 ⇒ 每轮必须读当前生效快照。这是「配置即时生效」的实现本身，
+	// 改不成构造注入（构造注入会冻结成启动时的值）。已冻结为 1，只许减不许增。
+	"bootstrap/expiry_reminder.go":           1,
 	"bootstrap/handlers_public.go":           1,
 	"gen/handler/chunk/chunk_service.go":     1,
 	"gen/handler/presign/presign_service.go": 1,
@@ -295,10 +299,12 @@ var globalDBAccessBaseline = map[string]int{
 	"bootstrap/adapters.go":      5,
 	"bootstrap/apikey_expiry.go": 2,
 	"bootstrap/database.go":      1,
-	"bootstrap/deployment.go":    1,
-	"bootstrap/routes_custom.go": 2,
-	"bootstrap/tasks.go":         1,
-	"bootstrap/wiring.go":        0,
+	// 分享到期提醒（5.5.0）：与 apikey_expiry 同款——循环注册时取一次句柄由闭包持有。
+	"bootstrap/expiry_reminder.go": 1,
+	"bootstrap/deployment.go":      1,
+	"bootstrap/routes_custom.go":   2,
+	"bootstrap/tasks.go":           1,
+	"bootstrap/wiring.go":          0,
 }
 
 // TestGlobalDBAccessRatchet 规则 10：全局 DB 句柄访问面棘轮。

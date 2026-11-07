@@ -421,6 +421,10 @@ func initThriftIDLServices(database *gorm.DB) {
 		// 联邦邀请定时同步（core#32）：周期把待推口令送给已配置对端。
 		// 零行为前提：p2p.federation.sync.enabled=false ⇒ 不起跑（函数内自检）。
 		async.GoSafe(func() { startFederationSync(inviteMailbox, config.App.Name) })
+		// 分享到期提醒（5.5.0）：默认关闭（notify.expiry_reminder.enabled=false
+		// ⇒ 每轮在判据处直接返回）；开启后每 interval_minutes 扫一轮，给寄件人
+		// 发一次站内信并经已配置渠道外推。
+		async.GoSafe(startExpiryReminder)
 	}
 
 	// 8. 多副本：admin 实例持久化配置后发布变更广播（public 副本订阅热应用）

@@ -298,6 +298,33 @@ type NotifyConfig struct {
 	Telegram TelegramConfig `mapstructure:"telegram" json:"telegram"`
 	// Bark 推送渠道（server_url + device_key 均非空 = 启用；缺省空 = 禁用）
 	Bark BarkConfig `mapstructure:"bark" json:"bark"`
+	// ExpiryReminder 分享到期提醒（5.5.0；默认关）。
+	//
+	// 与上面几个渠道是**两类东西**：渠道决定「消息从哪个管子出去」，本段决定
+	// 「什么时候、要不要产生这条消息」。所以它不挂在某个渠道下，而是 notify 段
+	// 的平级子段——关掉提醒时各渠道配置保持原样，不必重新填一遍。
+	ExpiryReminder ExpiryReminderConfig `mapstructure:"expiry_reminder" json:"expiry_reminder"`
+}
+
+// ExpiryReminderConfig 分享到期提醒配置（5.5.0）。
+//
+// 语义：定期扫描「剩余有效期 ≤ advance_hours」的**用户分享**，给寄件人发一次
+// 站内信（同时经已配置的 webhook / SMTP / Telegram / Bark 外推）。匿名分享没有
+// 收件人，不在范围内；寿命本身就短于提前量的分享也不提醒（刚发出去就说
+// 「还有 24 小时过期」是噪音，见 bootstrap/expiry_reminder.go 的判据说明）。
+type ExpiryReminderConfig struct {
+	// Enabled 开关（默认 false）。为什么默认关：这是一条**主动打扰**，
+	// 与「更新检查」那种被动查询不同——站点管理员没打算要就不该发。
+	// env: PB_NOTIFY_EXPIRY_REMINDER_ENABLED
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
+	// AdvanceHours 提前量（小时，默认 24；有效区间 1..720，越界按边界收敛）。
+	// env: PB_NOTIFY_EXPIRY_REMINDER_ADVANCE_HOURS
+	AdvanceHours int `mapstructure:"advance_hours" json:"advance_hours"`
+	// IntervalMinutes 巡检间隔（分钟，默认 60；有效区间 1..1440）。
+	//
+	// 可**热改**：轮询节拍固定 1 分钟，是否真扫由本值决定（见 bootstrap/expiry_reminder.go）。
+	// env: PB_NOTIFY_EXPIRY_REMINDER_INTERVAL_MINUTES
+	IntervalMinutes int `mapstructure:"interval_minutes" json:"interval_minutes"`
 }
 
 // TelegramConfig Telegram 推送渠道配置（2026-11-01 外部推送渠道扩展）。
