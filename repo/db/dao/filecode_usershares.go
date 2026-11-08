@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/oekit/gormx/crud"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 )
@@ -100,38 +101,74 @@ type UserShareFilter struct {
 //   - "viewed": 至少被取件过一次（viewer_at 非空；取件历史页用，total 必须与
 //     列表同源——前端曾拉全量再客户端过滤，空表却显示全量分页总数）
 //   - "all" / "": 不过滤状态
+//
+// 条件拼装已收编 gormx/crud QuerySpec（core#88）：user_id 租户约束恒为首个
+// 条件（空筛选不得退化成全表），其余条件按手拼时代同词序追加（EXPLAIN
+// QUERY PLAN 逐条一致由 queriespec_pilot_test.go 锁定）。
 func (r *FileCodeRepository) GetUserSharesWithFilter(ctx context.Context, userID uint, filter UserShareFilter) ([]*model.FileCode, int64, error) {
 	page, pageSize := normalizeUserSharePage(filter.Page, filter.PageSize)
 
-	now := time.Now()
-	q := r.db().WithContext(ctx).Model(&model.FileCode{}).Where("user_id = ?", userID)
+	spec := userShareQuerySpec(userID, filter)
 
+	query := r.db().WithContext(ctx).Model(&model.FileCode{})
+	if filter.Status == "deleted" {
+		// 只看已删除：解除 gorm 软删过滤（条件本体在 spec 里，词序不变）
+		query = query.Unscoped()
+	}
+	query = applySpecConds(query, spec)
+
+	return paginate[model.FileCode](query.Order("created_at DESC"), page, pageSize)
+}
+
+// userShareQuerySpec 构建用户分享列表的 WHERE 条件（core#88）。
+// user_id 恒为首个条件（租户基线约束，空筛选也在场）；状态分支与搜索
+// 条件按手拼时代同词序追加。
+func userShareQuerySpec(userID uint, filter UserShareFilter) *crud.Query {
+	spec := crud.NewQuery().Where("user_id", "=", userID)
+
+	now := time.Now()
 	switch filter.Status {
 	case "deleted":
-		// 只看已删除
-		q = q.Unscoped().Where("deleted_at IS NOT NULL")
+		// 只看已删除（Unscoped 由调用方在链上解除）
+		spec.Where("deleted_at", "IS NOT NULL")
 	case "active":
-		q = q.Where("(expired_at IS NULL OR expired_at > ?) AND (expired_count <> 0)", now)
+		// (expired_at IS NULL OR expired_at > now) AND expired_count <> 0：
+		// 嵌套组保持原词序（OR 组先落、AND 叶后落）
+		spec.WhereGroup(func(g *crud.Query) *crud.Query {
+			return g.WhereGroup(func(h *crud.Query) *crud.Query {
+				return h.Or("expired_at", "IS NULL").Or("expired_at", ">", now)
+			}).Where("expired_count", "<>", 0)
+		})
 	case "expired":
-		q = q.Where("((expired_at IS NOT NULL AND expired_at <= ?) OR expired_count = 0)", now)
+		// (expired_at IS NOT NULL AND expired_at <= now) OR expired_count = 0：
+		// 组渲染词序 = Where 先于 Or，与本分支原片段词序一致
+		spec.WhereGroup(func(g *crud.Query) *crud.Query {
+			return g.Where("expired_at", "IS NOT NULL").Where("expired_at", "<=", now).Or("expired_count", "=", 0)
+		})
 	case "text":
-		q = q.Where("(file_path IS NULL OR file_path = '') AND text IS NOT NULL AND text != ''")
+		// (file_path IS NULL OR file_path = '') AND text IS NOT NULL AND text != ''：
+		// 文件分享的 Text 存原始文件名，text/file 分类必须按 file_path 判定
+		spec.WhereGroup(func(g *crud.Query) *crud.Query {
+			return g.WhereGroup(func(h *crud.Query) *crud.Query {
+				return h.Or("file_path", "IS NULL").Or("file_path", "=", "")
+			}).Where("text", "IS NOT NULL").Where("text", "!=", "")
+		})
 	case "file":
-		q = q.Where("file_path IS NOT NULL AND file_path != ''")
+		spec.Where("file_path", "IS NOT NULL").Where("file_path", "!=", "")
 	case "viewed":
 		// 取件历史：至少被取件过一次
-		q = q.Where("viewer_at IS NOT NULL")
+		spec.Where("viewer_at", "IS NOT NULL")
 	}
 
 	if filter.Search != "" {
 		like, esc := LikeContains(filter.Search)
 		// 文件分享的原始文件名存 text（uuid_file_name 常为空），搜索需覆盖 text；
-		// pickup_code 落库后列表主码即 6 位取件码，按码搜索必须覆盖（2026-10-08）
-		q = q.Where("code LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? OR file_path LIKE ? "+esc,
+		// pickup_code 落库后列表主码即 6 位取件码，按码搜索必须覆盖（2026-10-08）。
+		// 多占位符 + ESCAPE 子句片段走 WhereRaw（值仍全部占位符参数化）。
+		spec.WhereRaw("code LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? OR file_path LIKE ? "+esc,
 			like, like, like, like, like)
 	}
-
-	return paginate[model.FileCode](q.Order("created_at DESC"), page, pageSize)
+	return spec
 }
 
 // BatchSoftDeleteByCodes 按 code 列表软删除（限定 userID 防止越权）

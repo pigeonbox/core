@@ -54,3 +54,25 @@
 **流程**：给补偿壳打 `docs/upstream-primitives.md` 同名登记（或直接在壳注释里
 指向上游 issue 号）；上游修复 tag 落地、下游钉版抬过修复点后，按本节流程回收
 并跑回归锁（2xx/非 2xx 两条，见 `app/notify/notify_dopush_test.go`）。
+
+## 7. `gormx/crud` QuerySpec（gormx v0.11.7 同模块）——**试点中（2026-11-09，core#88）**
+
+- **形状**：`crud.NewQuery()` 链式构建条件 → `Spec()` 物化为后端无关 QuerySpec →
+  `gormrepo.ApplyQuery` 翻译为 gorm 链。三个正合语义钉在上游用例：
+  `TestQuerySpec_FailClosed`（字段/操作符白名单外渲染恒假 1=0，绝不静默丢弃条件）、
+  `TestQuerySpec_WhereGroup_Parenthesized`（Or 组带括号，不击穿 AND 链）、
+  `TestQuerySpec_SnapshotIsolation`（Spec 快照隔离，构建器不是可变共享态）。
+- **对 core 四类手拼风险的覆盖**：空条件退化全表（基线约束进 spec + fail-closed 用例）、
+  占位符与参数漂移（条件即 (SQL 片段, args) 原子物）、用户输入字段注入面（字段白名单）、
+  同链并发追加（快照隔离）。
+- **试点三处（只换条件拼装，Repository 接口/返回类型/分页口径零变化）**：
+  `dao.ListWithFilter`（管理台文件列表）、`dao.GetUserSharesWithFilter`（用户分享列表）、
+  `dao.TransferLogRepository.List`（传输日志审计面）。落地见 `repo/db/dao/queriespec.go`
+  与三个 spec 构建函数；EXPLAIN QUERY PLAN 与替换前逐条一致由
+  `queriespec_pilot_test.go` 的 golden plan 锁（29 组合，含全字段叠加）。
+- **扩大面之前先看**：① 条件词序是 sqlite 索引分析的前提，重排必须显式重录 golden；
+  ② WhereGroup 的组内渲染是「Where 先于 Or」，`(A OR B) AND C` 形态要用嵌套组保序；
+  ③ 多占位符 + ESCAPE 子句的 LIKE 片段走 `WhereRaw`（值仍占位符参数化）；
+  ④ 排序/分页/Preload 不进 QuerySpec（本仓口径 paginate + core#8 Policy 不动）。
+- **推广判定**：试点稳定一个列车周期后，再按「条件数最多 + 有用户输入参与」逐簇
+  收编剩余手拼查询（42 文件不大爆炸）。

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/oekit/gormx/crud"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 )
@@ -195,65 +196,102 @@ func (r *FileCodeRepository) CountExpired(ctx context.Context) (int64, error) {
 
 // ListWithFilter 管理端文件列表：组合过滤 + 分页（此前仅 keyword 模糊匹配，
 // 无法按上传者/IP/类型/大小/时间/状态定位滥用资源）。
+//
+// 条件拼装已收编 gormx/crud QuerySpec（core#88）：字段/操作符白名单
+// fail-closed、Or 组自动带括号、Spec 快照隔离。条件词序与手拼时代逐条件
+// 同序（EXPLAIN QUERY PLAN 逐条一致由 queriespec_pilot_test.go 锁定）。
+// Unscoped（回收站开关）与健康过滤仍是 gorm 链级关注点——后者与
+// CountByHealth 共用 applyHealthFilter（同一口径，勿单改）。
 func (r *FileCodeRepository) ListWithFilter(ctx context.Context, q model.FileCodeQuery) ([]*model.FileCode, int64, error) {
 	page, pageSize := normalizePage(q.Page, q.PageSize)
+
+	spec := adminFileQuerySpec(q)
 
 	query := r.db().WithContext(ctx).Model(&model.FileCode{})
 
 	// 回收站（软删）筛选：only=仅已删 / all=含已删；默认仅存活（gorm 默认 scope）。
 	// Unscoped 同时解除软删过滤，后续条件在可见全集上叠加。
+	// 注意：Deleted 为空时 Unscoped 不生效 ⇒ 默认空筛选仍带软删约束
+	//（fail-closed，见 queriespec_pilot_test.go）；Deleted="all" 是显式全量语义。
 	switch q.Deleted {
-	case "only":
-		query = query.Unscoped().Where("file_codes.deleted_at IS NOT NULL")
-	case "all":
+	case "only", "all":
 		query = query.Unscoped()
 	}
 
-	if q.Keyword != "" {
-		like, esc := LikeContains(q.Keyword)
-		// pickup_code 同码搜索（管理端按对方口述的 6 位码定位分享）
-		// prefix/suffix 死列已退役（2026-10-26，库中恒空且无写入方）
-		query = query.Where("code LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? OR file_path LIKE ? "+esc,
-			like, like, like, like, like)
-	}
-	if q.UserID != nil {
-		query = query.Where("user_id = ?", *q.UserID)
-	}
-	if q.UploadType != "" {
-		query = query.Where("upload_type = ?", q.UploadType)
-	}
-	if q.OwnerIP != "" {
-		query = query.Where("owner_ip = ?", q.OwnerIP)
-	}
-	if q.Status != "" {
-		query = query.Where("status = ?", q.Status)
-	}
-	if q.MinSize != nil {
-		query = query.Where("size >= ?", *q.MinSize)
-	}
-	if q.MaxSize != nil {
-		query = query.Where("size <= ?", *q.MaxSize)
-	}
-	if q.CreatedAfter != nil {
-		query = query.Where("created_at >= ?", *q.CreatedAfter)
-	}
-	if q.CreatedBefore != nil {
-		query = query.Where("created_at <= ?", *q.CreatedBefore)
-	}
-	if q.Expired != nil {
-		now := time.Now()
-		if *q.Expired {
-			// 注意外层括号：缺了会让 OR 逃逸出 AND 链，绕过 status/ip 等全部过滤
-			query = query.Where("((expired_at IS NOT NULL AND expired_at < ?) OR expired_count = 0)", now)
-		} else {
-			query = query.Where("((expired_at IS NULL OR expired_at >= ?) AND expired_count <> 0)", now)
-		}
-	}
+	query = applySpecConds(query, spec)
+
 	if q.Health != "" {
 		query = applyHealthFilter(query, q.Health)
 	}
 
 	return paginate[model.FileCode](query.Order("created_at DESC"), page, pageSize)
+}
+
+// adminFileQuerySpec 构建管理端文件列表的 WHERE 条件（core#88）。
+//
+// 词序即执行语义：与手拼时代逐条件同序（deleted → keyword → user_id →
+// upload_type → owner_ip → status → size 区间 → created 区间 → expired），
+// sqlite 按该序做索引分析 ⇒ 不可随意重排。
+func adminFileQuerySpec(q model.FileCodeQuery) *crud.Query {
+	spec := crud.NewQuery()
+
+	// 回收站筛选：只有条件本体进 spec；Unscoped 是 gorm 链级语义，调用方处理。
+	if q.Deleted == "only" {
+		spec.Where("file_codes.deleted_at", "IS NOT NULL")
+	}
+
+	if q.Keyword != "" {
+		like, esc := LikeContains(q.Keyword)
+		// pickup_code 同码搜索（管理端按对方口述的 6 位码定位分享）
+		// prefix/suffix 死列已退役（2026-10-26，库中恒空且无写入方）。
+		// 多占位符 + ESCAPE 子句片段走 WhereRaw（值仍全部占位符参数化）。
+		spec.WhereRaw("code LIKE ? OR uuid_file_name LIKE ? OR text LIKE ? OR pickup_code LIKE ? OR file_path LIKE ? "+esc,
+			like, like, like, like, like)
+	}
+	if q.UserID != nil {
+		spec.Where("user_id", "=", *q.UserID)
+	}
+	if q.UploadType != "" {
+		spec.Where("upload_type", "=", q.UploadType)
+	}
+	if q.OwnerIP != "" {
+		spec.Where("owner_ip", "=", q.OwnerIP)
+	}
+	if q.Status != "" {
+		spec.Where("status", "=", q.Status)
+	}
+	if q.MinSize != nil {
+		spec.Where("size", ">=", *q.MinSize)
+	}
+	if q.MaxSize != nil {
+		spec.Where("size", "<=", *q.MaxSize)
+	}
+	if q.CreatedAfter != nil {
+		spec.Where("created_at", ">=", *q.CreatedAfter)
+	}
+	if q.CreatedBefore != nil {
+		spec.Where("created_at", "<=", *q.CreatedBefore)
+	}
+	if q.Expired != nil {
+		now := time.Now()
+		if *q.Expired {
+			// (A AND B) OR C：WhereGroup 组内 Or 渲染为带括号整体，OR 不击穿
+			// AND 链（手拼时代靠手写括号，回归见 TestListWithFilter_ExpiredOrEscape）。
+			// 组渲染词序 = Where 先于 Or，与本分支原片段词序一致。
+			spec.WhereGroup(func(g *crud.Query) *crud.Query {
+				return g.Where("expired_at", "IS NOT NULL").Where("expired_at", "<", now).Or("expired_count", "=", 0)
+			})
+		} else {
+			// (A OR B) AND C：单层组的渲染是 Where 先于 Or，直接写会把 AND 叶
+			// 提到 OR 组前面 ⇒ 用嵌套组保持原词序（OR 组先落、AND 叶后落）。
+			spec.WhereGroup(func(g *crud.Query) *crud.Query {
+				return g.WhereGroup(func(h *crud.Query) *crud.Query {
+					return h.Or("expired_at", "IS NULL").Or("expired_at", ">=", now)
+				}).Where("expired_count", "<>", 0)
+			})
+		}
+	}
+	return spec
 }
 
 // applyHealthFilter 文件健康洞察过滤（与 CountByHealth 同一口径，勿单独改动）：
