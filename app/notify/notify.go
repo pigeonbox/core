@@ -478,28 +478,12 @@ func (s *Service) SetWebhookURL(url string) {
 
 // doPush 执行一次外部推送 POST（fire-and-forget 语义：2xx = 送达，响应体不关心）。
 //
-// ⚠️ 为什么不直接 httpjson.DoJSON(ctx, client, req, nil)：上游 DoJSON 无条件
-// json.Unmarshal(raw, out)——out==nil 时**恒**报 "响应解析失败: json: Unmarshal(nil)"
-// （成功推送被误报失败；webhook 渠道自 2026-10 起每次成功送达都记假失败日志，
-// 真失败反而淹没其中）。且推送响应体不保证是 JSON（webhook 端点常回纯文本/空）。
-//
-// 这里以 json.RawMessage 接住响应体，仅把 **2xx 后的响应体解码失败**视为送达；
-// 真失败 = 非 2xx（httpjson.StatusError）或传输层/读响应错误。
-// 上游缺口（DoJSON 对 out==nil 应跳过解码）见 oekit/pkg issue（PR 注明）。
+// out 传 nil：pkg v0.38.0 起上游 DoJSON 对 out==nil 跳过解码（oekit/pkg#158），
+// 此前会恒报「响应解析失败: json: Unmarshal(nil)」把成功推送误报为失败 ⇒
+// 当时不得不包一层「RawMessage 中转 + SyntaxError 判成功」的补偿壳（真失败
+// = 非 2xx，httpjson.StatusError 或传输层错误）。补偿壳回收（core#85）。
 func doPush(ctx context.Context, req httpjson.Request) error {
-	err := httpjson.DoJSON(ctx, externalHTTPClient, req, &json.RawMessage{})
-	if err == nil {
-		return nil
-	}
-	var se *httpjson.StatusError
-	if errors.As(err, &se) {
-		return err // 非 2xx：真失败
-	}
-	var syn *json.SyntaxError
-	if errors.As(err, &syn) {
-		return nil // 2xx 已送达，仅响应体非 JSON/为空——与推送语义无关
-	}
-	return err
+	return httpjson.DoJSON(ctx, externalHTTPClient, req, nil)
 }
 
 // webhookPayload Webhook POST 的 JSON 载荷
