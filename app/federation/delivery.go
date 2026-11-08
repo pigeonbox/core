@@ -39,6 +39,7 @@ import (
 
 	"github.com/oekit/concurrency/async"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/outbound"
 )
 
 const (
@@ -195,14 +196,11 @@ type DeliveryClient struct {
 //
 // ⚠️ **不跟随重定向**：对端回一个 302 到内网地址就能借本站的出站面绕过
 // SSRF 判定（出站 URL 虽受控，但重定向目标不受控）⇒ 3xx 一律当失败。
+// （该守卫与「不设客户端级超时」已随 core#87 步骤 1 收编，迁入 pkg/outbound
+// 的 TargetFederationDelivery 策略；行为锁见 outbound 包的
+// TestFederationDeliveryPolicy / TestTimeouts。）
 func NewDeliveryClient() *DeliveryClient {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	return &DeliveryClient{HTTPClient: &http.Client{
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}}
+	return &DeliveryClient{HTTPClient: outbound.New(outbound.TargetFederationDelivery)}
 }
 
 func (c *DeliveryClient) httpClient() *http.Client {

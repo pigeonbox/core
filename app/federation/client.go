@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/httpjson"
+	"github.com/pigeonbox/core/pkg/outbound"
 )
 
 // 与 p2p 仓（github.com/pigeonbox/p2p）v1 API 的通讯客户端。
@@ -40,8 +41,9 @@ type registryClient struct {
 
 func newRegistryClient(base string) *registryClient {
 	return &registryClient{
-		base:  base,
-		http:  &http.Client{Timeout: 5 * time.Second},
+		base: base,
+		// 5s 原值随收编迁入注册表 TargetFederation 策略（core#87 步骤 1）。
+		http:  outbound.New(outbound.TargetFederation),
 		nonce: randomNonce,
 	}
 }

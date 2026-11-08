@@ -23,30 +23,19 @@ import (
 	"github.com/oekit/pkg/stringx"
 	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"sync/atomic"
 )
 
-// externalHTTPClient 外部推送共用客户端（webhook / telegram / bark；5s 超时；
-// 推送失败静默记日志不重试）。
-// 重定向防护（2026-10-05 审计 P3）：webhook URL 仅管理员可配，但保存期校验
-// 会被 302 绕过——目标服务器一跳转即可指向私网。CheckRedirect 逐跳复用
-// security.ValidateEndpointURL（respect security.ssrf.allow_private_networks），
-// 私网目标且未放行时中止。
-var externalHTTPClient = &http.Client{
-	Timeout: 5 * time.Second,
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return fmt.Errorf("stopped after 5 redirects")
-		}
-		if err := security.ValidateEndpointURL(req.URL.String()); err != nil {
-			return fmt.Errorf("webhook 重定向目标被拒绝: %w", err)
-		}
-		return nil
-	},
-}
+// externalHTTPClient 外部推送共用客户端（webhook / telegram / bark；推送失败
+// 静默记日志不重试）——构造来源收编出站统一注册表（core#87 步骤 1）：5s 超时
+// 与 SSRF 重定向守卫（2026-10-05 审计 P3：保存期校验会被 302 绕过，CheckRedirect
+// 逐跳复用 security.ValidateEndpointURL）随收编迁入 pkg/outbound 的 TargetNotify
+// 策略，语义逐字保留，wire 零变化；出站观测改由注册表统一打点。
+var externalHTTPClient = outbound.New(outbound.TargetNotify)
 
 // 错误
 var (

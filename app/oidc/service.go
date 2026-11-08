@@ -25,6 +25,7 @@ import (
 	"github.com/oekit/pkg/cache"
 	"github.com/oekit/pkg/httpjson"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -83,8 +84,10 @@ func NewService(gormDB *gorm.DB, cfg Config) *Service {
 		cfg.FrontendCallback = "/#/oidc/callback"
 	}
 	s := &Service{
-		cfg:      cfg,
-		client:   &http.Client{Timeout: 15 * time.Second},
+		cfg: cfg,
+		// 15s＝注册表统一超时基准（core#87 步骤 1）；discovery 的 SingleValue
+		// 缓存（TTL/单飞/stale-if-error）不受影响。
+		client:   outbound.New(outbound.TargetOIDC),
 		userRepo: dao.NewUserRepository(gormDB),
 	}
 	// Source 返回 discovery 值类型；本形态恒有真值（端点缺失在 fetch 内判错
