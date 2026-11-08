@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,7 +13,7 @@ import (
 )
 
 // probeTimeout 外部进程单次调用上限（2026-10-08 加固）：恶意/损坏媒体文件可让
-// ffmpeg/ffprobe 解析挂死——此前 getVideoInfo 用裸 exec.Command 无 ctx，两个
+// ffmpeg/ffprobe 解析挂死——此前 getVideoInfo 起子进程不带 ctx，两个
 // worker 可被无限期占用。帧提取同理封顶。
 const probeTimeout = 30 * time.Second
 
@@ -68,11 +67,8 @@ func (g *VideoGenerator) SupportedTypes() []string {
 
 // GenerateThumbnail 生成视频缩略图
 func (g *VideoGenerator) GenerateThumbnail(ctx context.Context, filePath string, targetWidth, targetHeight int) (string, error) {
-	// 检查ffmpeg是否存在
-	ffmpegPath := g.config.FFmpegPath
-	if ffmpegPath == "" {
-		ffmpegPath = "ffmpeg"
-	}
+	// ffmpeg 路径推导收口 probePaths（与 ffprobe 同一份逻辑，core#84）
+	ffmpegPath, _ := probePaths(g.config)
 
 	// 构建缩略图路径
 	fileName := filepath.Base(filePath)
@@ -96,16 +92,14 @@ func (g *VideoGenerator) GenerateThumbnail(ctx context.Context, filePath string,
 		thumbnailPath,
 	}
 
-	// 上限封顶：调用方 ctx 无 deadline 时补 30s（恶意/损坏文件可挂死解析）
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, probeTimeout)
-		defer cancel()
-	}
-	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
-	output, err := cmd.CombinedOutput()
+	// 上限封顶：调用方 ctx 无 deadline 时补 30s（恶意/损坏文件可挂死解析）；
+	// 环境 allowlist + 有界输出捕获统一走 runProbeOutput（core#84）：
+	// ffmpeg 继承全量环境 = 凭据泄漏面，CombinedOutput 无上限 = stderr 刷屏吃满内存
+	ctx, cancel := probeCtx(ctx)
+	defer cancel()
+	_, stderrTail, err := runProbeOutput(ctx, ffmpegPath, args...)
 	if err != nil {
-		return "", fmt.Errorf("ffmpeg failed: %w, output: %s", err, string(output))
+		return "", fmt.Errorf("ffmpeg failed: %w, output: %s", err, truncateErr(stderrTail))
 	}
 
 	return thumbnailPath, nil
@@ -120,44 +114,36 @@ type VideoInfo struct {
 
 // getVideoInfo 获取视频信息（ffprobe 调用全部带 30s 超时）
 func (g *VideoGenerator) getVideoInfo(ctx context.Context, filePath string) (*VideoInfo, error) {
-	ffprobePath := "ffprobe"
-	if idx := strings.LastIndex(g.config.FFmpegPath, "ffmpeg"); idx > 0 {
-		ffprobePath = g.config.FFmpegPath[:idx] + "ffprobe"
-	}
+	_, ffprobePath := probePaths(g.config)
 
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, probeTimeout)
-		defer cancel()
-	}
+	ctx, cancel := probeCtx(ctx)
+	defer cancel()
 
-	// 获取视频时长
-	durationCmd := exec.CommandContext(ctx, ffprobePath,
+	// 获取视频时长（stdout 是数据要单独取；stderr 只进诊断）
+	durationTail, _, err := runProbeOutput(ctx, ffprobePath,
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
 		filePath,
 	)
-	durationOutput, err := durationCmd.Output()
 	if err != nil {
 		return nil, err
 	}
-	duration := convert.Str2Float64(strings.TrimSpace(string(durationOutput)), 0)
+	duration := convert.Str2Float64(strings.TrimSpace(durationTail), 0)
 
 	// 获取视频分辨率
-	resolutionCmd := exec.CommandContext(ctx, ffprobePath,
+	resolutionTail, _, err := runProbeOutput(ctx, ffprobePath,
 		"-v", "error",
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height",
 		"-of", "csv=s=x:p=0",
 		filePath,
 	)
-	resolutionOutput, err := resolutionCmd.Output()
 	if err != nil {
 		return nil, err
 	}
 
-	parts := strings.Split(strings.TrimSpace(string(resolutionOutput)), "x")
+	parts := strings.Split(strings.TrimSpace(resolutionTail), "x")
 	var width, height int
 	if len(parts) == 2 {
 		width, _ = strconv.Atoi(parts[0])
