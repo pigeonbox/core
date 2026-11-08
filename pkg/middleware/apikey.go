@@ -72,21 +72,36 @@ func extractAPIKey(c *app.RequestContext) (string, bool) {
 // 多实例各自节流即可（目的仅是降写放大，非精确统计）。
 const touchInterval = time.Minute
 
-// touchLimiters 每把 Key 一个 1次/touchInterval 令牌桶（burst=1）：首请求放行
-// 落库，间隔内节流——语义与历史 sync.Map+时间戳实现逐位一致；空闲回收由
-// KeyedLimiterOf 托管（WithIdleTTL），不再自写 GC 协程（2026-10-18 起 oekit
-// concurrency v0.9.0 KeyedLimiterOf 具备 WithIdleTTL/WithMaxEntries）。
-func newTouchLimiters() *ratelimit.KeyedLimiterOf[uint] {
-	return ratelimit.NewKeyedLimiterOf[uint](
-		func() ratelimit.Limiter { return ratelimit.NewTokenBucket(rate.Every(touchInterval), 1) },
-		ratelimit.WithIdleTTL[uint](touchInterval),
-	)
+// touchMaxEntries Throttle 的 key 条目上限。
+// 活跃 API Key 基数远小于该值（管理台一页 20 条），上限只为防无界增长：
+// 被淘汰的 key 下一次调用会重新放行（fail-open，最坏多写一次，不丢写）。
+const touchMaxEntries = 4096
+
+// touchThrottle 每把 Key 一个写合并窗口：首个请求真正落库，窗口内静默抑制。
+//
+// 2026-11-08 起由 ratelimit.Throttle[K] 承担（此前是 KeyedLimiterOf 令牌桶 +
+// 调用方两步走：先 shouldTouchLastUsed 拿 bool，再去自己写）。换原语换来的不是
+// 性能，而是两笔语义：
+//   - **写失败自动撤销窗口**：旧实现里 Allow 已经把窗口消费掉，DB 抖一次
+//     （SQLite busy / 网络抖动）就让 last_used_at 整整一个窗口得不到更新，无自愈；
+//     Throttle 的 fn 返回错误即回滚戳，下一个请求立刻补写。
+//   - **Suppressed() 观测口径**：能回答「窗口内合并抑制了几次」；令牌桶的
+//     Allow=false 只说「这次没通过」，分不清「被别的请求合并了」与「超出配额」。
+func newTouchThrottle() *ratelimit.Throttle[uint] {
+	return ratelimit.NewThrottle[uint](touchInterval,
+		ratelimit.WithThrottleMaxEntries(touchMaxEntries))
 }
 
-var touchLimiters = newTouchLimiters()
+var touchThrottle = newTouchThrottle()
 
-func shouldTouchLastUsed(keyID uint) bool {
-	return touchLimiters.Allow(keyID)
+// touchLastUsed 在节流窗口内首次调用时把 last_used_at 落库。
+// 返回值只服务观测与单测（ran=本次是否真的写了），调用方无需处置：
+// 被抑制不是失败，写失败也只是「这次没写」——窗口已回滚，下个请求会重试。
+// 前置条件：apiKeyStore 已装配（validateAPIKey 在其为 nil 时已 fail-closed）。
+func touchLastUsed(ctx context.Context, keyID uint, ip string) (ran bool, err error) {
+	return touchThrottle.Do(ctx, keyID, func(ctx context.Context) error {
+		return apiKeyStore.TouchLastUsed(ctx, keyID, ip)
+	})
 }
 
 // ===== Per-Key 独立限流（波次3：防单把 Key 被盗后高速滥用）=====
@@ -311,9 +326,9 @@ func validateAPIKey(ctx context.Context, c *app.RequestContext, plainKey string)
 		return ctx, errPerKeyRateLimited
 	}
 
-	if shouldTouchLastUsed(principal.KeyID) {
-		_ = apiKeyStore.TouchLastUsed(ctx, principal.KeyID, ClientIP(c))
-	}
+	// 触碰节流：窗口内只落库一次；写失败自动撤销窗口，下个请求立即补写。
+	// 结果刻意丢弃——它不影响认证结论，写不进去也不该让请求失败。
+	_, _ = touchLastUsed(ctx, principal.KeyID, ClientIP(c))
 
 	c.Set("user_id", principal.UserID)
 	c.Set("username", principal.Username)

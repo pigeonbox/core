@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/cloudwego/hertz/pkg/common/ut"
 	"github.com/glebarez/sqlite"
+	"github.com/oekit/concurrency/async"
 	"github.com/oekit/concurrency/ratelimit"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
@@ -18,7 +20,6 @@ import (
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/time/rate"
 	"gorm.io/gorm"
 
 	"github.com/oekit/pkg/encoding"
@@ -68,7 +69,7 @@ func newAPIKeyTestEnv(t *testing.T) *gorm.DB {
 	// 重置全局锁定器为纯内存实例 + 清空触碰节流/单Key限流表，测试间隔离（同包直取）
 	InitDefaultLockout(nil)
 	t.Cleanup(func() { InitDefaultLockout(nil) })
-	touchLimiters = newTouchLimiters()
+	touchThrottle = newTouchThrottle()
 	perKeyLimiters = newPerKeyLimiters()
 	return g
 }
@@ -310,27 +311,113 @@ func TestOptionalAPIKey_LockoutAfterMaxFailures(t *testing.T) {
 	assert.Equal(t, 429, code)
 }
 
-// --- TouchLastUsed 节流 ---
+// --- TouchLastUsed 写合并节流（ratelimit.Throttle[K]）---
 
-func TestShouldTouchLastUsed_Throttle(t *testing.T) {
-	// 假时钟确定性驱动（concurrency v0.12.0 TokenBucket WithTokenClock），
-	// KeyedLimiterOf 自身无时钟注入，经工厂注入 TokenBucket 时钟等效达成
-	cur := time.Now()
-	clock := func() time.Time { return cur }
-	orig := touchLimiters
-	touchLimiters = ratelimit.NewKeyedLimiterOf[uint](
-		func() ratelimit.Limiter {
-			return ratelimit.NewTokenBucket(rate.Every(touchInterval), 1, ratelimit.WithTokenClock(clock))
-		},
-		ratelimit.WithIdleTTL[uint](time.Minute),
+// countingKeyStore 只关心 TouchLastUsed 的桩：能注入失败/panic，用来验证窗口回滚。
+// FindActiveByHash 走不生效路径（本组用例直接调 touchLastUsed，不经认证链）。
+type countingKeyStore struct {
+	writes int
+	fail   error
+	boom   bool
+}
+
+func (s *countingKeyStore) FindActiveByHash(context.Context, string) (*APIKeyPrincipal, error) {
+	return nil, errInvalidAPIKey
+}
+
+func (s *countingKeyStore) TouchLastUsed(context.Context, uint, string) error {
+	s.writes++
+	if s.boom {
+		panic("touch boom")
+	}
+	return s.fail
+}
+
+// withFakeThrottle 用假时钟替换全局节流器与持久化桩，测试结束还原。
+// 时钟可注入是换用 Throttle[K] 的直接收益：窗口边界可确定性断言，不必再造
+// 令牌桶 + 拨令牌的组合动作。
+func withFakeThrottle(t *testing.T, cur *time.Time, store APIKeyStore) *ratelimit.Throttle[uint] {
+	t.Helper()
+	origThrottle, origStore := touchThrottle, apiKeyStore
+	touchThrottle = ratelimit.NewThrottle[uint](touchInterval,
+		ratelimit.WithThrottleClock(func() time.Time { return *cur }),
+		ratelimit.WithThrottleMaxEntries(touchMaxEntries),
 	)
-	t.Cleanup(func() { touchLimiters = orig })
+	apiKeyStore = store
+	t.Cleanup(func() { touchThrottle, apiKeyStore = origThrottle, origStore })
+	return touchThrottle
+}
 
-	assert.True(t, shouldTouchLastUsed(400003), "首次必须写")
-	assert.False(t, shouldTouchLastUsed(400003), "间隔内不重复写")
+// 判据 1/3：窗口内合并，且抑制次数可观测。
+func TestTouchLastUsed_ThrottleWindow(t *testing.T) {
+	cur := time.Now()
+	store := &countingKeyStore{}
+	th := withFakeThrottle(t, &cur, store)
+	ctx := context.Background()
+
+	ran, err := touchLastUsed(ctx, 400003, "203.0.113.7")
+	require.NoError(t, err)
+	assert.True(t, ran, "首次必须写")
+	assert.Equal(t, 1, store.writes)
+	assert.Equal(t, uint64(0), th.Suppressed())
+
+	ran, err = touchLastUsed(ctx, 400003, "203.0.113.7")
+	require.NoError(t, err)
+	assert.False(t, ran, "窗口内不得重复写")
+	assert.Equal(t, 1, store.writes, "窗口内只能落库一次")
+	assert.Equal(t, uint64(1), th.Suppressed(), "被合并的调用必须可观测（令牌桶给不出这一笔）")
+
 	cur = cur.Add(touchInterval + time.Second)
-	assert.True(t, shouldTouchLastUsed(400003), "超间隔再写")
-	assert.True(t, shouldTouchLastUsed(400004), "不同 Key 互不影响")
+	ran, err = touchLastUsed(ctx, 400003, "203.0.113.7")
+	require.NoError(t, err)
+	assert.True(t, ran, "超窗口再写")
+
+	ran, _ = touchLastUsed(ctx, 400004, "203.0.113.7")
+	assert.True(t, ran, "不同 Key 互不影响")
+}
+
+// 判据 2：写失败撤销窗口，下一个请求立即补写（自愈）。
+func TestTouchLastUsed_WriteFailureRetriesImmediately(t *testing.T) {
+	cur := time.Now()
+	store := &countingKeyStore{fail: errors.New("sqlite: database is locked")}
+	withFakeThrottle(t, &cur, store)
+	ctx := context.Background()
+
+	ran, err := touchLastUsed(ctx, 400005, "203.0.113.7")
+	assert.True(t, ran)
+	require.Error(t, err, "写失败必须如实返回给观测面")
+	assert.Equal(t, 1, store.writes)
+
+	// 旧实现（KeyedLimiterOf.Allow 先消费窗口）在这里返回 false ⇒ last_used_at
+	// 整整一个窗口不更新，没有任何自愈路径。这就是本条收编的主要动机。
+	ran, _ = touchLastUsed(ctx, 400005, "203.0.113.7")
+	assert.True(t, ran, "写失败要撤销窗口，下一个请求立即补写")
+	assert.Equal(t, 2, store.writes)
+
+	store.fail = nil
+	_, err = touchLastUsed(ctx, 400005, "203.0.113.7")
+	require.NoError(t, err, "这次写入成功")
+	ran, _ = touchLastUsed(ctx, 400005, "203.0.113.7")
+	assert.False(t, ran, "写成功之后窗口才真正被消费")
+	assert.Equal(t, 3, store.writes)
+}
+
+// 判据 3：fn panic 同样撤销窗口，且收编为 *async.PanicError（不打死认证链路）。
+func TestTouchLastUsed_PanicRollsBackStamp(t *testing.T) {
+	cur := time.Now()
+	store := &countingKeyStore{boom: true}
+	withFakeThrottle(t, &cur, store)
+	ctx := context.Background()
+
+	ran, err := touchLastUsed(ctx, 400006, "203.0.113.7")
+	assert.True(t, ran)
+	require.Error(t, err)
+	var pe *async.PanicError
+	assert.ErrorAs(t, err, &pe, "panic 必须收编成 *async.PanicError")
+
+	ran, _ = touchLastUsed(ctx, 400006, "203.0.113.7")
+	assert.True(t, ran, "panic 与返回 error 同等对待：撤销窗口")
+	assert.Equal(t, 2, store.writes)
 }
 
 func TestOptionalAPIKey_TouchLastUsedThrottled(t *testing.T) {
