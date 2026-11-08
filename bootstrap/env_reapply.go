@@ -107,8 +107,16 @@ func findConfField(structVal reflect.Value, tag string) reflect.Value {
 }
 
 // setConfLeaf 把 env 字符串按叶字段类型赋值（指针叶自动分配元素；
-// 字符串切片叶按 CSV 拆分——envBindings 里的列表键全部走 splitCSV 语义）。
+// 字符串切片叶按 CSV 拆分——envBindings 里的列表键全部走 splitCSV 语义；
+// *secretx.SecureString 持有器叶整只替换——core#81，见 conf.SetSecretStringLeaf）。
 func setConfLeaf(field reflect.Value, raw string) error {
+	// SecureString 持有器叶子（core#81）：整只替换持有器（env 恒覆盖 = env 值
+	// 生效）。放在解引用循环之前——string 分派对 struct 叶子不识别，没有这个
+	// 扩展点 PB_OIDC_CLIENT_SECRET 的 env 恒覆盖会被静默跳过
+	// （"unsupported kind struct"，单键失败不阻断 ⇒ 无声回退 DB 值）。
+	if conf.SetSecretStringLeaf(field, raw) {
+		return nil
+	}
 	t := field.Type()
 	for t.Kind() == reflect.Pointer {
 		if field.IsNil() {

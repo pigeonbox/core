@@ -27,6 +27,7 @@ require (
 )
 
 require (
+	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -57,7 +58,6 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/glebarez/go-sqlite v1.23.0 // indirect
 	github.com/go-sql-driver/mysql v1.10.1 // indirect
-	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

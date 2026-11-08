@@ -8,8 +8,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pigeonbox/core/conf"
+	mapstructure "github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
+
+	"github.com/pigeonbox/core/conf"
 )
 
 // InitConfig 初始化配置。
@@ -48,7 +50,20 @@ func InitConfig(configPath string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	// 解码钩子（core#81）：SecretStringDecodeHook 让 string 源直接填进
+	// *secretx.SecureString 字段（如 security.oidc.client_secret）——明文自解码
+	// 起不在配置结构体驻留。
+	// ⚠️ viper.DecodeHook 选项会**整体覆盖**默认钩子组合（v1.21
+	// defaultDecoderConfig 先设默认、后应用 opts）⇒ 必须把 viper 默认
+	// （duration / 逗号切片）一并组合，否则既有字段解码行为被静默改变。
+	// viper 的逗号切片钩子是私有 stringToWeakSliceHookFunc（v2 的
+	// StringToSliceHookFunc 收紧了「目标须为 []string」）——conf 无非 []string
+	// 切片字段，公开版等价；bootstrap/config_secret_test.go 有组合回归锁。
+	if err := v.Unmarshal(&cfg, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+		conf.SecretStringDecodeHook(),
+	))); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/oekit/pkg/secretx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -86,7 +87,7 @@ func TestOIDC_FullFlow(t *testing.T) {
 		Enabled:      true,
 		Issuer:       srv.URL,
 		ClientID:     "client-1",
-		ClientSecret: "secret-1",
+		ClientSecret: secretx.NewSecureString("secret-1"),
 	})
 
 	// 1. 登录 URL：含授权端点 + HMAC state（绑定浏览器 nonce）
@@ -136,7 +137,7 @@ func TestOIDC_EmailMatchBindsSub(t *testing.T) {
 	oidcDB := newOIDCDB(t)
 	auth.SetJWTSecret("oidc-test-secret-0123456789abcdef")
 	srv, _ := fakeIdP(t)
-	svc := NewService(oidcDB, Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: "s"})
+	svc := NewService(oidcDB, Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: secretx.NewSecureString("s")})
 
 	// 先以密码注册同邮箱用户
 	existing := &model.User{
@@ -162,7 +163,7 @@ func TestOIDC_BannedUserRejected(t *testing.T) {
 	oidcDB := newOIDCDB(t)
 	auth.SetJWTSecret("oidc-test-secret-0123456789abcdef")
 	srv, _ := fakeIdP(t)
-	svc := NewService(oidcDB, Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: "s"})
+	svc := NewService(oidcDB, Config{Enabled: true, Issuer: srv.URL, ClientID: "c", ClientSecret: secretx.NewSecureString("s")})
 
 	// 已有 sub 绑定但被封禁的账号
 	require.NoError(t, oidcDB.Create(&model.User{
