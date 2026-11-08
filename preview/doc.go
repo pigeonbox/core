@@ -2,9 +2,9 @@
 //
 // # 外部转码驱动约束（core#71 的临时判定 D3）
 //
-// 视频/音频预览依赖外部 ffmpeg/ffprobe，经 exec.CommandContext 起子进程。
-// ctx 到期（超时/取消）时，Go 的标准库行为是**只杀直接子进程**，不会遍历
-// 进程树 ⇒
+// 视频/音频预览依赖外部 ffmpeg/ffprobe，经 newProbeCmd（包装
+// exec.CommandContext）起子进程。ctx 到期（超时/取消）时，Go 的标准库行为
+// 是**只杀直接子进程**，不会遍历进程树 ⇒
 //
 //	接入的转码驱动必须满足：**不得把真实工作进程守护化（detach 到后台）**。
 //
@@ -17,6 +17,11 @@
 // oekit/pkg#284 提给上游收编，core 不另起一份手搓实现——同一套语义两处维护，
 // 上游落地后还要迁移一次，且手搓版必然只覆盖单平台。原语落地后本包直接调用，
 // 本段约束随之删除。
+//
+// 另一条子进程约束：**子进程环境 = allowlist（core#84）**——包内一切 exec
+// 统一经 newProbeCmd 注入 childEnv()（deny-by-default，凭据变量不进子进程），
+// 输出统一经 runProbeOutput 有界捕获（尾部 probeOutputCap 字节，排水不封顶
+// ⇒ 子进程不阻塞在 write）。接入的转码驱动不得假定自己能读到宿主全量环境。
 //
 // 关联：core#71（D1 直接依赖 oagentkit／D2 提给 oekit／D3 声明约束，选了 D2 +
 // 过渡 D3）、oekit/pkg#284（上游收编提案与本段验收判据）。
