@@ -76,7 +76,7 @@ func explainPlans(t *testing.T, g *gorm.DB, r sqlRec) []string {
 	t.Helper()
 	rows, err := g.Raw("EXPLAIN QUERY PLAN "+r.SQL, r.Vars...).Rows()
 	require.NoError(t, err, "explain: %s", r.SQL)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // errcheck：Explain 后不消费 Close 错误（行数极少、只读连接）
 	var out []string
 	for rows.Next() {
 		var id, parent, notused int
