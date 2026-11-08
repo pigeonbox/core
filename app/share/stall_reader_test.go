@@ -110,13 +110,21 @@ func TestStallGuardPassThrough(t *testing.T) {
 	}
 }
 
-// TestStallGuardSlowButFlowingNotKilled 慢速持续流不被误杀：每 30ms 一滴、
-// 总时长 180ms 远超 stall=80ms，但字节从未断流 ⇒ 必须全部读到。
-// ⚠ 变异负对照：去掉泵里的 timer.Reset 续期 ⇒ 80ms 处看门狗误杀 ⇒ 本用例转红。
+// TestStallGuardSlowButFlowingNotKilled 慢速持续流不被误杀：每滴间隔远小于
+// stall，但**总时长**远超 stall，字节从未断流 ⇒ 必须全部读到。
+//
+// ⚠ 变异负对照：去掉泵里的 timer.Reset 续期 ⇒ stall 处看门狗误杀 ⇒ 本用例转红。
+//
+// 时间预算为什么是这三个数：本用例量的是「有字节流动就不该杀」，不是「这台机器
+// 调度得够快」。旧参数（间隔 30ms / stall 80ms / 总 180ms）只留 50ms 余量，全量
+// 并行跑（>=NumCPU 个测试包同时跑）时一滴被调度拖过 80ms 就假红——本机全量测试
+// 已实际踩到，而单跑/连跑 5 次都绿，正是时间预算型 flaky 的典型画像。现在每滴
+// 10ms 对 stall 150ms 留 15 倍余量（调度拖 140ms 才误判），同时总时长 300ms 仍是
+// stall 的 2 倍——「总时长超 stall 却照常读完」这个语义一字未变，变异负对照照样转红。
 func TestStallGuardSlowButFlowingNotKilled(t *testing.T) {
-	const n = 6
-	drip := newDripStream(n, 30*time.Millisecond)
-	rc := newStallGuard(drip, 80*time.Millisecond)
+	const n = 30
+	drip := newDripStream(n, 10*time.Millisecond)
+	rc := newStallGuard(drip, 150*time.Millisecond)
 	defer func() { _ = rc.Close() }()
 	got, err := io.ReadAll(rc)
 	if err != nil {
