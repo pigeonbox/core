@@ -38,3 +38,19 @@
 
 - **形状**：`fanout.Option` → `MapOption` 更名。
 - **当前判定：无影响。** core 零 `fanout` 使用（`grep fanout` 为空）。备案防未来按旧名误用后编译失败时翻不到原因。**已核实（2026-11-08）**。
+
+## 6. 待回收：上游已修的下游补偿壳（登记制，core#85 起生效）
+
+**形状**：因为上游原语缺口而打的下游绕过（补偿壳），上游修复发布后未拆。
+风险：补偿壳带注释「因为上游有 bug」，但**没人跟踪上游修完的通知**⇒ 修复已进
+当前钉版，壳还活着（永假分支、多余分配，且掩盖上游语义变化）。
+
+**登记条目**（新发现一例登记一例，回收后划掉）：
+
+- ~~`app/notify/notify.go doPush`：RawMessage 中转 + SyntaxError 判成功~~
+  —— 已回收（2026-11-09，core#85）。上游缺口 oekit/pkg#158 修复已进当前钉版
+  （pkg v0.38.0 的 `httpjson.decodeOK` 对 out==nil 跳过解码）。
+
+**流程**：给补偿壳打 `docs/upstream-primitives.md` 同名登记（或直接在壳注释里
+指向上游 issue 号）；上游修复 tag 落地、下游钉版抬过修复点后，按本节流程回收
+并跑回归锁（2xx/非 2xx 两条，见 `app/notify/notify_dopush_test.go`）。

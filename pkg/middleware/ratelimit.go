@@ -4,19 +4,21 @@
 // 实现：默认进程内 token bucket——per-IP 桶由 oekit/concurrency/ratelimit 的
 // KeyedLimiter 托管（工厂造桶 + lastSeen TTL 自动清死桶，底层 x/time/rate）；
 // 配置 rate_limit.use_redis=true 且 Redis 可用时切换为 Redis 固定窗口计数
-// （多实例共享）。命中限流后按 block_seconds 封禁该 IP+维度（封禁同样
-// Redis/内存双写）。配置可经 /admin/ratelimit/config 运行时热更。
+// （多实例共享；窗口判定收编 oekit/redisx 的 PeriodLimit——Lua 原子
+// INCRBY+首次 EXPIRE + 三态返回，本仓只留配置映射与三态降级口径）。
+// 命中限流后按 block_seconds 封禁该 IP+维度（封禁同样 Redis/内存双写）。
+// 配置可经 /admin/ratelimit/config 运行时热更。
 package middleware
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/oekit/concurrency/loop"
 	"github.com/oekit/concurrency/ratelimit"
+	redisxratelimit "github.com/oekit/redisx/ratelimit"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
@@ -125,15 +127,22 @@ type RateLimiter struct {
 	rdb      *redisCmds
 	gcCancel context.CancelFunc // 停封禁表清扫循环（loop.Run 的 ctx 生命周期）
 
+	// —— allowRedis 的窗口判定器缓存（redisx.PeriodLimit，per-scope 实例）——
+	// 专用小锁：热路径只碰这张小 map，不占 rl.mu（避免与配置快照的读写锁
+	// 争用，也避免与 getLimiter 的写锁反序嵌套）。
+	periodMu       sync.Mutex
+	periodLimiters map[scope]*periodLimiterEntry
+
 	blockedTotal int64 // 累计封禁次数（观测用）
 }
 
 // NewRateLimiter 创建限流管理器
 func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 	rl := &RateLimiter{
-		limiters: map[scope]*ratelimit.KeyedLimiter{},
-		blocked:  map[string]time.Time{},
-		cfg:      cfg,
+		limiters:       map[scope]*ratelimit.KeyedLimiter{},
+		blocked:        map[string]time.Time{},
+		cfg:            cfg,
+		periodLimiters: map[scope]*periodLimiterEntry{},
 	}
 	rl.rebuildLimiters(cfg)
 	// 后台定期清理封禁表（client 桶的空闲清理由 KeyedLimiter 自管，见 gc）；
@@ -278,23 +287,71 @@ func (rl *RateLimiter) addBlock(ctx context.Context, s scope, ip string) {
 	}
 }
 
-// allowRedis Redis 固定窗口计数（1s 窗口，INCR + 首次 EXPIRE）
+// redisWindowPeriod Redis 固定窗口时长（与旧手搓版「按 epoch 秒切窗」同窗宽）。
+const redisWindowPeriod = time.Second
+
+// redisCountKeyPrefix Redis 计数键前缀（scope 段）。PeriodLimit 内部自拼 ":"
+// ⇒ 最终键 "pb:rl:cnt:<scope>:<ip>"——与旧手搓键
+// "pb:rl:cnt:<scope>:<ip>:<unix>" 同前缀；窗口段从键后缀挪进 TTL 后尾段
+// 不再需要，旧键 2s TTL 自然过期，无迁移问题。
+func redisCountKeyPrefix(s scope) string { return "pb:rl:cnt:" + string(s) }
+
+// periodLimiterEntry 缓存的窗口判定器 + 构建时快照（quota/client）。
+// 任一快照与当前不符 ⇒ 下一次 Take 前惰性重建（配额热更 / SetRedis 换端）。
+type periodLimiterEntry struct {
+	pl     *redisxratelimit.PeriodLimit
+	quota  int64         // 构建时的配额（s.qpsOf）
+	client *redis.Client // 构建时的 store（redis.Scripter 的具体载体）
+}
+
+// periodLimiterFor 取（或惰性构建）某 scope 的固定窗口判定器。
+//
+// PeriodLimit 是 per-实例 quota（构造参数），故按 scope 各持一个实例；构造期
+// store 未就绪（SetRedis 后到）⇒ 惰性构建 + 缓存。配额热更（UpdateConfig 换
+// qps）或 SetRedis 换客户端 ⇒ 快照失配、下一次 Take 前重建——两次 Take 之间
+// 不存在窗口，惰性重建与「同步重建」无行为差异。Redis 故障期间缓存实例保留
+// （Unknown 回退本地桶不动缓存）⇒ 恢复后下一次 Take 自动切回，不粘死在本地。
+func (rl *RateLimiter) periodLimiterFor(s scope, quota int64, client *redis.Client) *redisxratelimit.PeriodLimit {
+	rl.periodMu.Lock()
+	defer rl.periodMu.Unlock()
+	if e := rl.periodLimiters[s]; e != nil && e.quota == quota && e.client == client {
+		return e.pl
+	}
+	pl := redisxratelimit.NewPeriodLimit(redisWindowPeriod, quota, client, redisCountKeyPrefix(s),
+		redisxratelimit.WithPeriodAlign())
+	rl.periodLimiters[s] = &periodLimiterEntry{pl: pl, quota: quota, client: client}
+	return pl
+}
+
+// allowRedis Redis 固定窗口计数（1s 窗口）——窗口判定收编 oekit/redisx 的
+// PeriodLimit（Lua 原子 INCRBY + 首次 EXPIRE + 三态返回，替代此前手搓的
+// IncrWithTTL + n<=qps 两段式），本仓只留配置映射（qps→quota、scope→键前缀）
+// 与三态降级口径：
+//
+//   - Allowed / HitQuota ⇒ 放行（HitQuota = 恰好用完配额仍放行，与旧
+//     `n<=qps` 同一边界：第 qps 个请求放行、第 qps+1 个拒绝）；
+//   - OverQuota ⇒ 拒（由 allow 的 addBlock 落短封禁——封禁双层语义原样，
+//     不并入限流判定）；
+//   - Unknown / err（Redis 故障或应答不可识别，本次配额不消耗）⇒ 回退
+//     进程内桶（getLimiter().Allow()，原降级语义）。
+//
+// 窗口对齐：WithPeriodAlign 按自然周期对齐（与旧 epoch 秒键同款语义）。
+// 1s 窗口下上游对齐/不对齐的 TTL 计算两式恰好重合（period - unix%period ==
+// period），当天行为无差；接线该选项是为窗口将来调大时保持 epoch 对齐、
+// 不让窗口起点随首个请求漂移。
 func (rl *RateLimiter) allowRedis(ctx context.Context, rdb *redisCmds, s scope, ip string) bool {
 	qps := s.qpsOf(rl.snapshotCfg())
 	if qps <= 0 {
 		qps = 1
 	}
-	key := fmt.Sprintf("pb:rl:cnt:%s:%s:%d", s, ip, time.Now().Unix())
-	// 计数 + 首次命中才设 TTL：**原子**（收编到 oekit/redisx 的
-	// Counter.IncrWithTTL）——此前是手写两步 Incr + if n==1 { Expire }，
-	// 两步之间失败 ⇒ 计数键永不过期 ⇒ 该 IP 永久被限。
-	n, err := rdb.IncrWithTTL(ctx, key, 1, 2*time.Second)
-	if err != nil {
+	pl := rl.periodLimiterFor(s, int64(qps), rdb.Client)
+	state, err := pl.Take(ctx, ip)
+	if state == redisxratelimit.Unknown || err != nil {
 		// Redis 故障：回退进程内 bucket
 		limiter := rl.getLimiter(s, ip)
 		return limiter == nil || limiter.Allow()
 	}
-	return n <= int64(qps)
+	return state != redisxratelimit.OverQuota
 }
 
 // allow 检查 IP 在某 scope 下是否被允许
