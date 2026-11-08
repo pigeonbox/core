@@ -101,9 +101,14 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 
 	// 2.1 goroutine panic 兜底接 zap：async.GoSafe 恢复的 panic 带堆栈进结构化日志
 	// （默认走 stdlib log；须在最早的业务 goroutine 之前设置，此处为进程内唯一设置点）
-	async.SetPanicHandler(func(msg string, stack []byte) {
+	//
+	// oekit/concurrency v0.29.0 起 PanicHandler 签名改为 (ctx, value, stack)：
+	// 多出的 value 是 recover() 的原始值（此前只有 fmt 后的字符串，分不出 nil panic
+	// 与 "nil" 字面量）；ctx 是被中断任务的上下文，这里只记日志故不需要。
+	// 日志键沿用 error 不变，避免既有告警/检索口径失效（zap.Any 对 string 仍落 String 字段）。
+	async.SetPanicHandler(func(_ context.Context, r any, stack []byte) {
 		logger.Error("goroutine panic recovered",
-			zap.String("error", msg), zap.ByteString("stack", stack))
+			zap.Any("error", r), zap.ByteString("stack", stack))
 	})
 
 	// 3. 初始化数据库
