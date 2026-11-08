@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/oekit/pkg/secretx"
 )
 
 var (
@@ -14,16 +15,29 @@ var (
 	ErrExpiredToken = errors.New("token has expired")
 	ErrTokenRevoked = errors.New("token has been revoked")
 
-	jwtSecretMu sync.RWMutex
-	jwtSecret   = []byte("PigeonBox2025SecretKey")
+	// jwtSecret 持有 HS256 签名密钥（secretx.SecureString：XOR 混淆存储，随机
+	// 密钥逐字节异或，Set/Clear 双向零化旧值，自带 RWMutex ⇒ 本包不再需要额外
+	// 的密钥锁）。
+	//
+	// 为什么不留裸 []byte：签名密钥是进程生命周期内常驻的 crypto 材料，裸切片在
+	// heap dump / 内存扫描里是**连续明文**（strings 直接可读）；混淆后拿到的是密文。
+	// 为什么是 SecureString 而不是 SecureBytes：SecureBytes 只做副本隔离、**存储
+	// 仍是明文**（上游 doc 明说「副本隔离存取」），拿它顶替等于什么都没换——
+	// 本目录的用例 TestJWTSecret_NotStoredInPlaintext 会当场转红。
+	//
+	// 定位如实声明：这是**内存扫描缓解，不是加密**——能读进程内存的攻击者只多
+	// 一步还原。静态落库另走存储加密，两套原语不互相冒充。
+	jwtSecret = secretx.NewSecureString("PigeonBox2025SecretKey")
 )
 
-// getSecret 读锁获取当前密钥（并发安全）
-func getSecret() []byte {
-	jwtSecretMu.RLock()
-	defer jwtSecretMu.RUnlock()
-	return jwtSecret
-}
+// getSecret 取当前密钥的**独立副本**（并发安全由 SecureBytes 内部锁保证）。
+//
+// 为什么必须返回副本：旧实现把内部切片本身交出去，调用方（jwt 库或将来任何
+// 调用点）就地改写/清零改的就是签名密钥本体 ⇒ 全站已签发令牌无痕失效，且
+// 没有任何日志线索。副本隔离把这个隐患从「沉默」变成「不可能」。
+// 明文只在调用方手里存活一次签名/验签的时长（Get 内部已解出，这里再复制一份
+// 给 jwt 库当 hmac key），用完即被 GC 回收。
+func getSecret() []byte { return []byte(jwtSecret.Get()) }
 
 // Claims JWT claims
 type Claims struct {
@@ -152,9 +166,7 @@ func GenerateAdminToken(userID uint, username string) (string, error) {
 	return GenerateToken(userID, username, "admin")
 }
 
-// SetJWTSecret 设置 JWT secret（写锁，从配置注入）
-func SetJWTSecret(secret string) {
-	jwtSecretMu.Lock()
-	defer jwtSecretMu.Unlock()
-	jwtSecret = []byte(secret)
-}
+// SetJWTSecret 设置 JWT secret（从配置注入，热更路径也走这里）。
+// Set 内部先零化旧值与旧 XOR 密钥再重存；空串等价 Clear（与既有语义一致：
+// 空密钥签发的令牌验签必然失败）。
+func SetJWTSecret(secret string) { jwtSecret.Set(secret) }
