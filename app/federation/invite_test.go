@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -265,5 +266,51 @@ func TestPushInviteToTarget_PrivatePeerPerPeerGranularity(t *testing.T) {
 	}
 	if got := hits.Load(); got != 1 {
 		t.Fatalf("放行后应恰好送达一次: hits=%d", got)
+	}
+}
+
+// ---- core#86：随机源失败的错误上抛（原实现吞错 ⇒ 静默发弱信封 ID） ----
+
+// boomReader 必然失败的随机源注入桩（core#86 用例专用；federation_test.go 的
+// randomNonce 用例同包共用）。
+type boomReader struct{}
+
+func (boomReader) Read(p []byte) (int, error) { return 0, errors.New("boom: 熵源故障") }
+
+// TestNewEnvelopeID_RandFailurePropagates（core#86）：随机源失败必须显式上抛、
+// 绝不入箱弱 ID——原实现吞错 ⇒ 熵源故障时恒发全 0 重复 ID ⇒ 收件箱条目互相
+// 覆盖（与 qrcode 审计 A5 同款缺陷）。
+//
+// 负对照：改回吞错形态（忽略 err 用半截产物）⇒ err 断言转红；弱 ID 入箱 ⇒
+// 收件箱条数断言转红——两条判据各自锁死一种复活形态。
+func TestNewEnvelopeID_RandFailurePropagates(t *testing.T) {
+	m := NewInviteMailbox(nil)
+
+	// 基线：默认随机源可用 ⇒ 正常入箱，ID 为 16 hex（证明判据走的是注入路径，非恒红）
+	inv, err := m.AddInvite("KJ8YWCYZE249", "a", "")
+	if err != nil {
+		t.Fatalf("默认源下入箱不应失败: %v", err)
+	}
+	if len(inv.ID) != 16 {
+		t.Fatalf("信封 ID 长度不对: %q", inv.ID)
+	}
+
+	// 注入必然失败的 reader ⇒ AddInvite 报错、零新增入箱
+	orig := randSource
+	randSource = boomReader{}
+	defer func() { randSource = orig }()
+
+	got, err := m.AddInvite("KJ8YWCYZE250", "b", "")
+	if err == nil {
+		t.Fatal("随机源失败必须上抛（吞错形态会在这里假绿）")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("错误链必须携带注入的失败原因: %v", err)
+	}
+	if got.ID != "" {
+		t.Fatalf("错误路径不得返回半截产物: %q", got.ID)
+	}
+	if n := len(m.ListInvites()); n != 1 {
+		t.Fatalf("弱 ID 不得入箱：收件箱应仍为基线的 1 条，实际 %d 条", n)
 	}
 }

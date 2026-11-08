@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,7 +92,8 @@ func TestOIDC_FullFlow(t *testing.T) {
 	})
 
 	// 1. 登录 URL：含授权端点 + HMAC state（绑定浏览器 nonce）
-	nonce := GenerateNonce()
+	nonce, err := GenerateNonce()
+	require.NoError(t, err)
 	loginURL, err := svc.LoginURL(context.Background(), "http://pb.local", nonce)
 	require.NoError(t, err)
 	assert.Contains(t, loginURL, srv.URL+"/auth?")
@@ -173,4 +175,35 @@ func TestOIDC_BannedUserRejected(t *testing.T) {
 
 	_, err := svc.ExchangeCallback(context.Background(), "http://pb.local", "the-code", svc.signState(time.Now().Unix(), "n"), "n")
 	require.ErrorIs(t, err, ErrAccountDisabled)
+}
+
+// ---- core#86：随机源失败的错误上抛（原实现吞错 ⇒ 静默发弱 nonce） ----
+
+// boomReader 必然失败的随机源注入桩（core#86 用例专用）。
+type boomReader struct{}
+
+func (boomReader) Read(p []byte) (int, error) { return 0, errors.New("boom: 熵源故障") }
+
+// TestGenerateNonce_RandFailurePropagates（core#86）：随机源失败必须显式上抛，
+// 绝不静默发弱 nonce——原实现 `_, _ = rand.Read(b)` 吞错 ⇒ 熵源故障时发出全 0
+// nonce，state 绑定的 login CSRF 防线失效。
+//
+// 负对照：若把 GenerateNonce 改回吞错形态（忽略 err 用半截产物顶包），下面的
+// require.Error 会转红（err=nil）；若把半截产物连同错误一起返回，assert.Empty
+// 会转红——两条判据各自锁死一种复活形态。
+func TestGenerateNonce_RandFailurePropagates(t *testing.T) {
+	// 基线：默认随机源可用 ⇒ 正常出 32 位 hex（证明判据走的是注入路径，非恒红）
+	nonce, err := GenerateNonce()
+	require.NoError(t, err)
+	assert.Len(t, nonce, 32)
+
+	// 注入必然失败的 reader ⇒ (空串, error)，弱 nonce 不出闸
+	orig := nonceRandReader
+	nonceRandReader = boomReader{}
+	defer func() { nonceRandReader = orig }()
+
+	got, err := GenerateNonce()
+	require.Error(t, err, "随机源失败必须上抛（吞错形态会在这里假绿）")
+	assert.Contains(t, err.Error(), "boom", "错误链必须携带注入的失败原因")
+	assert.Empty(t, got, "错误路径不得返回半截产物（弱 nonce 出闸即防线失效）")
 }

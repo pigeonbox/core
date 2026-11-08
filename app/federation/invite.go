@@ -20,8 +20,6 @@ package federation
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/oekit/kitx/uidgen"
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/paircode"
@@ -102,8 +102,14 @@ func (m *InviteMailbox) AddInvite(code, fromName, note string) (Invite, error) {
 	if len(m.invites) >= inviteMaxCount {
 		return Invite{}, fmt.Errorf("收件箱已满（%d），先处理或等待过期", inviteMaxCount)
 	}
+	// 信封 ID 生成失败 ⇒ 拒绝入箱（core#86：不发弱 ID——弱 ID 会让收件箱条目
+	// 互相覆盖，与 qrcode 审计 A5 同款缺陷）
+	id, err := newEnvelopeID()
+	if err != nil {
+		return Invite{}, fmt.Errorf("信封 ID 生成失败（随机源不可用）: %w", err)
+	}
 	inv := Invite{
-		ID:         newEnvelopeID(),
+		ID:         id,
 		Code:       code,
 		FromName:   sanitizeInline(fromName, 64),
 		Note:       sanitizeInline(note, 200),
@@ -200,11 +206,18 @@ func sanitizeInline(s string, max int) string {
 	return b.String()
 }
 
+// envelopeIDEntropyBytes 信封 ID 的熵预算：8 字节 = 64 bit 熵 ⇒ 2^64 防碰撞
+// 预算（core#86 收编 kitx/uidgen 时定长于此；收件箱为单机内存态、容量有上限，
+// 64 bit 远够）。
+const envelopeIDEntropyBytes = 8
+
 // newEnvelopeID 短随机信封 ID（16 hex；与直传任务 ID 同形不同域）。
-func newEnvelopeID() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+//
+// 随机源失败**显式上抛**（core#86：原实现吞错 ⇒ 熵源故障时恒发全 0 重复 ID ⇒
+// 收件箱条目互相覆盖——与 qrcode 审计 A5 同款缺陷；随机源经 client.go 的
+// randSource seam 注入）。
+func newEnvelopeID() (string, error) {
+	return uidgen.RandomHexFrom(randSource, envelopeIDEntropyBytes)
 }
 
 // PushInvite 把口令推送到目标实例的邀请收件端点（P3 免口令交接）。

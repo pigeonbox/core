@@ -1,10 +1,10 @@
 package qrcode
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 
+	"github.com/oekit/kitx/uidgen"
 	"github.com/skip2/go-qrcode"
 )
 
@@ -81,15 +81,18 @@ func ValidateQRCodeData(data string) bool {
 // ⇒ 该分支下所有二维码 ID 相同 ⇒ 存储层 `QRCodeStore[id] = qr` **互相覆盖**
 // ⇒ 先生成的二维码取不到（拿到的是后一个的内容）。
 //
-// ⇒ 随机源失败**显式报错**（不悄悄给一个会撞的 ID）：rand.Read 失败意味着
+// ⇒ 随机源失败**显式报错**（不悄悄给一个会撞的 ID）：crypto/rand 读取失败意味着
 // 系统熵源异常，此时返回错误比返回"一个会撞的 ID"安全。
 //
 // @return string 二维码ID
 // @return error 随机源不可用
 func GenerateQRCodeID() (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
+	// qrcodeIDEntropyBytes 二维码 ID 的熵预算：8 字节 = 64 bit 熵 ⇒ 2^64 防碰撞
+	// 预算（core#86 收编 kitx/uidgen 时定长于此；wire 格式 "qr_"+16 hex 逐字不变）。
+	const qrcodeIDEntropyBytes = 8
+	id, err := uidgen.RandomHexE(qrcodeIDEntropyBytes)
+	if err != nil {
 		return "", fmt.Errorf("生成二维码 ID 失败（随机源不可用）: %w", err)
 	}
-	return fmt.Sprintf("qr_%x", b), nil
+	return "qr_" + id, nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -506,5 +508,54 @@ func TestLoopFirstTickFailureEntersBackoff(t *testing.T) {
 	}
 	if next != retryBackoff {
 		t.Fatalf("首启失败应调度 %s 重试,得到 %s", retryBackoff, next)
+	}
+}
+
+// TestRandomNonce_RandFailurePropagates（core#86）：注册 nonce 的随机源失败必须
+// 显式上抛，register 不得发出任何请求——原实现吞错 ⇒ 熵源故障时静默发全 0
+// nonce ⇒ 注册签名负载可被重放（nonce 防线失守）。
+//
+// 负对照：改回吞错形态（忽略 err 用半截产物）⇒ err 断言转红；register 吞掉
+// nonce 错误继续发请求 ⇒ 零请求断言转红。
+func TestRandomNonce_RandFailurePropagates(t *testing.T) {
+	// 基线：默认随机源可用 ⇒ 正常出 16 hex（证明判据走的是注入路径，非恒红）
+	n, err := randomNonce()
+	if err != nil {
+		t.Fatalf("默认源下不应失败: %v", err)
+	}
+	if len(n) != 16 {
+		t.Fatalf("nonce 长度不对: %q", n)
+	}
+
+	// 注入必然失败的 reader ⇒ randomNonce 上抛
+	orig := randSource
+	randSource = boomReader{}
+	defer func() { randSource = orig }()
+	if _, err := randomNonce(); err == nil {
+		t.Fatal("随机源失败必须上抛（吞错形态会在这里假绿）")
+	} else if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("错误链必须携带注入的失败原因: %v", err)
+	}
+
+	// register 路径：nonce 失败 ⇒ 报错且零请求（弱 nonce 不上线）
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"node_id": "x"})
+	}))
+	defer srv.Close()
+
+	c := newRegistryClient(srv.URL)
+	c.nonce = func() (string, error) { return "", errors.New("boom: 熵源故障") }
+	priv := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	err = c.register(context.Background(), "abcd", priv, "https://src.example", "src", time.Hour)
+	if err == nil {
+		t.Fatal("nonce 生成失败时 register 必须报错（吞错形态会在这里假绿）")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("错误链必须携带 nonce 失败原因: %v", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("nonce 失败不得发出任何请求，实际 %d 次", got)
 	}
 }

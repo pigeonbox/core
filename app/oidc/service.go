@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,6 +23,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/oekit/kitx/uidgen"
 	"github.com/oekit/pkg/cache"
 	"github.com/oekit/pkg/httpjson"
 	"github.com/oekit/pkg/secretx"
@@ -178,14 +180,26 @@ func (s *Service) TestDiscovery(ctx context.Context) error {
 	return nil
 }
 
+// oidcNonceEntropyBytes 登录 CSRF nonce 的熵预算：16 字节 = 128 bit 熵 ⇒ 2^128
+// 防碰撞/防猜测预算（core#86 收编 kitx/uidgen 时定长于此；一次性 Cookie，回调
+// 即作废，无需跨进程唯一）。
+const oidcNonceEntropyBytes = 16
+
+// nonceRandReader 随机源 seam（默认 crypto/rand.Reader；测试注入必然失败的
+// reader 验证错误上抛——core#86：随机源失败绝不能静默发弱 nonce）。
+var nonceRandReader io.Reader = rand.Reader
+
 // GenerateNonce 生成一次性的浏览器绑定 nonce（login CSRF 防线，2026-10-08 加固）：
 // 登录起点下发 HttpOnly Cookie，state 的 HMAC 绑定该 nonce——回调时 Cookie 与
 // state 必须同源同流，第三方拿"自己的 code+state"诱导受害者浏览器回调时，
 // 受害者没有匹配的 nonce Cookie，登录 CSRF 不成立。
-func GenerateNonce() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+//
+// 随机源失败**显式上抛**（core#86：原实现吞掉 crypto/rand 的读取错误 ⇒ 熵源
+// 故障时静默发出全 0 弱 nonce，state 绑定形同虚设）——调用方（OIDC 登录起点
+// handler）收到错误即拒绝登录，不发弱 nonce。随机源经 nonceRandReader seam
+// 注入（From 形态=测试注入口）。
+func GenerateNonce() (string, error) {
+	return uidgen.RandomHexFrom(nonceRandReader, oidcNonceEntropyBytes)
 }
 
 // clientSecret 取当前密钥明文（每次在持有器独立副本上解出；nil 防御——
@@ -360,9 +374,9 @@ func (s *Service) matchOrCreate(ctx context.Context, claims idClaims) (*model.Us
 		}
 		username = fmt.Sprintf("%s-%d", base, i)
 	}
-	// 随机密码（OIDC 用户不可走密码登录）
-	pw := make([]byte, 24)
-	_, _ = rand.Read(pw)
+	// （core#86）原此处有一段「随机密码」死代码：手搓生成 24 字节随机数填充
+	// pw 后从未消费（user 不落 PasswordHash，密码登录由同位检查拒绝 OIDC
+	// 用户），且吞错；整体删除，行为零变化。
 	user := &model.User{
 		Username: username,
 		Email:    claims.Email,

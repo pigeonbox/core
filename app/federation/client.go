@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/oekit/kitx/uidgen"
 	"github.com/oekit/pkg/httpjson"
 	"github.com/pigeonbox/core/pkg/outbound"
 )
@@ -36,7 +38,7 @@ const (
 type registryClient struct {
 	base  string
 	http  *http.Client
-	nonce func() string
+	nonce func() (string, error)
 }
 
 func newRegistryClient(base string) *registryClient {
@@ -48,10 +50,22 @@ func newRegistryClient(base string) *registryClient {
 	}
 }
 
-func randomNonce() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+// registryNonceEntropyBytes 注册 nonce 的熵预算：8 字节 = 64 bit 熵 ⇒ 2^64 防
+// 碰撞预算（core#86 收编 kitx/uidgen 时定长于此；nonce 只防注册重放，TTL 窗口
+// 内不重复即可）。
+const registryNonceEntropyBytes = 8
+
+// randSource 包级随机源 seam（默认 crypto/rand.Reader；测试注入必然失败的
+// reader 验证错误上抛——core#86：熵源故障绝不能静默发弱 nonce/重复信封 ID）。
+// 本文件的 randomNonce 与 invite.go 的 newEnvelopeID 共用同一注入口。
+var randSource io.Reader = rand.Reader
+
+// randomNonce 注册/心跳签名负载的随机 nonce。
+//
+// 随机源失败**显式上抛**（core#86：原实现吞错 ⇒ 熵源故障时静默发全 0 nonce ⇒
+// 注册重放防线失守）——调用方 register 收到错误即中止，不发出带弱 nonce 的请求。
+func randomNonce() (string, error) {
+	return uidgen.RandomHexFrom(randSource, registryNonceEntropyBytes)
 }
 
 func buildPayload(parts ...string) []byte {
@@ -125,7 +139,10 @@ type registerReq struct {
 func (c *registryClient) register(ctx context.Context, nodeID string, priv ed25519.PrivateKey, publicURL, name string, ttl time.Duration) error {
 	ts := time.Now().Unix()
 	ttlSec := int64(ttl / time.Second)
-	nonce := c.nonce()
+	nonce, err := c.nonce()
+	if err != nil {
+		return fmt.Errorf("注册 nonce 生成失败（随机源不可用）: %w", err)
+	}
 	sig := signPayload(priv, buildPayload(nodeID, publicURL, name, nodeVersion, capsDownload,
 		strconv.FormatInt(ttlSec, 10), nonce, strconv.FormatInt(ts, 10)))
 	return c.do(ctx, http.MethodPost, "/v1/nodes/register", registerReq{

@@ -25,8 +25,6 @@ package opendal
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -35,6 +33,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/oekit/kitx/uidgen"
 )
 
 // Scheme 存储方案（OpenDAL 命名约定）
@@ -491,7 +491,10 @@ func (op *Operator) Presign(ctx context.Context, req PresignedRequest) (*Presign
 		if baseURL == "" {
 			baseURL = "http://localhost:12345"
 		}
-		token := genToken()
+		token, err := genToken()
+		if err != nil {
+			return nil, fmt.Errorf("presign 上传令牌生成失败（随机源不可用）: %w", err)
+		}
 		url := fmt.Sprintf("%s/api/v1/presign/upload-direct?path=%s&token=%s", baseURL, req.Path, token)
 		return &PresignedResult{
 			URL:     url,
@@ -517,10 +520,16 @@ func Probe(ctx context.Context, op *Operator) error {
 	return nil
 }
 
-func genToken() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+// presignTokenEntropyBytes 自家直传回退通道上传令牌的熵预算：16 字节 = 128 bit
+// 熵 ⇒ 2^128 防伪造预算（core#86 收编 kitx/uidgen 时定长于此）。
+const presignTokenEntropyBytes = 16
+
+// genToken presign 回退通道（presignEnabled=false）的直传上传令牌。
+//
+// 随机源失败**显式上抛**（core#86：原实现吞错 ⇒ 熵源故障时恒发全 0 令牌 ⇒
+// 任何客户端可伪造 X-Upload-Token 直传）——调用方 Presign 收到错误即拒绝签发。
+func genToken() (string, error) {
+	return uidgen.RandomHexE(presignTokenEntropyBytes)
 }
 
 // DefaultOperator 全局默认 operator
