@@ -10,61 +10,63 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/oekit/pkg/cache"
+	"github.com/oekit/pkg/ctxscope"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/pkg/auth"
 )
 
-// context key 类型（非导出，防止跨包键冲突）
-type ctxKey int
-
-const (
-	ctxKeyUserID ctxKey = iota
-	ctxKeyUsername
-	ctxKeyRole
-	ctxKeyClientIP
-	ctxKeyAPIKeyID
+// 请求级身份的 context 槽位（ctxscope.Key：命名空间 + 值类型双隔离）。
+//
+// 为什么换掉手搓的非导出 ctxKey 枚举：枚举只防**跨包键碰撞**，不钉值类型——
+// ctx.Value(k).(uint) 用错类型时静默得到零值（认证信息「消失」而非报错）。
+// ctxscope 的 Key[T] 把键与值类型绑在一起，且 From 对「绕过 With 直写」的值
+// 一律按不存在处理，写入纪律由类型断言强制。零新增依赖（oekit/pkg 子包）。
+var (
+	ctxKeyUserID   = ctxscope.NewKey[uint]("pigeonbox/middleware.user_id")
+	ctxKeyUsername = ctxscope.NewKey[string]("pigeonbox/middleware.username")
+	ctxKeyRole     = ctxscope.NewKey[string]("pigeonbox/middleware.role")
+	ctxKeyClientIP = ctxscope.NewKey[string]("pigeonbox/middleware.client_ip")
+	ctxKeyAPIKeyID = ctxscope.NewKey[uint]("pigeonbox/middleware.api_key_id")
 )
 
 // 注入/读取工具：中间件将认证信息写入 ctx，service 层经此提取操作者（审计用）。
 // apiKeyID 非 0 表示本次请求经用户级 API Key 认证（写入传输日志做 Key 粒度归因）。
 func withIdentity(ctx context.Context, userID uint, username, role, ip string, apiKeyID uint) context.Context {
-	ctx = context.WithValue(ctx, ctxKeyUserID, userID)
-	ctx = context.WithValue(ctx, ctxKeyUsername, username)
-	ctx = context.WithValue(ctx, ctxKeyRole, role)
-	ctx = context.WithValue(ctx, ctxKeyClientIP, ip)
+	ctx = ctxscope.With(ctx, ctxKeyUserID, userID)
+	ctx = ctxscope.With(ctx, ctxKeyUsername, username)
+	ctx = ctxscope.With(ctx, ctxKeyRole, role)
+	ctx = ctxscope.With(ctx, ctxKeyClientIP, ip)
 	if apiKeyID > 0 {
-		ctx = context.WithValue(ctx, ctxKeyAPIKeyID, apiKeyID)
+		ctx = ctxscope.With(ctx, ctxKeyAPIKeyID, apiKeyID)
 	}
 	return ctx
 }
 
 // APIKeyIDFromContext 从 ctx 读取认证所用的 API Key ID（JWT/匿名请求返回 false）。
 func APIKeyIDFromContext(ctx context.Context) (uint, bool) {
-	v, ok := ctx.Value(ctxKeyAPIKeyID).(uint)
-	return v, ok
+	return ctxscope.From(ctx, ctxKeyAPIKeyID)
 }
 
 // UserIDFromContext 从 ctx 读取用户 ID（未认证返回 false）
 func UserIDFromContext(ctx context.Context) (uint, bool) {
-	v, ok := ctx.Value(ctxKeyUserID).(uint)
-	return v, ok
+	return ctxscope.From(ctx, ctxKeyUserID)
 }
 
 // UsernameFromContext 从 ctx 读取用户名（未认证返回空串）
 func UsernameFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(ctxKeyUsername).(string)
+	v, _ := ctxscope.From(ctx, ctxKeyUsername)
 	return v
 }
 
 // RoleFromContext 从 ctx 读取角色
 func RoleFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(ctxKeyRole).(string)
+	v, _ := ctxscope.From(ctx, ctxKeyRole)
 	return v
 }
 
 // ClientIPFromContext 从 ctx 读取已解析的客户端 IP
 func ClientIPFromContext(ctx context.Context) string {
-	v, _ := ctx.Value(ctxKeyClientIP).(string)
+	v, _ := ctxscope.From(ctx, ctxKeyClientIP)
 	return v
 }
 

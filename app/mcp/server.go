@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/oekit/pkg/ctxscope"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
@@ -19,8 +20,11 @@ const serverName = "pigeonbox"
 // methodListTools 工具列表方法名（SDK 内部常量为非导出，按协议字面量匹配）。
 const methodListTools = "tools/list"
 
-// callerCtxKey 调用者身份在 context 中的键。
-type callerCtxKey struct{}
+// callerCtxKey 调用者身份在 context 中的槽位（ctxscope.Key：命名空间 + 值类型
+// 双隔离）。为什么不留手搓的空结构体键：空结构体只防跨包碰撞，不钉值类型——
+// ctx.Value(k).(Caller) 用错类型只静默回零值（游客身份），把「身份丢了」伪装成
+// 「这是游客」。
+var callerCtxKey = ctxscope.NewKey[Caller]("pigeonbox/mcp.caller")
 
 // WithCaller 把调用者身份注入 context。
 //
@@ -29,12 +33,12 @@ type callerCtxKey struct{}
 // req.Context() here, to allow middleware to add context values"），
 // 因此工具层与中间件都能读到同一份身份。
 func WithCaller(ctx context.Context, c Caller) context.Context {
-	return context.WithValue(ctx, callerCtxKey{}, c)
+	return ctxscope.With(ctx, callerCtxKey, c)
 }
 
 // CallerFromContext 读取调用者身份（缺失=游客零值）。
 func CallerFromContext(ctx context.Context) Caller {
-	c, _ := ctx.Value(callerCtxKey{}).(Caller)
+	c, _ := ctxscope.From(ctx, callerCtxKey)
 	return c
 }
 
