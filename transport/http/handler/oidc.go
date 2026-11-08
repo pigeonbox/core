@@ -117,7 +117,13 @@ func OIDCLogin(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "OIDC 登录未启用"})
 		return
 	}
-	nonce := oidcApp.GenerateNonce()
+	// nonce 生成失败 ⇒ 拒绝登录（core#86：绝不下发弱 nonce——弱 nonce 会让
+	// state 绑定的 login CSRF 防线失效；这是本地熵源故障，500/CodeInternal）
+	nonce, err := oidcApp.GenerateNonce()
+	if err != nil {
+		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "OIDC 登录发起失败（随机源不可用）"})
+		return
+	}
 	baseURL := getOIDCBaseURL()
 	loginURL, err := svc.LoginURL(ctx, baseURL, nonce)
 	if err != nil {

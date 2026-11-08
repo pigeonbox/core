@@ -28,9 +28,7 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -40,6 +38,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/oekit/kitx/uidgen"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"go.uber.org/zap"
@@ -252,12 +251,14 @@ func ensureSetupToken(ctx context.Context) {
 		return // 已初始化 ⇒ 首启面已关闭
 	}
 
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
+	// setupTokenEntropyBytes 首启令牌的熵预算：16 字节 = 128 bit 熵 ⇒ 2^128 防
+	// 碰撞/防猜测预算（core#86 收编 kitx/uidgen 时定长于此；一次性令牌，重启即换）。
+	const setupTokenEntropyBytes = 16
+	token, err := uidgen.RandomHexE(setupTokenEntropyBytes)
+	if err != nil {
 		logger.Error("首启令牌：生成失败（本次实例不启用令牌门禁）", zap.Error(err))
 		return
 	}
-	token := hex.EncodeToString(buf)
 	setupAutoToken.Store(&token)
 
 	// 启动日志：令牌本体 + 可直接打开的链接（两种都给出，兼容不同部署形态）。

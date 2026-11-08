@@ -14,7 +14,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oekit/kitx/uidgen"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/pigeonbox/core/pkg/baseurl"
@@ -863,10 +863,16 @@ func (s *Service) signToken(uploadID, objectKey string, expireAt time.Time) stri
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// genID presign 会话/分片 ID（wire 格式 "<prefix>_"+24 hex 逐字不变）。
+//
+// presignIDEntropyBytes 会话 ID 的熵预算：12 字节 = 96 bit 熵 ⇒ 2^96 防碰撞
+// 预算（core#86 收编 kitx/uidgen 时定长于此；会话 ID 兼作幂等键，见
+// 取件计次语义第 15 条——重试按 upload_id 回读复用，碰撞即误并会话）。
 func genID(prefix string) (string, error) {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
+	const presignIDEntropyBytes = 12
+	id, err := uidgen.RandomHexE(presignIDEntropyBytes)
+	if err != nil {
 		return "", err
 	}
-	return prefix + "_" + hex.EncodeToString(b), nil
+	return prefix + "_" + id, nil
 }
