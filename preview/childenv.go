@@ -18,7 +18,7 @@ import (
 // CombinedOutput/Output 无上限 ⇒ 恶意/损坏媒体让 ffmpeg 往 stderr 狂刷，
 // 单请求即可吃满内存。
 //
-// ⚠️ 等上游收编后替换：oekit/pkg#294（子进程治理三件套下沉 oekit）。
+// ⚠️ 等上游收编后替换：oekit/pkg#284（procx 进程树终止原语提案，本段约束随其落地删除）。
 // 直接依赖 oagentkit/runtime/procx.ChildEnv 会新增跨 org 依赖边（与 #71
 // 的 procx 决策同构），两个上游通道有结论前先在本包内实现，并注释留痕。
 
