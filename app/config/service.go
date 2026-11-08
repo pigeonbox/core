@@ -364,6 +364,25 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	if newConfig.OIDC == nil && s.config != nil {
 		newConfig.OIDC = s.config.OIDC
 	}
+	// OIDC client_secret 写侧守卫（core#81）：
+	// ① 掩码哨兵回填——管理台读回的是掩码（conf.SecretMask），前端表单原样
+	//    回传 ⇒ 提交值 == 掩码必然是「未改动」，保留现值（把掩码当新密钥落库
+	//    会让 OIDC 登录当场失效）；
+	// ② 值等复用现持有器——保持持有器 identity 稳定，overlay 的 Clear 守卫
+	//    据此跳过：未改 secret 的保存不零化现役密钥、不毒化在途请求。
+	// 两条都在 configMu 读锁内对照 s.config（现值真相源）。
+	if newConfig.OIDC != nil && s.config != nil && s.config.OIDC != nil {
+		in, cur := newConfig.OIDC.ClientSecret, s.config.OIDC.ClientSecret
+		if in != nil {
+			curVal := ""
+			if cur != nil {
+				curVal = cur.Get()
+			}
+			if v := in.Get(); v == conf.SecretMask || v == curVal {
+				newConfig.OIDC.ClientSecret = cur // cur 可为 nil：本就未配置
+			}
+		}
+	}
 	if newConfig.APIToken == nil && s.config != nil {
 		newConfig.APIToken = s.config.APIToken
 	}
@@ -504,7 +523,15 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 			next.Upload.LocalImport = *sc.LocalImport
 		}
 		if sc.OIDC != nil {
+			// 旧持有器零化（core#81 热更路径）：换新密钥时旧 secret 的混淆存储
+			// 立即清零，不留 freed-heap 明文。⚠️ identity 守卫：未改 secret 的保存
+			// 经哨兵回填/值等复用与 conf 共享同一持有器——同指针绝不清（清了
+			// 等于把现役密钥清零，且在途请求读到空钥）。
+			prev := next.Security.OIDC.ClientSecret
 			next.Security.OIDC = *sc.OIDC
+			if prev != nil && prev != next.Security.OIDC.ClientSecret {
+				prev.Clear()
+			}
 		}
 		if sc.APIToken != nil {
 			next.Security.APIToken = *sc.APIToken

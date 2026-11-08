@@ -21,8 +21,23 @@ import (
 
 var oidcSvc *oidcApp.Service
 
-// SetOIDCService 注入 OIDC 服务（bootstrap 调用）
-func SetOIDCService(s *oidcApp.Service) { oidcSvc = s }
+// SetOIDCService 注入 OIDC 服务（bootstrap 调用）。
+//
+// 旧服务下线前零化其密钥持有器（core#81 热更路径：旧 secret 的混淆存储随之
+// 清零，不留 freed-heap 明文）。⚠️ identity 守卫：新旧服务共享同一持有器时
+// （未改 secret 的重建：conf/mirror/服务三方同指针）**绝不能清**——那会把
+// 仍在服役的活密钥一并清掉。换密钥路径的旧持有器已被 conf overlay 先行清零，
+// 此处再清是幂等兜底（Clear 对已清持有器无害）。
+func SetOIDCService(s *oidcApp.Service) {
+	if old := oidcSvc; old != nil && old != s {
+		// s == nil（卸载/测试复位）视为「与任何旧持有器不同」：旧服务独占的
+		// 密钥随之零化。同指针守卫照旧——共享持有器（未改 secret 的重建）不清。
+		if s == nil || old.SecretHolder() != s.SecretHolder() {
+			old.ClearSecret()
+		}
+	}
+	oidcSvc = s
+}
 
 func getOIDCService() *oidcApp.Service { return oidcSvc }
 

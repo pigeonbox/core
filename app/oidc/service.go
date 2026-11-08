@@ -24,6 +24,7 @@ import (
 
 	"github.com/oekit/pkg/cache"
 	"github.com/oekit/pkg/httpjson"
+	"github.com/oekit/pkg/secretx"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -46,13 +47,17 @@ var ErrAccountDisabled = errors.New("OIDC 登录被拒绝：账号已被禁用")
 var ErrStateInvalid = errors.New("state 校验失败（过期/伪造/缺少浏览器绑定），请重试登录")
 
 // Config OIDC 配置（conf.SecurityConfig.OIDC）
+//
+// ClientSecret 持 conf 解码产出的持有器（core#81：conf.SecretStringDecodeHook
+// 直接填 *SecureString）——装配层传递指针（bootstrap 三处 NewService 均从
+// conf/mirror 取持有器），服务内部只经 Get() 取值，明文不在本包驻留。
 type Config struct {
-	Enabled          bool   `mapstructure:"enabled"`
-	Issuer           string `mapstructure:"issuer"` // 如 https://idp.example.com/realms/pb
-	ClientID         string `mapstructure:"client_id"`
-	ClientSecret     string `mapstructure:"client_secret"`
-	Scopes           string `mapstructure:"scopes"`            // 默认 "openid profile email"
-	FrontendCallback string `mapstructure:"frontend_callback"` // 默认 /#/oidc/callback
+	Enabled          bool                  `mapstructure:"enabled"`
+	Issuer           string                `mapstructure:"issuer"` // 如 https://idp.example.com/realms/pb
+	ClientID         string                `mapstructure:"client_id"`
+	ClientSecret     *secretx.SecureString `mapstructure:"client_secret"`
+	Scopes           string                `mapstructure:"scopes"`            // 默认 "openid profile email"
+	FrontendCallback string                `mapstructure:"frontend_callback"` // 默认 /#/oidc/callback
 }
 
 // discovery 端点发现缓存
@@ -82,6 +87,12 @@ func NewService(gormDB *gorm.DB, cfg Config) *Service {
 	}
 	if cfg.FrontendCallback == "" {
 		cfg.FrontendCallback = "/#/oidc/callback"
+	}
+	if cfg.ClientSecret == nil {
+		// 未注入（装配层持有器为 nil，如裸 conf 零值）⇒ 归一为空持有器：
+		// 与旧 string 零值同语义（signState/换 token 用空钥，登录必然失败但
+		// 不 panic），读取点不再做 nil 分叉。
+		cfg.ClientSecret = secretx.NewSecureString("")
 	}
 	s := &Service{
 		cfg: cfg,
@@ -177,9 +188,31 @@ func GenerateNonce() string {
 	return hex.EncodeToString(b)
 }
 
+// clientSecret 取当前密钥明文（每次在持有器独立副本上解出；nil 防御——
+// 外部手工构造 Config 可绕过 NewService 的归一）。
+func (s *Service) clientSecret() string {
+	if s.cfg.ClientSecret == nil {
+		return ""
+	}
+	return s.cfg.ClientSecret.Get()
+}
+
+// SecretHolder 内部密钥持有器（热替换路径判定新旧服务是否共享同一持有器用；
+// 勿用于取值——取值走 clientSecret()/Get()）。
+func (s *Service) SecretHolder() *secretx.SecureString { return s.cfg.ClientSecret }
+
+// ClearSecret 零化本服务持有的密钥（热替换路径用）：旧服务下线前把混淆存储
+// 清零，不留 freed-heap 明文。与 pkg/auth.SetJWTSecret 的热更语义同款
+// （core#73 模板：Set 内部先零化旧值）。
+func (s *Service) ClearSecret() {
+	if s.cfg.ClientSecret != nil {
+		s.cfg.ClientSecret.Clear()
+	}
+}
+
 // signState HMAC 签名（时间戳+nonce，1 小时有效；无需服务端会话）
 func (s *Service) signState(ts int64, nonce string) string {
-	mac := hmac.New(sha256.New, []byte(s.cfg.ClientSecret))
+	mac := hmac.New(sha256.New, []byte(s.clientSecret()))
 	_, _ = fmt.Fprintf(mac, "oidc-state:%d:%s", ts, nonce) // hash.Write 恒返回 nil
 	return fmt.Sprintf("%d.%s", ts, hex.EncodeToString(mac.Sum(nil)))
 }
@@ -239,7 +272,7 @@ func (s *Service) ExchangeCallback(ctx context.Context, baseURL, code, state, no
 	form.Set("code", code)
 	form.Set("redirect_uri", s.RedirectURI(baseURL))
 	form.Set("client_id", s.cfg.ClientID)
-	form.Set("client_secret", s.cfg.ClientSecret)
+	form.Set("client_secret", s.clientSecret())
 	var tok struct {
 		AccessToken string `json:"access_token"`
 	}

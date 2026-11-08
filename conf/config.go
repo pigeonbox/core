@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/oekit/pkg/secretx"
 )
 
 // globalConfig 全局配置快照（原子持有）。
@@ -900,13 +902,20 @@ type SecurityConfig struct {
 
 // OIDCConfig OIDC 单点登录配置（P2；默认关闭。启用需 issuer/client_id/client_secret，
 // 回调地址 <base_url>/api/v1/user/oidc/callback）
+//
+// ⚠️ ClientSecret 是 secretx.SecureString 持有器（core#81，XOR 混淆存储）：
+//   - 解码：bootstrap.InitConfig 经 conf.SecretStringDecodeHook 直接填持有器
+//     （明文自解码起不在配置结构体驻留；core#73 试点「明文两份」的根源即此）；
+//   - 读取：一律 Get()，持有器内含锁不得拷贝本体；
+//   - JSON：wire 仍是字符串，Marshal/Unmarshal 在本类型上定制（见 secure.go）
+//     ——落库/字段级合并要真值往返，管理台读响应的脱敏在 app/admin 门面。
 type OIDCConfig struct {
-	Enabled          bool   `mapstructure:"enabled" json:"enabled"`                     // env: PB_OIDC_ENABLED
-	Issuer           string `mapstructure:"issuer" json:"issuer"`                       // env: PB_OIDC_ISSUER
-	ClientID         string `mapstructure:"client_id" json:"client_id"`                 // env: PB_OIDC_CLIENT_ID
-	ClientSecret     string `mapstructure:"client_secret" json:"client_secret"`         // env: PB_OIDC_CLIENT_SECRET
-	Scopes           string `mapstructure:"scopes" json:"scopes"`                       // 默认 "openid profile email"；env: PB_OIDC_SCOPES
-	FrontendCallback string `mapstructure:"frontend_callback" json:"frontend_callback"` // 默认 /#/oidc/callback
+	Enabled          bool                  `mapstructure:"enabled" json:"enabled"`                     // env: PB_OIDC_ENABLED
+	Issuer           string                `mapstructure:"issuer" json:"issuer"`                       // env: PB_OIDC_ISSUER
+	ClientID         string                `mapstructure:"client_id" json:"client_id"`                 // env: PB_OIDC_CLIENT_ID
+	ClientSecret     *secretx.SecureString `mapstructure:"client_secret" json:"client_secret"`         // env: PB_OIDC_CLIENT_SECRET；nil/空 = 未配置
+	Scopes           string                `mapstructure:"scopes" json:"scopes"`                       // 默认 "openid profile email"；env: PB_OIDC_SCOPES
+	FrontendCallback string                `mapstructure:"frontend_callback" json:"frontend_callback"` // 默认 /#/oidc/callback
 }
 
 // APITokenConfig 用户级 API Key（个人访问令牌，pb_sk_）。

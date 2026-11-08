@@ -28,8 +28,17 @@ type (
 func (s *Service) ConfigService() *appconfig.Service { return s.cfg }
 
 // GetConfig 获取系统配置（委派 config 域；首次调用从 DB 懒加载）。
+//
+// ⚠️ 管理台读边界脱敏（core#81）：返回副本中 oidc.client_secret 已换成掩码
+// 哨兵（conf.SecretMask）——明文不随管理台读响应出域。写侧 UpdateConfig 识别
+// 哨兵/等值保留现值。内部消费方（装配/联邦同步/能力位）请直用 app/config 域
+// 的 GetConfig（不脱敏），不要从本门面取真值。
 func (s *Service) GetConfig(ctx context.Context) (*SystemConfig, error) {
-	return s.cfg.GetConfig(ctx)
+	cfg, err := s.cfg.GetConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return appconfig.SanitizeForAdmin(cfg), nil
 }
 
 // UpdateConfig 更新系统配置（委派 config 域；写穿 DB + 全局 conf overlay + 热重建钩子）。

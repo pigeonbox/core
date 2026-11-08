@@ -161,8 +161,15 @@ func initThriftIDLServices(database *gorm.DB) {
 			// —— 原地改写 bootstrap.config 这个**旧对象**（全局配置改为原子换指针后
 			// 它已被换掉）⇒ 改的是没人读的旧快照 ⇒ **OIDC 热生效失效**。
 			// 现在写进当前快照的副本，再原子换指针。
+			// 旧持有器零化（core#81 热更路径）：换新密钥时旧 secret 的混淆存储
+			// 立即清零。⚠️ identity 守卫：conf 已被 applySystemConfigOverlayLocked
+			// 写成 *o（同一持有器）时绝不清——那会把现役密钥清零，登录当场失效。
 			conf.UpdateGlobalConfig(func(next *conf.AppConfiguration) {
+				prev := next.Security.OIDC.ClientSecret
 				next.Security.OIDC = *o
+				if prev != nil && prev != next.Security.OIDC.ClientSecret {
+					prev.Clear()
+				}
 			})
 			customHandler.SetOIDCService(oidcApp.NewService(database, oidcApp.Config{
 				Enabled:          o.Enabled,

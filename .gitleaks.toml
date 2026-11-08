@@ -51,3 +51,13 @@ description = "Azurite 公开开发密钥（真机联调用，公开文档常量
 regexes = [
   '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==''',
 ]
+
+# OIDC ClientSecret 收编（core#81）测试夹具：混淆持有器的哨兵值。
+# 为什么需要：generic-api-key 按「变量名带 secret + 高熵值」判定 ⇒ secure_test.go
+# 的 fixture 常量被判成泄露。为什么用值正则：只豁免这一个确认是测试哨兵的
+# 字面量，未来误粘贴真凭据仍会被抓。
+[[allowlists]]
+description = "OIDC secret 持有器测试哨兵（非真实凭据）"
+regexes = [
+  '''oidc-secret-marker-9f2b''',
+]
