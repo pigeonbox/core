@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -92,6 +93,25 @@ func TestExternal_SSRF_TelegramHostPinned(t *testing.T) {
 	u, err := url.Parse(target)
 	require.NoError(t, err)
 	assert.Equal(t, "api.telegram.org", u.Host, "host 必须钉死 api.telegram.org")
+
+	// 纵深防御判据要过 SSRF 闸门，而闸门会解析域名。解析结果**不由本仓决定**：
+	// DNS 被污染的环境会给出特殊用途段应答（本机实测 AAAA = 2001::9f6a:794b，
+	// 即 Teredo 封装的 159.106.121.75），闸门如实拒绝——那是对的，不是回归。
+	// 故先用闸门自己判定"这个解析结果本身是否可放行"：若连 IP 字面量形式都拒，
+	// 说明本次拒绝的原因在解析结果而不在本用例要证明的 URL 形态，跳过。
+	// 闸门对**每一个**解析结果都判，故这里也要逐个过一遍。
+	if ips, lerr := net.LookupIP(u.Hostname()); lerr == nil && len(ips) > 0 {
+		for _, ip := range ips {
+			ipHost := ip.String()
+			if ip.To4() == nil {
+				ipHost = "[" + ipHost + "]"
+			}
+			if errIP := security.ValidateEndpointURL("https://" + ipHost + "/botTOKEN/sendMessage"); errIP != nil {
+				t.Skipf("DNS 应答 %s 属特殊用途段（闸门如实拒绝，非回归）：%v", ip, errIP)
+			}
+		}
+	}
+
 	assert.NoError(t, security.ValidateEndpointURL(target), "拼好的 URL 仍须过校验（纵深防御）")
 }
 
