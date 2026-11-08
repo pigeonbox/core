@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/oekit/gormx/crud"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 )
@@ -45,28 +46,43 @@ func (r *TransferLogRepository) TrendByDay(ctx context.Context, from time.Time, 
 	return rows, err
 }
 
+// List 传输日志列表（审计面）。
+// 条件拼装已收编 gormx/crud QuerySpec（core#88）：字段/操作符白名单
+// fail-closed；条件词序与手拼时代同（operation → user_id → search），
+// gorm 软删 scope 仍在 WHERE 末尾——空筛选仍带软删约束，不得退化成
+// 无 WHERE 查询（fail-closed 判据见 queriespec_pilot_test.go）。
 func (r *TransferLogRepository) List(ctx context.Context, query model.TransferLogQuery) ([]*model.TransferLog, int64, error) {
 	page, pageSize := normalizePage(query.Page, query.PageSize)
 
+	spec := transferLogQuerySpec(query)
+
 	dbQuery := r.db().WithContext(ctx).Model(&model.TransferLog{})
+	dbQuery = applySpecConds(dbQuery, spec)
+
+	return paginate[model.TransferLog](dbQuery.Order("created_at DESC"), page, pageSize)
+}
+
+// transferLogQuerySpec 构建传输日志列表的 WHERE 条件（core#88）。
+// 词序与手拼时代逐条件同序，不可随意重排（sqlite 按条件顺序做索引分析）。
+func transferLogQuerySpec(query model.TransferLogQuery) *crud.Query {
+	spec := crud.NewQuery()
 
 	if query.Operation != "" {
-		dbQuery = dbQuery.Where("operation = ?", query.Operation)
+		spec.Where("operation", "=", query.Operation)
 	}
 
 	if query.UserID != nil {
-		dbQuery = dbQuery.Where("user_id = ?", *query.UserID)
+		spec.Where("user_id", "=", *query.UserID)
 	}
 
 	if query.Search != "" {
 		like, esc := LikeContains(query.Search)
-		dbQuery = dbQuery.Where(
-			"file_code LIKE ? OR file_name LIKE ? OR username LIKE ? OR ip LIKE ? "+esc,
-			like, like, like, like,
-		)
+		// 多占位符 + ESCAPE 子句片段走 WhereRaw（值仍全部占位符参数化）
+		spec.WhereRaw("file_code LIKE ? OR file_name LIKE ? OR username LIKE ? OR ip LIKE ? "+esc,
+			like, like, like, like)
 	}
 
-	return paginate[model.TransferLog](dbQuery.Order("created_at DESC"), page, pageSize)
+	return spec
 }
 
 // DeleteOlderThan 日志保留清理：删除 created_at 早于 cutoff 的行，返回删除行数。
