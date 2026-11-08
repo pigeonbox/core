@@ -35,7 +35,7 @@ require (
 	github.com/oekit/core v0.13.4
 	github.com/oekit/gormx v0.11.7
 	github.com/oekit/kitx v0.5.0
-	github.com/oekit/pkg v0.38.0
+	github.com/oekit/pkg v0.39.0
 	github.com/oekit/redisx v0.11.4
 	github.com/pkg/sftp v1.13.12
 	github.com/studio-b12/gowebdav v0.13.0

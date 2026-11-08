@@ -22,6 +22,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -186,5 +187,17 @@ func TestPreviewSpawnsGoThroughProbeCmd(t *testing.T) {
 		if strings.Contains(string(src), "exec.Command") {
 			t.Errorf("%s 出现 exec 直起子进程——必须经 newProbeCmd（唯一环境门禁点），绕过 = 凭据泄漏面回归", f)
 		}
+	}
+}
+
+// TestNewProbeCmd_TreeKillWired（core#71 收编锁）：newProbeCmd 必须经
+// procx.Command（Setpgid 建组=组击杀收整树）——换回裸 exec.CommandContext 即红。
+func TestNewProbeCmd_TreeKillWired(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Setpgid 为 unix SysProcAttr 字段")
+	}
+	cmd := newProbeCmd(context.Background(), "true")
+	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setpgid {
+		t.Fatal("newProbeCmd 未走 procx（Setpgid 未挂）——整树终止回归")
 	}
 }

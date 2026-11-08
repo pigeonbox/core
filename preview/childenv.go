@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/oekit/pkg/procx"
 )
 
 // 本文件是 core#84 的落地：预览子进程凭据门禁 + 输出有界捕获。
@@ -18,9 +20,10 @@ import (
 // CombinedOutput/Output 无上限 ⇒ 恶意/损坏媒体让 ffmpeg 往 stderr 狂刷，
 // 单请求即可吃满内存。
 //
-// ⚠️ 等上游收编后替换：oekit/pkg#284（procx 进程树终止原语提案，本段约束随其落地删除）。
-// 直接依赖 oagentkit/runtime/procx.ChildEnv 会新增跨 org 依赖边（与 #71
-// 的 procx 决策同构），两个上游通道有结论前先在本包内实现，并注释留痕。
+// core#71 D2 落地：子进程整树终止已收编 oekit/pkg procx（v0.38.3 起）——
+// newProbeCmd 全部走 procx.Command（Setpgid 建组 → 组 TERM → 宽限 SIGKILL
+// + 跨组逃逸清扫；windows Job Object），doc.go 的 D3 过渡约束（「驱动不得
+// 守护化」）随之退役。
 
 // probeOutputCap 单个子进程 stdout/stderr 的捕获上限（保留尾部）。
 // 超限截头留尾进诊断——恶意媒体的 stderr 刷屏不再能吃满内存。
@@ -90,11 +93,13 @@ func (t *tailBuffer) Write(p []byte) (int, error) {
 
 func (t *tailBuffer) String() string { return string(t.buf) }
 
-// newProbeCmd 构造预览子进程命令——**唯一的子进程环境门禁点**：
-// cmd.Env = childEnv()。preview 包内一切 exec 都必须经它
-// （TestPreviewSpawnsGoThroughProbeCmd 源码守卫锁死；绕过 = 凭据泄漏面回归）。
+// newProbeCmd 构造预览子进程命令——**唯一的子进程环境门禁点 + 整树终止**：
+// cmd.Env = childEnv()（deny-by-default）+ procx.Command（ctx 到期整树收场，
+// 替代 exec.CommandContext 的只杀直接子进程；core#71 D2 收编 oekit/pkg procx）。
+// preview 包内一切 exec 都必须经它（TestPreviewSpawnsGoThroughProbeCmd 源码
+// 守卫锁死；绕过 = 凭据泄漏面/进程残留回归）。
 func newProbeCmd(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := procx.Command(ctx, name, args...)
 	cmd.Env = childEnv()
 	return cmd
 }
