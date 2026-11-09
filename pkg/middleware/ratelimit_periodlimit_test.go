@@ -45,14 +45,26 @@ func TestMain(m *testing.M) {
 }
 
 // newPeriodTestRedis 起真 miniredis + 快速失败的 go-redis 客户端。
+//
 // 故障注入场景（Close miniredis）必须单次命令快速失败，否则慢到足以让本地桶
 // 在两次 allow 之间补回令牌（rate 5/s ⇒ 200ms 一枚），把「burst 用尽应拒」的
-// 判据变成时序竞态。三处缺一不可（实测逐一定位）：
+// 判据变成时序竞态。两处缺一不可（实测逐一定位）：
 //   - MaxRetries=-1：命令层不重试；
 //   - DialerRetries=1：**连接层**拨号失败不重试——go-redis v9.23 的 pool 对
 //     拨号失败默认重试 5 次、每次间隔 100ms（DialerRetries<=0 会被钳回 5），
-//     且这条重试在 MaxRetries 语义之外 ⇒ 单命令 ~400ms；
-//   - DialTimeout/ReadTimeout 短超时兜底（与上游 redisx/ratelimit 测试同款配方）。
+//     且这条重试在 MaxRetries 语义之外 ⇒ 单命令 ~400ms。
+//
+// ⚠️ **ReadTimeout 刻意放宽到 2s**（原 50ms）：故障注入靠的是「Close 后拨号
+// 被拒」（connection refused，实测 0.2~0.7ms 立即失败），**不依赖 ReadTimeout**；
+// 而短 ReadTimeout 会把「机器慢」误判成「Redis 故障」：CPU 压力下健康请求
+// 也会超时 ⇒ Take 返回 Unknown ⇒ 降级到本地桶 ⇒ 但本地桶在健康期从未被消耗
+// （Redis 路径不碰它，仍是满桶）⇒ 降级瞬间额外放行一整个 burst ⇒
+// 「超额应拒」类判据在压力下假红（2026-11-09 实录：HEAD 原码与收编后同压同红，
+// 证明是既有时序缺陷而非收编引入）。
+//
+// 短 ReadTimeout 想防的「故障命令太慢 ⇒ 本地桶补回令牌」不成立：Close 后是
+// 拨号被拒，不是等超时。真正的等待只发生在「连不上但端口还在」的场景，本仓
+// 故障注入不制造该场景。
 func newPeriodTestRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -61,7 +73,7 @@ func newPeriodTestRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 		MaxRetries:    -1,
 		DialerRetries: 1,
 		DialTimeout:   10 * time.Millisecond,
-		ReadTimeout:   50 * time.Millisecond,
+		ReadTimeout:   2 * time.Second,
 	})
 	t.Cleanup(func() { _ = c.Close() })
 	return mr, c
@@ -290,4 +302,80 @@ func TestRateLimiter_PeriodLimit_QuotaHotUpdate(t *testing.T) {
 	assert.True(t, rl.allow(ctx, scopeGlobal, ip), "抬配额后第 5 次（恰满）应放行")
 	assert.False(t, rl.allow(ctx, scopeGlobal, ip), "抬配额后第 6 次仍拒")
 	assert.Equal(t, "6", mustGet(t, mr, key))
+}
+
+// ==================== 收编 ResilientLimiter 后的降级口径与可观测面 ====================
+
+// TestRateLimiter_Resilient_FallbackSourceObservable 钉住 core#83 的核心主张：
+// 「Redis 故障降级」从此**可观测**——升级前降级被静默当成正常限流、攻击流量被
+// 算进故障降级，值夜的人查不出来；收编后 Stats 里有 redis_fallback 分项。
+//
+// 判据：
+//   - 健康期判定依据是 redis（不计入降级计数）；
+//   - 故障期判定依据是 local-fallback（本地桶兜底），且计数增长；
+//   - 恢复后自动切回 redis，降级计数**不再增长**（不粘死在本地）。
+//
+// 负对照：
+//   - 撤 WithFallbackMetrics ⇒ 故障期 local-fallback 计数恒 0 ⇒ 断言红；
+//   - 若把降级判成 redis（口径混同）⇒ 健康期计数就非 0 ⇒ 断言红。
+func TestRateLimiter_Resilient_FallbackSourceObservable(t *testing.T) {
+	mr, c := newPeriodTestRedis(t)
+	rl := newPeriodTestLimiter(t, 5, 1, 0, c)
+	ctx := context.Background()
+	const ip = "203.0.113.40"
+
+	fallbackCount := func() int64 {
+		st := rl.Stats()
+		m, ok := st["redis_fallback"].(map[string]int64)
+		require.True(t, ok, "Stats 缺 redis_fallback 观测面")
+		return m["local-fallback"]
+	}
+
+	// 健康期：判定依据是 redis，降级计数恒 0
+	assert.True(t, rl.allow(ctx, scopeGlobal, ip))
+	assert.Equal(t, int64(0), fallbackCount(), "健康期不应有降级判定")
+
+	// 故障期（Close ⇒ 拨号被拒 ⇒ Take 返回 Unknown）：判定依据是 local-fallback
+	mr.Close()
+	const ip2 = "203.0.113.41"
+	assert.True(t, rl.allow(ctx, scopeGlobal, ip2), "故障期应回退本地桶放行")
+	assert.Equal(t, int64(1), fallbackCount(), "故障期应记一次 local-fallback 降级")
+
+	// 恢复期：自动切回 redis，降级计数不再增长
+	require.NoError(t, mr.Restart())
+	const ip3 = "203.0.113.42"
+	assert.True(t, rl.allow(ctx, scopeGlobal, ip3), "恢复后应放行")
+	assert.Equal(t, int64(1), fallbackCount(), "恢复后应切回 redis、不再新增降级计数")
+}
+
+// TestRateLimiter_Resilient_FallbackDoesNotPreSpendLocalBucket 钉住降级口径的
+// **边界**：Redis 健康期走的是分布式窗口，**完全不碰本地桶** ⇒ 本地桶在降级
+// 瞬间仍是满的（未被消耗）⇒ 故障后第一笔按本地桶余量放行。
+//
+// 这不是缺陷而是「本地桶是兜底限速器、不是配额计数器」的必然结果——本地桶的
+// 语义是「速率上限」，不是「窗口内配额」：Redis 活着时没必要用它记账；Redis 死
+// 了才由它接管，此时它按速率放行、而不是按「Redis 时期已用掉多少」扣减。
+//
+// 判据：Redis 死前把本地桶的令牌用光（让本地桶处于拒绝态），故障后的请求就必
+// 须被拒——证明降级确实由本地桶判定，而不是恒放行（fail-open 恒放行回归）。
+//
+// 负对照：
+//   - 若降级路径恒放行（不查本地桶）⇒ 故障后仍放行 ⇒ 拒绝断言红；
+//   - 若降级路径误用 Redis 的失败计数 ⇒ 结论与本用例相反 ⇒ 红。
+func TestRateLimiter_Resilient_FallbackDoesNotPreSpendLocalBucket(t *testing.T) {
+	mr, c := newPeriodTestRedis(t)
+	rl := newPeriodTestLimiter(t, 5, 1, 0, c) // Burst=1：本地桶只有 1 枚令牌
+	ctx := context.Background()
+
+	// 先把本地桶的令牌用光：Redis 路径不碰本地桶，只能靠 SetRedis(nil) 走本地路径
+	rl.SetRedis(nil)
+	const ip = "203.0.113.50"
+	assert.True(t, rl.allow(ctx, scopeGlobal, ip), "本地桶首枚令牌应放行")
+	assert.False(t, rl.allow(ctx, scopeGlobal, ip), "本地桶耗尽后应拒")
+
+	// 装回 Redis，但制造故障 ⇒ 判定走降级路径 ⇒ 降级看的是**当前**本地桶余量
+	rl.SetRedis(c)
+	mr.Close()
+	assert.False(t, rl.allow(ctx, scopeGlobal, ip),
+		"本地桶已耗尽，降级判定必须拒绝（恒放行= fail-open 回归）")
 }
