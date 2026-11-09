@@ -19,9 +19,13 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	redisxratelimit "github.com/oekit/redisx/ratelimit"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pigeonbox/core/pkg/metrics"
 )
 
 // redisLogDiscard 静音 go-redis 内部日志：故障注入用例（Close miniredis 制造
@@ -290,4 +294,26 @@ func TestRateLimiter_PeriodLimit_QuotaHotUpdate(t *testing.T) {
 	assert.True(t, rl.allow(ctx, scopeGlobal, ip), "抬配额后第 5 次（恰满）应放行")
 	assert.False(t, rl.allow(ctx, scopeGlobal, ip), "抬配额后第 6 次仍拒")
 	assert.Equal(t, "6", mustGet(t, mr, key))
+}
+
+// TestRateLimiter_FallbackObserved 阶段 2 收编的新观测面：Redis 故障降级不再
+// 静默——每次非 Redis 判定经 WithFallbackMetrics 计数进
+// ratelimit_fallback_total{scope,source}（core#83 阶段 2；redisx #118 的动机：
+// 「现在到底在 Redis 限还是在本地限」必须可观测）。
+//
+// 负对照：撤 resilientFor 的 WithFallbackMetrics 接线 ⇒ 计数断言红（降级
+// 行为仍在但观测面消失——正是该用例钉住的东西）。
+func TestRateLimiter_FallbackObserved(t *testing.T) {
+	mr, c := newPeriodTestRedis(t)
+	rl := newPeriodTestLimiter(t, 5, 1, 0, c)
+
+	fallbackVec := metrics.RatelimitFallbackVec()
+	before := testutil.ToFloat64(fallbackVec.WithLabelValues(string(scopeGlobal), redisxratelimit.SourceLocalFallback.String()))
+
+	// 故障期一次降级判定（本地桶路径，同 UnknownFallsBack 用例的注入法）
+	mr.Close()
+	_ = rl.allow(context.Background(), scopeGlobal, "203.0.113.30")
+
+	after := testutil.ToFloat64(fallbackVec.WithLabelValues(string(scopeGlobal), redisxratelimit.SourceLocalFallback.String()))
+	assert.Greater(t, after, before, "降级判定必须计数进 ratelimit_fallback_total（撤 WithFallbackMetrics 即红）")
 }

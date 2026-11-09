@@ -13,6 +13,7 @@ package middleware
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -26,6 +27,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/pkg/metrics"
 	"github.com/pigeonbox/core/pkg/resp"
 )
 
@@ -127,11 +129,11 @@ type RateLimiter struct {
 	rdb      *redisCmds
 	gcCancel context.CancelFunc // 停封禁表清扫循环（loop.Run 的 ctx 生命周期）
 
-	// —— allowRedis 的窗口判定器缓存（redisx.PeriodLimit，per-scope 实例）——
+	// —— allowRedis 的组合判定器缓存（redisx.ResilientLimiter，per-scope 实例）——
 	// 专用小锁：热路径只碰这张小 map，不占 rl.mu（避免与配置快照的读写锁
 	// 争用，也避免与 getLimiter 的写锁反序嵌套）。
 	periodMu       sync.Mutex
-	periodLimiters map[scope]*periodLimiterEntry
+	periodLimiters map[scope]*resilientEntry
 
 	blockedTotal int64 // 累计封禁次数（观测用）
 }
@@ -142,7 +144,7 @@ func NewRateLimiter(cfg RateLimitConfig) *RateLimiter {
 		limiters:       map[scope]*ratelimit.KeyedLimiter{},
 		blocked:        map[string]time.Time{},
 		cfg:            cfg,
-		periodLimiters: map[scope]*periodLimiterEntry{},
+		periodLimiters: map[scope]*resilientEntry{},
 	}
 	rl.rebuildLimiters(cfg)
 	// 后台定期清理封禁表（client 桶的空闲清理由 KeyedLimiter 自管，见 gc）；
@@ -296,44 +298,80 @@ const redisWindowPeriod = time.Second
 // 不再需要，旧键 2s TTL 自然过期，无迁移问题。
 func redisCountKeyPrefix(s scope) string { return "pb:rl:cnt:" + string(s) }
 
-// periodLimiterEntry 缓存的窗口判定器 + 构建时快照（quota/client）。
-// 任一快照与当前不符 ⇒ 下一次 Take 前惰性重建（配额热更 / SetRedis 换端）。
-type periodLimiterEntry struct {
-	pl     *redisxratelimit.PeriodLimit
+// resilientEntry 缓存的组合判定器 + 构建时快照（quota/client）。
+// 任一快照与当前不符 ⇒ 下一次判定前惰性重建（配额热更 / SetRedis 换端）。
+type resilientEntry struct {
+	res    *redisxratelimit.ResilientLimiter
 	quota  int64         // 构建时的配额（s.qpsOf）
 	client *redis.Client // 构建时的 store（redis.Scripter 的具体载体）
 }
 
-// periodLimiterFor 取（或惰性构建）某 scope 的固定窗口判定器。
+// localAdapter 把 concurrency ratelimit.Limiter（Allow() bool，TokenBucket 的
+// 接口形态）适配到 redisx LocalLimiter（AllowN(now, n)——与 x/time/rate 同形）。
+// 忽略 now/n（桶自身管时钟与令牌数），只保留放行判定。
+type localAdapter struct{ l ratelimit.Limiter }
+
+func (a localAdapter) AllowN(now time.Time, n int) bool { return a.l.Allow() }
+
+// observeFallback 构造 ResilientLimiter 的降级观测闭包：计数（metrics 恒增）
+// + 节流日志（Redis 故障期间每次请求都降级，Warn 60s 至多一条，高频面交给
+// 计数器承担——core#83 阶段 2 的新观测面：降级不再静默）。
+func observeFallback(s scope) func(redisxratelimit.Source) {
+	var lastWarn atomic.Int64
+	return func(src redisxratelimit.Source) {
+		metrics.RecordRatelimitFallback(string(s), src.String())
+		now := time.Now().Unix()
+		if prev := lastWarn.Load(); prev >= now-60 {
+			return // 60s 内已打过
+		} else if !lastWarn.CompareAndSwap(prev, now) {
+			return // 并发路径已有人打过
+		}
+		logger.Warn("[ratelimit] Redis 不可用，限流降级本地桶判定",
+			zap.String("scope", string(s)),
+			zap.String("source", src.String()))
+	}
+}
+
+// resilientFor 取（或惰性构建）某 scope 的组合判定器（Redis 窗口 + 本地桶
+// 兜底，redisx #118 的 ResilientLimiter——阶段 2 收编：三态降级口径与来源
+// 观测上收上游单源，本仓只留配置映射与观测接线）。
+//
+// 阶段 1 手拼的「Unknown ⇒ getLimiter().Allow()」降级分支被上游
+// decideFallback 等价接管；语义对照（阶段 1 用例全部保留作回归锁）：
+//   - Allowed/HitQuota ⇒ 放行；OverQuota ⇒ 拒（addBlock 双层封禁不动）；
+//   - Unknown（Redis 故障/ctx 超时）且有本地桶 ⇒ SourceLocalFallback 按桶判
+//     （与手拼版 getLimiter().Allow() 同一批 KeyedLimiter per-IP 桶）；
+//   - Unknown 且桶缺失（scope 未注册，理论不可达）⇒ FailModeOpen 放行
+//     （与手拼版 `limiter == nil || limiter.Allow()` 的 nil→true 同口径）；
+//   - Redis 恢复后下一次判定自动切回 SourceRedis（上游无探活后台，故障期
+//     每请求多付一次失败往返，与阶段 1 「缓存实例保留」同自愈口径）。
 //
 // PeriodLimit 是 per-实例 quota（构造参数），故按 scope 各持一个实例；构造期
 // store 未就绪（SetRedis 后到）⇒ 惰性构建 + 缓存。配额热更（UpdateConfig 换
-// qps）或 SetRedis 换客户端 ⇒ 快照失配、下一次 Take 前重建——两次 Take 之间
-// 不存在窗口，惰性重建与「同步重建」无行为差异。Redis 故障期间缓存实例保留
-// （Unknown 回退本地桶不动缓存）⇒ 恢复后下一次 Take 自动切回，不粘死在本地。
-func (rl *RateLimiter) periodLimiterFor(s scope, quota int64, client *redis.Client) *redisxratelimit.PeriodLimit {
+// qps）或 SetRedis 换客户端 ⇒ 快照失配、下一次判定前重建——两次判定之间不
+// 存在窗口，惰性重建与「同步重建」无行为差异。
+func (rl *RateLimiter) resilientFor(s scope, quota int64, client *redis.Client) *redisxratelimit.ResilientLimiter {
 	rl.periodMu.Lock()
 	defer rl.periodMu.Unlock()
 	if e := rl.periodLimiters[s]; e != nil && e.quota == quota && e.client == client {
-		return e.pl
+		return e.res
 	}
-	pl := redisxratelimit.NewPeriodLimit(redisWindowPeriod, quota, client, redisCountKeyPrefix(s),
+	dist := redisxratelimit.NewPeriodLimit(redisWindowPeriod, quota, client, redisCountKeyPrefix(s),
 		redisxratelimit.WithPeriodAlign())
-	rl.periodLimiters[s] = &periodLimiterEntry{pl: pl, quota: quota, client: client}
-	return pl
+	res := redisxratelimit.NewResilientLimiter(dist, func(key string) redisxratelimit.LocalLimiter {
+		if l := rl.getLimiter(s, key); l != nil {
+			return localAdapter{l: l}
+		}
+		return nil
+	}, redisxratelimit.WithFallbackMetrics(observeFallback(s)))
+	rl.periodLimiters[s] = &resilientEntry{res: res, quota: quota, client: client}
+	return res
 }
 
-// allowRedis Redis 固定窗口计数（1s 窗口）——窗口判定收编 oekit/redisx 的
-// PeriodLimit（Lua 原子 INCRBY + 首次 EXPIRE + 三态返回，替代此前手搓的
-// IncrWithTTL + n<=qps 两段式），本仓只留配置映射（qps→quota、scope→键前缀）
-// 与三态降级口径：
-//
-//   - Allowed / HitQuota ⇒ 放行（HitQuota = 恰好用完配额仍放行，与旧
-//     `n<=qps` 同一边界：第 qps 个请求放行、第 qps+1 个拒绝）；
-//   - OverQuota ⇒ 拒（由 allow 的 addBlock 落短封禁——封禁双层语义原样，
-//     不并入限流判定）；
-//   - Unknown / err（Redis 故障或应答不可识别，本次配额不消耗）⇒ 回退
-//     进程内桶（getLimiter().Allow()，原降级语义）。
+// allowRedis Redis 固定窗口计数（1s 窗口）——阶段 1 窗口判定收编 PeriodLimit
+// 后，阶段 2 再收编 ResilientLimiter（Redis 窗口 + 本地桶兜底组合原语）：
+// 三态降级口径与「判定来源」观测均由上游单源承担（语义对照表见 resilientFor），
+// 本方法只剩配置映射（qps→quota）与放行判定。
 //
 // 窗口对齐：WithPeriodAlign 按自然周期对齐（与旧 epoch 秒键同款语义）。
 // 1s 窗口下上游对齐/不对齐的 TTL 计算两式恰好重合（period - unix%period ==
@@ -344,14 +382,9 @@ func (rl *RateLimiter) allowRedis(ctx context.Context, rdb *redisCmds, s scope, 
 	if qps <= 0 {
 		qps = 1
 	}
-	pl := rl.periodLimiterFor(s, int64(qps), rdb.Client)
-	state, err := pl.Take(ctx, ip)
-	if state == redisxratelimit.Unknown || err != nil {
-		// Redis 故障：回退进程内 bucket
-		limiter := rl.getLimiter(s, ip)
-		return limiter == nil || limiter.Allow()
-	}
-	return state != redisxratelimit.OverQuota
+	res := rl.resilientFor(s, int64(qps), rdb.Client)
+	d, _ := res.Allow(ctx, ip) // 降级判定已在组合原语内完成；err 仅伴随非 Redis Source
+	return d.Allowed
 }
 
 // allow 检查 IP 在某 scope 下是否被允许
