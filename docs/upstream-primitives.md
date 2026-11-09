@@ -76,3 +76,18 @@
   ④ 排序/分页/Preload 不进 QuerySpec（本仓口径 paginate + core#8 Policy 不动）。
 - **推广判定**：试点稳定一个列车周期后，再按「条件数最多 + 有用户输入参与」逐簇
   收编剩余手拼查询（42 文件不大爆炸）。
+
+## 8. 2026-11-09 收编对账（当日 sweep 全量记录）
+
+| 原语 | 上游 | core 落点 | PR |
+|---|---|---|---|
+| procx.Command（进程树终止：Setpgid 组击杀 + 跨组逃逸清扫 + windows Job Object） | pkg v0.39.0（#284→#304/#309） | preview.newProbeCmd 全量切换，D3 过渡约束退役 | #94 |
+| procx.ChildEnv + WithOutputLimit（子进程环境清洗 + 输出封顶，「#294 三件套」收口） | pkg v0.41.0（#314） | preview/childenv.go 整表收编——自维护 previewEnvAllow 删除（allowlist 表只该有一份） | #100 |
+| redisx ResilientLimiter（Redis 窗口+本地桶兜底组合原语，三态口径单源 + Source 可观测） | redisx v0.12.0（#118） | middleware ratelimit 阶段2；新增 `ratelimit_fallback_total{scope,source}` 降级观测 | #97 |
+| kitx uidgen RandomHexE/From(io.Reader)（error 变体 + 随机源注入） | kitx v0.5.0（#87→#91） | 6 处手搓收编 + 3 处吞错上抛 + opendal genToken 漏项 | #93 |
+| outbound（本仓内薄层，非上游） | — | pkg/outbound 统一注册表：三处外部客户端超时基准 + `outbound_requests_total` 观测 + 豁免表双向守卫 | #90 |
+| gormx/crud QuerySpec（fail-closed + Or 组括号 + 快照隔离） | gormx v0.11.7 | 三处最复杂 DAO 试点（EXPLAIN golden 29 组合零差异） | #95 |
+
+**核实记录**：core `pkg/memkv` 的 `_ = s.c.SetWithTTL(...)` 吞错核实为**无风险**——
+底座 `oekit/pkg/cache.LocalCache.SetWithTTL` 恒返回 nil（v0.40.0 local.go:752-757，
+写锁内直接落盘），error 仅接口形态（2026-11-09 核实）。
