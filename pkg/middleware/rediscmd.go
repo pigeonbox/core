@@ -18,9 +18,12 @@ package middleware
 //
 // ## 为什么用 NewClientFromClient 包住既有客户端
 //
-// `redisx.NewClient` 会**改写**调用方未设置的连接默认参数（DialTimeout /
-// ReadTimeout / WriteTimeout / PoolTimeout / MinIdleConns）⇒ 连接语义会变；
-// `NewClientFromClient` 是**纯包装**：不新建连接、不动任何连接参数。
+// `redisx.NewClient` 自 v0.12.0（#116）起**不再原地改写**调用方的
+// UniversalOptions——入口先 shallow-copy，缺省值只填在副本上；但它对**建出的
+// 客户端**仍会补生产缺省连接参数（DialTimeout/ReadTimeout/WriteTimeout/
+// PoolTimeout/MinIdleConns），与 core 在 repo/redis 里自管的连接语义不同。
+// 本处只要 Counter 原语、不要第二条连接 ⇒ `NewClientFromClient` 是**纯包装**：
+// 不新建连接、不动任何连接参数（调用方连接行为完全不变）。
 
 import (
 	"context"
