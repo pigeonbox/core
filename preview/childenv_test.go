@@ -60,10 +60,23 @@ func envHas(env []string, k string) bool {
 // TestChildEnv_Allowlist 纯单元：凭据哨兵不在 allowlist ⇒ 剔除；
 // PATH/TMPDIR 正对照保留（正对照键用 t.Setenv 显式落值，不依赖测试进程
 // 恰好带着它们）。
+//
+// 收编 oekit/pkg procx.ChildEnv 后（pkg v0.41.0，pkg#314），本用例的判据
+// 从「本仓白名单表」升级为「上游口径」：
+//   - allowlist 口径不变（默认拒绝）⇒ 哨兵仍须剔除；
+//   - 正对照项除 PATH/TMPDIR 外，另钉住 windows 运行必需组
+//     （SystemRoot/USERPROFILE/ComSpec 组）——它们缺失会让大量程序直接
+//     失能，是「收编后不能丢项」的反向守卫；
+//   - 钉住本仓经 extra 显式保留的 USERDOMAIN（上游通用白名单未收录，
+//     由消费方按「自己需要什么」显式声明）。
 func TestChildEnv_Allowlist(t *testing.T) {
 	setSentinels(t)
 	t.Setenv("PATH", "/pb-test-path")
 	t.Setenv("TMPDIR", "/pb-test-tmpdir")
+	t.Setenv("SystemRoot", "/pb-test-systemroot")
+	t.Setenv("USERPROFILE", "/pb-test-userprofile")
+	t.Setenv("ComSpec", "/pb-test-comspec")
+	t.Setenv("USERDOMAIN", "/pb-test-userdomain")
 	env := childEnv()
 	envText := strings.Join(env, "\n")
 	for _, s := range []string{sentinelAdminPW, sentinelJWT, sentinelS3} {
@@ -76,6 +89,17 @@ func TestChildEnv_Allowlist(t *testing.T) {
 	}
 	if !envHas(env, "TMPDIR") {
 		t.Error("TMPDIR 未保留（ffmpeg 写临时文件需要）")
+	}
+	// windows 运行必需组：收编上游白名单后不得丢项（缺 SystemRoot 时
+	// 大量程序含 Go runtime 的 DNS 解析直接失能）
+	for _, k := range []string{"SystemRoot", "USERPROFILE", "ComSpec"} {
+		if !envHas(env, k) {
+			t.Errorf("%s 未保留（windows 运行必需组，收编上游白名单不得丢项）", k)
+		}
+	}
+	// 本仓经 extra 显式保留的项：上游通用白名单未收录，由消费方声明
+	if !envHas(env, "USERDOMAIN") {
+		t.Error("USERDOMAIN 未保留（本仓经 ChildEnv(extra) 显式声明的项）")
 	}
 }
 

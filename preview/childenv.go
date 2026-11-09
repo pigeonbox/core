@@ -2,7 +2,6 @@ package preview
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -29,55 +28,53 @@ import (
 // 超限截头留尾进诊断——恶意媒体的 stderr 刷屏不再能吃满内存。
 const probeOutputCap = 64 << 10 // 64KiB
 
-// previewEnvAllow 预览子进程的环境 allowlist：只放行这些键，其余全部剔除。
+// childEnv 返回预览子进程的最小环境：收编 oekit/pkg procx.ChildEnv
+// （pkg v0.41.0 起提供，pkg#314 补齐 pkg#294 承诺的 env 半边）。
 //
-// 为什么默认拒绝而不是默认继承（deny-by-default）：denylist 永远漏掉新加
-// 的凭据变量；allowlist 的漏项只是子进程少一个非凭据变量，方向安全。
-var previewEnvAllow = map[string]bool{
-	// —— 进程定位与 Locale（ffmpeg/ffprobe/转码驱动定位与运行必需）——
-	"PATH":   true, // 可执行文件查找：FFmpegPath 未配绝对路径时按名定位
-	"LANG":   true, // 本地化：报错文案与数字/时间格式
-	"LC_ALL": true, // 显式 Locale（覆盖 LANG，部分发行版只认它）
-	"TZ":     true, // 时区：ffprobe 时间戳输出口径
-	// —— 临时目录与用户目录（ffmpeg 转码会写临时文件，剔掉可能解码失败）——
-	"HOME":   true, // 字体缓存/临时文件回退位置
-	"TMPDIR": true, // POSIX 临时目录
-	"TEMP":   true, // Windows 临时目录
-	"TMP":    true, // 临时目录别名（部分工具只认它）
-	// —— 出站代理（转码驱动拉远端流/资源时需要走部署方代理）——
-	"HTTP_PROXY":  true, // 大写代理（部分库只读大写形态）
-	"HTTPS_PROXY": true, // 同上
-	"NO_PROXY":    true, // 代理豁免清单（内网直连）
-	"http_proxy":  true, // 小写代理（curl/ffmpeg 约定）
-	"https_proxy": true, // 同上
-	"no_proxy":    true, // 同上
-	// —— Windows 子进程必需组（跨平台部署面）——
-	"SystemRoot":  true, // 系统目录：多数 Windows 程序初始化必需
-	"SystemDrive": true, // 系统盘符
-	"COMSPEC":     true, // shell 路径
-	"PATHEXT":     true, // 可执行扩展名解析
-	"USERPROFILE": true, // 用户目录（HOME 的 Windows 形态）
-	"USERDOMAIN":  true, // 域信息（部分运行库初始化读取）
-}
-
-// childEnv 返回预览子进程的最小环境：从 os.Environ() 过滤 allowlist，
-// 无 `=` 的畸形项一并剔除（deny-by-default）。
+// 为什么整表收编而不是本仓自维护白名单：
+//   - allowlist 表**只该有一份**——本仓此前自维护的 previewEnvAllow 与上游
+//     baseEnvAllow 是两张独立演化的表，新增基础变量（如 SSL_CERT_FILE、TERM、
+//     USER）要改两处，漏一处就是「子进程少一个变量」的随机故障（ffmpeg 找不到
+//     CA 锚 ⇒ TLS 握手失败这类「认证莫名失败」形态）；
+//   - 上游表是**allowlist（默认拒绝）**口径，与本仓原口径一致（denylist 永远
+//     漏掉新加的凭据变量，allowlist 的漏项只表现为少一个无害变量，方向安全）；
+//   - 上游额外处理了 windows 环境变量名大小写不敏感（envAllowed 按 GOOS 归一），
+//     本仓手写版没有这层。
+//
+// 上游 ChildEnv 会尾部追加 GIT_TERMINAL_PROMPT=0 与 CI=1（git 弹交互会挂到
+// 超时；对 ffmpeg/ffprobe 无害，且属上游刻意的「禁交互」纪律）。
+//
+// extra 里显式补一项 USERDOMAIN：上游 baseEnvAllow 未收录它（本仓原白名单有）。
+// 取舍依据——它是 windows **域信息**（非路径类），ffmpeg/ffprobe 解码不需要，
+// 与 SystemRoot「缺失时大量程序直接失能」不同级；但它是本仓原有白名单项，
+// 收编时不静默丢弃（上游 ChildEnv 的 extra 通道正是「消费方显式声明自己需要
+// 什么」的设计：白名单是通用最小集，工具特定项走 extra 按名放行）。
 func childEnv() []string {
-	env := os.Environ()
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok || !previewEnvAllow[k] {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
+	return procx.ChildEnv([]string{"USERDOMAIN"})
 }
 
 // tailBuffer 有界尾部缓冲：Write 全量吞入（返回 len(p), nil ⇒ 排水不封顶，
 // 子进程永不阻塞在 write 上），内存只保留最后 cap 字节（超限截头留尾）。
 // cap<=0 视为不封顶。
+//
+// ⚠️ **为什么没有换成 oekit/pkg procx.WithOutputLimit**（v0.41.0 已提供，
+// pkg#314 补齐的输出封顶半边）：两者**截断方向相反**——
+//   - 上游 WithOutputLimit：**截头留头**（cappedBuffer 超限后只保留开头 cap
+//     字节，报 StdoutTruncated/StderrTruncated 标记）；
+//   - 本仓 tailBuffer：**截头留尾**（超限后保留最后 cap 字节）。
+//
+// 本仓要的是尾部：ffmpeg/ffprobe 的**报错信息在 stderr 末尾**（文件头几行是
+// 版本横幅/流信息，末尾才是 "Invalid data found" 这类真因），截头留头会把
+// 唯一有用的诊断丢掉，只剩一段横幅。诊断面退化到「看不出为什么失败」是不可
+// 接受的——这属**真会改变行为**的语义差异，故保留本仓实现（用户口径：
+// 机械等价替换一律做掉，真语义差异保留并写明理由）。
+//
+// 上游封顶的两项能力本仓另行吃到：
+//   - 排水语义（边读边截 + 继续排空 pipe ⇒ 子进程不阻塞在 write）：本仓
+//     tailBuffer.Write 同样「全量吞入返回 len(p), nil」，与上游同口径；
+//   - 截断可判定：上游有 StdoutTruncated/StderrTruncated 标记，本仓
+//     tailBuffer 无该标记（截断发生但调用方无从得知）——这是上游领先本仓
+//     的一点，见下条 issue。
 type tailBuffer struct {
 	buf []byte
 	cap int
