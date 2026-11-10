@@ -3,6 +3,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/oekit/pkg/timex"
@@ -30,31 +31,40 @@ type AdminStats struct {
 	ForeverFiles      int64 `json:"forever_files"`
 }
 
-// GetStats 获取管理员统计信息
+// GetStats 获取管理员统计信息。
+//
+// core#137：查询失败**显式返回错误**，不再逐项静默跳过——此前坏库下恒
+// `return stats, nil`，管理台统计页 200 全 0 无错误态（故障期的全 0 不是
+// 统计，是假数据），与 core#102「失败必须可见」相悖。错误原文随返回值进
+// handler 的 resp.NewInternalError（日志留全文、出网脱敏 + trace_id）。
 func (s *Service) GetStats(ctx context.Context) (*AdminStats, error) {
 	stats := &AdminStats{}
 
 	// 获取文件统计
 	totalFiles, err := s.fileCodeRepo.Count(ctx)
-	if err == nil {
-		stats.TotalFiles = totalFiles
+	if err != nil {
+		return nil, fmt.Errorf("统计 total_files: %w", err)
 	}
+	stats.TotalFiles = totalFiles
 
 	totalSize, err := s.fileCodeRepo.GetTotalSize(ctx)
-	if err == nil {
-		stats.TotalSize = totalSize
+	if err != nil {
+		return nil, fmt.Errorf("统计 total_size: %w", err)
 	}
+	stats.TotalSize = totalSize
 
 	todayUploads, err := s.fileCodeRepo.CountTodayUploads(ctx)
-	if err == nil {
-		stats.TodayUploads = todayUploads
+	if err != nil {
+		return nil, fmt.Errorf("统计 today_uploads: %w", err)
 	}
+	stats.TodayUploads = todayUploads
 
 	// 获取用户统计
 	users, err := s.userRepo.Count(ctx)
-	if err == nil {
-		stats.TotalUsers = users
+	if err != nil {
+		return nil, fmt.Errorf("统计 total_users: %w", err)
 	}
+	stats.TotalUsers = users
 
 	// 获取今日下载（从 transfer_log 统计）
 	// todayDownloads, err := s.transferLogRepo.CountTodayDownloads(ctx)
@@ -68,14 +78,18 @@ func (s *Service) GetStats(ctx context.Context) (*AdminStats, error) {
 	// stats.AnonymousFiles = anonymousFiles
 	// stats.UserFiles = userFiles
 
-	// 文件健康洞察（2026-10-07 对标上游 dashboard 洞察卡；失败降级为 0，不阻塞统计）
-	if active, expired, expiringSoon, neverPicked, forever, err := s.fileCodeRepo.CountByHealth(ctx); err == nil {
-		stats.ActiveFiles = active
-		stats.ExpiredFiles = expired
-		stats.ExpiringSoonFiles = expiringSoon
-		stats.NeverPickedFiles = neverPicked
-		stats.ForeverFiles = forever
+	// 文件健康洞察（2026-10-07 对标上游 dashboard 洞察卡）。
+	// core#137：原「失败降级为 0，不阻塞统计」同口径收回——单项假 0 与整页
+	// 假 0 是同一个谎言，只是规模不同。
+	active, expired, expiringSoon, neverPicked, forever, err := s.fileCodeRepo.CountByHealth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("统计 file_health: %w", err)
 	}
+	stats.ActiveFiles = active
+	stats.ExpiredFiles = expired
+	stats.ExpiringSoonFiles = expiringSoon
+	stats.NeverPickedFiles = neverPicked
+	stats.ForeverFiles = forever
 
 	return stats, nil
 }
