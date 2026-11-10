@@ -16,6 +16,7 @@ import (
 	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/middleware"
+	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -38,19 +39,13 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminLoginReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, &admin.AdminLoginResp{
-			Code:    errcode.CodeInvalidParam,
-			Message: "请求参数错误: " + err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请求参数错误: "+err.Error())
 		return
 	}
 
 	// 参数验证
 	if req.Username == "" || req.Password == "" {
-		c.JSON(consts.StatusBadRequest, &admin.AdminLoginResp{
-			Code:    errcode.CodeInvalidParam,
-			Message: "用户名和密码不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "用户名和密码不能为空")
 		return
 	}
 
@@ -58,10 +53,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	lock := middleware.GetDefaultLockout()
 	lockKey := middleware.FormatLockKey("adminlogin", middleware.ClientIP(c), req.Username)
 	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
-		c.JSON(consts.StatusTooManyRequests, &admin.AdminLoginResp{
-			Code:    errcode.CodeRateLimit,
-			Message: "尝试过于频繁，账户已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeRateLimit, "尝试过于频繁，账户已临时锁定，请 "+strconv.Itoa(remain)+" 秒后重试")
 		return
 	}
 
@@ -69,10 +61,7 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	token, err := getAdminService().GenerateTokenForAdmin(ctx, req.Username, req.Password)
 	if err != nil {
 		_, _ = lock.RecordFailure(ctx, lockKey)
-		c.JSON(consts.StatusUnauthorized, &admin.AdminLoginResp{
-			Code:    errcode.CodeUnauthorized,
-			Message: err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, err.Error())
 		return
 	}
 	lock.Reset(ctx, lockKey)
@@ -104,31 +93,30 @@ func AdminStats(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminStatsReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminStatsResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
 	stats, err := getAdminService().GetStats(ctx)
-	resp := &admin.AdminStatsResp{Code: 0, Message: "success"}
 	if err != nil {
-		resp.Code = 500
-		resp.Message = err.Error()
-	} else {
-		resp.Data = &admin.AdminStatsData{
-			TotalFiles:        stats.TotalFiles,
-			TotalUsers:        stats.TotalUsers,
-			TotalSize:         stats.TotalSize,
-			TodayUploads:      stats.TodayUploads,
-			TodayDownloads:    stats.TodayDownloads,
-			ActiveFiles:       stats.ActiveFiles,
-			ExpiredFiles:      stats.ExpiredFiles,
-			ExpiringSoonFiles: stats.ExpiringSoonFiles,
-			NeverPickedFiles:  stats.NeverPickedFiles,
-			ForeverFiles:      stats.ForeverFiles,
-		}
+		resp.NewInternalError(c, errcode.CodeInternal, "获取统计", err)
+		return
+	}
+	out := &admin.AdminStatsResp{Code: 0, Message: "success"}
+	out.Data = &admin.AdminStatsData{
+		TotalFiles:        stats.TotalFiles,
+		TotalUsers:        stats.TotalUsers,
+		TotalSize:         stats.TotalSize,
+		TodayUploads:      stats.TodayUploads,
+		TodayDownloads:    stats.TodayDownloads,
+		ActiveFiles:       stats.ActiveFiles,
+		ExpiredFiles:      stats.ExpiredFiles,
+		ExpiringSoonFiles: stats.ExpiringSoonFiles,
+		NeverPickedFiles:  stats.NeverPickedFiles,
+		ForeverFiles:      stats.ForeverFiles,
 	}
 
-	c.JSON(consts.StatusOK, resp)
+	c.JSON(consts.StatusOK, out)
 }
 
 // AdminListFiles .
@@ -138,7 +126,7 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminListFilesReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminListFilesResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -169,41 +157,40 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 	} else {
 		files, total, err = getAdminService().GetFiles(ctx, page, pageSize, search)
 	}
-	resp := &admin.AdminListFilesResp{Code: 0, Message: "success"}
 	if err != nil {
-		resp.Code = 500
-		resp.Message = err.Error()
-	} else {
-		items := make([]*admin.FileItem, 0, len(files))
-		for _, f := range files {
-			expireStr := "永久"
-			if f.ExpiredAt != nil {
-				expireStr = f.ExpiredAt.Format("2006-01-02 15:04:05")
-			}
-			fileName := f.DisplayName()
-			if fileName == "" && f.Text != "" {
-				fileName = "[文本分享]"
-			}
-			items = append(items, &admin.FileItem{
-				ID:            int64(f.ID),
-				Code:          f.Code,
-				FileName:      fileName,
-				FileSize:      f.Size,
-				ExpireTime:    expireStr,
-				ViewCount:     int32(f.ViewerCount),
-				DownloadCount: int32(f.UsedCount),
-				CreatedAt:     f.CreatedAt.Format("2006-01-02 15:04:05"),
-			})
+		resp.NewInternalError(c, errcode.CodeInternal, "查询文件列表", err)
+		return
+	}
+	out := &admin.AdminListFilesResp{Code: 0, Message: "success"}
+	items := make([]*admin.FileItem, 0, len(files))
+	for _, f := range files {
+		expireStr := "永久"
+		if f.ExpiredAt != nil {
+			expireStr = f.ExpiredAt.Format("2006-01-02 15:04:05")
 		}
-		resp.Data = &admin.AdminFileList{
-			Items:    items,
-			Total:    total,
-			Page:     int32(page),
-			PageSize: int32(pageSize),
+		fileName := f.DisplayName()
+		if fileName == "" && f.Text != "" {
+			fileName = "[文本分享]"
 		}
+		items = append(items, &admin.FileItem{
+			ID:            int64(f.ID),
+			Code:          f.Code,
+			FileName:      fileName,
+			FileSize:      f.Size,
+			ExpireTime:    expireStr,
+			ViewCount:     int32(f.ViewerCount),
+			DownloadCount: int32(f.UsedCount),
+			CreatedAt:     f.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	out.Data = &admin.AdminFileList{
+		Items:    items,
+		Total:    total,
+		Page:     int32(page),
+		PageSize: int32(pageSize),
 	}
 
-	c.JSON(consts.StatusOK, resp)
+	c.JSON(consts.StatusOK, out)
 }
 
 // AdminDeleteFile .
@@ -215,7 +202,7 @@ func AdminDeleteFile(ctx context.Context, c *app.RequestContext) {
 	_ = c.BindAndValidate(&req)
 
 	pathParam := c.Param("id")
-	resp := &admin.AdminDeleteFileResp{Code: 0, Message: "success"}
+	out := &admin.AdminDeleteFileResp{Code: 0, Message: "success"}
 	var err error
 
 	// 尝试按数字 id 删除
@@ -225,20 +212,18 @@ func AdminDeleteFile(ctx context.Context, c *app.RequestContext) {
 		// 按 code 删除：先查出记录再删
 		fc, getErr := getAdminService().GetFileByCode(ctx, pathParam)
 		if getErr != nil || fc == nil {
-			resp.Code = 404
-			resp.Message = "file not found"
-			c.JSON(consts.StatusOK, resp)
+			resp.NewErrorWithMessage(c, errcode.CodeNotFound, "file not found")
 			return
 		}
 		err = getAdminService().DeleteFile(ctx, fc.ID)
 	}
 
 	if err != nil {
-		resp.Code = 500
-		resp.Message = err.Error()
+		resp.NewInternalError(c, errcode.CodeInternal, "删除文件", err)
+		return
 	}
 
-	c.JSON(consts.StatusOK, resp)
+	c.JSON(consts.StatusOK, out)
 }
 
 // AdminListUsers .
@@ -248,7 +233,7 @@ func AdminListUsers(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminListUsersReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminListUsersResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -259,37 +244,36 @@ func AdminListUsers(ctx context.Context, c *app.RequestContext) {
 	page, pageSize = paging.GenAdminListPolicy.Normalize(page, pageSize)
 
 	users, total, err := getAdminService().GetUsers(ctx, page, pageSize)
-	resp := &admin.AdminListUsersResp{Code: 0, Message: "success"}
 	if err != nil {
-		resp.Code = 500
-		resp.Message = err.Error()
-	} else {
-		items := make([]*admin.UserItem, 0, len(users))
-		for _, u := range users {
-			statusVal := int32(1)
-			if u.Status != "active" {
-				statusVal = 0
-			}
-			items = append(items, &admin.UserItem{
-				ID:         int64(u.ID),
-				Username:   u.Username,
-				Email:      u.Email,
-				Nickname:   u.Nickname,
-				Status:     statusVal,
-				QuotaUsed:  u.TotalStorage,
-				QuotaLimit: u.MaxStorageQuota,
-				CreatedAt:  u.CreatedAt.Format("2006-01-02 15:04:05"),
-			})
+		resp.NewInternalError(c, errcode.CodeInternal, "查询用户列表", err)
+		return
+	}
+	out := &admin.AdminListUsersResp{Code: 0, Message: "success"}
+	items := make([]*admin.UserItem, 0, len(users))
+	for _, u := range users {
+		statusVal := int32(1)
+		if u.Status != "active" {
+			statusVal = 0
 		}
-		resp.Data = &admin.AdminUserList{
-			Items:    items,
-			Total:    total,
-			Page:     int32(page),
-			PageSize: int32(pageSize),
-		}
+		items = append(items, &admin.UserItem{
+			ID:         int64(u.ID),
+			Username:   u.Username,
+			Email:      u.Email,
+			Nickname:   u.Nickname,
+			Status:     statusVal,
+			QuotaUsed:  u.TotalStorage,
+			QuotaLimit: u.MaxStorageQuota,
+			CreatedAt:  u.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	out.Data = &admin.AdminUserList{
+		Items:    items,
+		Total:    total,
+		Page:     int32(page),
+		PageSize: int32(pageSize),
 	}
 
-	c.JSON(consts.StatusOK, resp)
+	c.JSON(consts.StatusOK, out)
 }
 
 // AdminUpdateUserStatus .
@@ -299,7 +283,7 @@ func AdminUpdateUserStatus(ctx context.Context, c *app.RequestContext) {
 	var req admin.AdminUpdateUserStatusReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusOK, &admin.AdminUpdateUserStatusResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -309,13 +293,12 @@ func AdminUpdateUserStatus(ctx context.Context, c *app.RequestContext) {
 		statusStr = "active"
 	}
 	err = getAdminService().UpdateUserStatus(ctx, uint(req.ID), statusStr)
-	resp := &admin.AdminUpdateUserStatusResp{Code: 0, Message: "success"}
 	if err != nil {
-		resp.Code = 500
-		resp.Message = err.Error()
+		resp.NewInternalError(c, errcode.CodeInternal, "更新用户状态", err)
+		return
 	}
 
-	c.JSON(consts.StatusOK, resp)
+	c.JSON(consts.StatusOK, &admin.AdminUpdateUserStatusResp{Code: 0, Message: "success"})
 }
 
 // AdminGetConfig .
@@ -324,15 +307,12 @@ func AdminGetConfig(ctx context.Context, c *app.RequestContext) {
 	// data = SystemConfig 全量 JSON(v0.13.5 起;此前仅 3 段 typed,ex 段
 	// 永不下发——Config 页 ex 表单永不回填)。自由格式契约,data 随段演进。
 	cfg, err := getAdminService().GetConfig(ctx)
-	resp := map[string]interface{}{"code": 0, "message": "success"}
 	if err != nil {
-		resp["code"] = 500
-		resp["message"] = err.Error()
-	} else {
-		resp["data"] = cfg
+		resp.NewInternalError(c, errcode.CodeInternal, "获取配置", err)
+		return
 	}
 
-	c.JSON(consts.StatusOK, resp)
+	c.JSON(consts.StatusOK, map[string]interface{}{"code": 0, "message": "success", "data": cfg})
 }
 
 // AdminUpdateConfig .
@@ -349,11 +329,11 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 	body := c.Request.Body()
 	// 非法 body ⇒ 400（此前一律 500 ⇒ 与用户配置端点的 400 口径相反）
 	if !json.Valid(body) {
-		c.JSON(consts.StatusBadRequest, &admin.AdminUpdateConfigResp{Code: errcode.CodeInvalidParam, Message: "配置体必须是合法 JSON 对象"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "配置体必须是合法 JSON 对象")
 		return
 	}
 	if err := getAdminService().UpdateConfigJSON(ctx, body); err != nil {
-		c.JSON(consts.StatusInternalServerError, &admin.AdminUpdateConfigResp{Code: errcode.CodeInternal, Message: err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "保存配置", err)
 		return
 	}
 	c.JSON(consts.StatusOK, &admin.AdminUpdateConfigResp{Code: 0, Message: "success"})
