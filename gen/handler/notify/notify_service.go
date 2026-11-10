@@ -56,7 +56,7 @@ func List(ctx context.Context, c *app.RequestContext) {
 		Status:   statusPtr,
 	})
 	if err != nil {
-		resp.NewErrorWithMessage(c, errcode.CodeDBError, err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "查询公告列表", err)
 		return
 	}
 	resp.Success(c, toListData(data))
@@ -72,7 +72,7 @@ func Active(ctx context.Context, c *app.RequestContext) {
 	}
 	items, err := getService().Active(ctx, strDeref(req.Type))
 	if err != nil {
-		resp.NewErrorWithMessage(c, errcode.CodeDBError, err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "查询公告", err)
 		return
 	}
 	resp.Success(c, map[string]interface{}{"items": toNotifyItems(items)})
@@ -93,7 +93,7 @@ func Get(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorByCode(c, errcode.CodeNotFound)
 			return
 		}
-		resp.NewErrorWithMessage(c, errcode.CodeDBError, err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "查询公告", err)
 		return
 	}
 	resp.Success(c, toNotifyItem(*item))
@@ -143,7 +143,7 @@ func Create(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "title and content required")
 			return
 		}
-		resp.NewErrorWithMessage(c, errcode.CodeDBError, err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "创建公告", err)
 		return
 	}
 	resp.Success(c, toNotifyItem(*item))
@@ -195,7 +195,7 @@ func Update(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorByCode(c, errcode.CodeNotFound)
 			return
 		}
-		resp.NewErrorWithMessage(c, errcode.CodeDBError, err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "更新公告", err)
 		return
 	}
 	resp.SuccessWithMessage(c, "updated", nil)
@@ -215,7 +215,7 @@ func Delete(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorByCode(c, errcode.CodeNotFound)
 			return
 		}
-		resp.NewErrorWithMessage(c, errcode.CodeDBError, err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "删除公告", err)
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{"code": 0, "message": "deleted"})
@@ -310,7 +310,7 @@ func Mine(ctx context.Context, c *app.RequestContext) {
 	}
 	data, err := getService().ListForUser(ctx, uid, page, pageSize)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "查询我的通知", err)
 		return
 	}
 	items := make([]*notifymodel.UserNotifyItemData, 0, len(data.Items))
@@ -354,7 +354,7 @@ func UnreadCount(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getService().UnreadCountForUser(ctx, uid)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "查询未读数", err)
 		return
 	}
 	c.JSON(consts.StatusOK, &notifymodel.UnreadCountResp{
@@ -374,12 +374,12 @@ func MarkRead(ctx context.Context, c *app.RequestContext) {
 	// body 可为空（历史语义：只支持全部已读）
 	_ = c.BindAndValidate(&req)
 	if req.All == nil || !*req.All {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "仅支持 all=true"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "仅支持 all=true")
 		return
 	}
 	n, err := getService().MarkAllReadForUser(ctx, uid)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "标记已读", err)
 		return
 	}
 	c.JSON(consts.StatusOK, &notifymodel.MarkReadResp{
@@ -395,7 +395,7 @@ func requireUserID(c *app.RequestContext) (uint, bool) {
 			return id, true
 		}
 	}
-	c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "未登录"})
+	resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "未登录")
 	return 0, false
 }
 

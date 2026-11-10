@@ -100,28 +100,19 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 	var req sharemodel.ShareTextReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
 	// 过期样式白名单（管理员可裁剪可用样式）
 	if err := utils.CheckExpireStyleAllowed(req.ExpireStyle); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
 	// 空文本验证：拒绝空文本或只包含空白字符的文本
 	if strings.TrimSpace(req.Text) == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "分享内容不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "分享内容不能为空")
 		return
 	}
 
@@ -170,18 +161,12 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 			password = *req.Password
 		}
 		if password == "" {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeInvalidParam,
-				"message": "开启密码保护时必须提供密码",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "开启密码保护时必须提供密码")
 			return
 		}
 		hash, err := utils.HashPassword(password)
 		if err != nil {
-			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-				"code":    errcode.CodeInternal,
-				"message": "密码处理失败",
-			})
+			resp.NewInternalError(c, errcode.CodeInternal, "密码处理", err)
 			return
 		}
 		passwordHash = hash
@@ -252,10 +237,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 	//    password 更是契约外字段）
 	var req sharemodel.ShareFileReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	expireValue := int(req.ExpireValue)
@@ -268,30 +250,21 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 
 	// 过期样式白名单
 	if err := utils.CheckExpireStyleAllowed(expireStyle); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
 	// 2. 获取上传文件
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "请上传文件",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请上传文件")
 		return
 	}
 
 	// 3. 检查文件大小（upload.upload_size 单请求体上限，0=不限；
 	// 修复：此前硬编码 10MB 不读配置，调大 upload_size 对直传通道无效）
 	if maxSize := utils.GetMaxUploadSize(); maxSize > 0 && file.Size > maxSize {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeTooLarge,
-			"message": fmt.Sprintf("文件大小超过限制（最大 %d MB）", maxSize/1024/1024),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeTooLarge, fmt.Sprintf("文件大小超过限制（最大 %d MB）", maxSize/1024/1024))
 		return
 	}
 
@@ -336,10 +309,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 			_ = f.Close()
 		}
 		if err := utils.CheckUploadContent(originalFilename, head); err != nil {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeFileTypeDenied,
-				"message": err.Error(),
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeFileTypeDenied, err.Error())
 			return
 		}
 	}
@@ -347,10 +317,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 	// 5+6. 落盘（磁盘布局与存储操作收口 app/share，HTTP 适配层不直连 storage）
 	filePath, fileSize, fileHash, err := getShareService().SaveUploadFile(ctx, file, originalFilename)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": fmt.Sprintf("文件保存失败: %v", err),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "文件保存", err)
 		return
 	}
 
@@ -380,18 +347,12 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 	passwordHash := ""
 	if requireAuth {
 		if password == "" {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeInvalidParam,
-				"message": "开启密码保护时必须提供密码",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "开启密码保护时必须提供密码")
 			return
 		}
 		hash, err := utils.HashPassword(password)
 		if err != nil {
-			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-				"code":    errcode.CodeInternal,
-				"message": "密码处理失败",
-			})
+			resp.NewInternalError(c, errcode.CodeInternal, "密码处理", err)
 			return
 		}
 		passwordHash = hash
@@ -489,10 +450,7 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	password := string(c.GetHeader("X-Share-Password"))
 
 	if code == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "请提供分享码",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请提供分享码")
 		return
 	}
 
@@ -523,10 +481,7 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		// ——**换码也会累计**（见 gate.PickupEnumScope），否则本入口的枚举探测
 		// 完全没有成本上限（限流桶只限 QPS，不限总次数）。
 		gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "分享不存在或已过期",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return
 	}
 
@@ -536,20 +491,14 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
 	// 预检并入按 IP 的枚举维度（见 pkg/gate.PickupLockedRemain）
 	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), fileCode.Code); locked {
-		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
-			"code":    errcode.CodeTooManyAttempts,
-			"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain))
 		return
 	}
 
 	// 占位分享（文件未上传）：与匿名通道同一业务码（20001）与文案 —— 此前此处
 	// 返回 200 + 一条指向不存在文件的下载直链（点了就是 500）（2026-10-23 审计）。
 	if shareService.IsShareNotReady(fileCode) {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeShareNotFound,
-			"message": "分享未完成上传，暂时无法取件",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeShareNotFound, "分享未完成上传，暂时无法取件")
 		return
 	}
 
@@ -564,10 +513,7 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		already, _ := getShareService().HasPickupCharge(ctx, fileCode.Code,
 			security.TextViewKey(fileCode.Code, middleware.ClientIP(c)))
 		if !already {
-			c.JSON(consts.StatusForbidden, map[string]interface{}{
-				"code":    errcode.CodeShareReachLimit,
-				"message": "超过取件次数",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeShareReachLimit, "超过取件次数")
 			return
 		}
 	}
@@ -591,28 +537,16 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		})
 		switch decision.Verdict {
 		case gate.PickupLocked:
-			c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
-				"code":    errcode.CodeTooManyAttempts,
-				"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", decision.LockRemain),
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", decision.LockRemain))
 			return
 		case gate.PickupPasswordMissing:
 			// 密码门（缺密码）语义归 20003 分享密码门，不再用 401 字面量；
 			// HTTP 层仍 401，data.has_password 供前端就地展开密码框
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeSharePasswordWrong,
-				"message": "需要密码",
-				"data": map[string]interface{}{
-					"has_password": true,
-				},
-			})
+			resp.NewErrorWithData(c, errcode.CodeSharePasswordWrong, "需要密码", map[string]interface{}{"has_password": true})
 			return
 		case gate.PickupPasswordWrong:
 			// 失败已由闸门在统一键记账（达到阈值触发锁定）
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeSharePasswordWrong,
-				"message": "密码错误",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeSharePasswordWrong, "密码错误")
 			return
 		}
 	}
@@ -759,10 +693,7 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 			resp.NewTypedError(c, blocked)
 			return nil, "", false
 		}
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "分享不存在或已过期",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return nil, "", false
 	}
 
@@ -772,10 +703,7 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
 	// 预检并入按 IP 的枚举维度（见 pkg/gate.PickupLockedRemain）
 	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), fileCode.Code); locked {
-		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
-			"code":    errcode.CodeTooManyAttempts,
-			"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain))
 		return nil, "", false
 	}
 
@@ -798,10 +726,7 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 			} else if !tokenEnabled {
 				msg = "该分享受密码保护，且下载令牌未启用，无法直接下载"
 			}
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeDownloadToken,
-				"message": msg,
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeDownloadToken, msg)
 			return nil, "", false
 		}
 		if tokenEnabled {
@@ -809,10 +734,7 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 			if token != "" {
 				msg = "下载令牌无效或已过期，请重新获取取件信息"
 			}
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeDownloadToken,
-				"message": msg,
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeDownloadToken, msg)
 			return nil, "", false
 		}
 	}
@@ -830,36 +752,21 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 		}
 		var lockedErr *middleware.LockedError
 		if errors.As(err, &lockedErr) {
-			c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
-				"code":    errcode.CodeTooManyAttempts,
-				"message": fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", lockedErr.RemainingSeconds),
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", lockedErr.RemainingSeconds))
 			return nil, "", false
 		}
 		if err.Error() == "密码错误" {
 			// 失败已由域内统一闸门记账（达阈值触发锁定），此处不再重复计数
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeSharePasswordWrong,
-				"message": "密码错误",
-				"data": map[string]interface{}{
-					"has_password": true,
-				},
-			})
+			resp.NewErrorWithData(c, errcode.CodeSharePasswordWrong, "密码错误", map[string]interface{}{"has_password": true})
 			return nil, "", false
 		}
 		if errors.Is(err, shareService.ErrShareNotReady) {
 			// 占位分享（文件未上传）与匿名通道同一业务码与文案（2026-10-23 审计：
 			// 此前此处落泛化 404，而匿名通道是 20001 ⇒ 口径分叉）
-			c.JSON(consts.StatusNotFound, map[string]interface{}{
-				"code":    errcode.CodeShareNotFound,
-				"message": err.Error(),
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeShareNotFound, err.Error())
 			return nil, "", false
 		}
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "分享不存在或已过期",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return nil, "", false
 	}
 	lock.Reset(ctx, lockKey)
@@ -893,18 +800,12 @@ func chargePickup(ctx context.Context, c *app.RequestContext, code, fingerprint,
 		// （与本项目「宁可误禁也不可静默放行」的口径一致），并改用结构化日志。
 		logger.CtxError(ctx, "pickup charge failed, delivery denied",
 			zap.Error(err), zap.String("code", code), zap.String("channel", channel))
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "取件计次失败，请稍后重试",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "取件计次失败，请稍后重试")
 		return false
 	}
 	if exhausted {
 		// 20004「超过取件次数」（保留码位，此前未发射；前端 i18n 已备该文案）
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeShareReachLimit,
-			"message": "超过取件次数",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeShareReachLimit, "超过取件次数")
 		return false
 	}
 	if charged {
@@ -923,10 +824,7 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 	token := c.Query("token")
 
 	if code == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "请提供分享码",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请提供分享码")
 		return
 	}
 
@@ -966,10 +864,7 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 		// 该分享时返回 404，但取件次数已被吃掉（白扔一次取件机会）。
 		fc, child, gerr := getShareService().GetShareChild(ctx, fileCode.Code, fileID)
 		if gerr != nil || fc == nil || child == nil {
-			c.JSON(consts.StatusNotFound, map[string]interface{}{
-				"code":    errcode.CodeNotFound,
-				"message": "文件不存在或不属于该分享",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeNotFound, "文件不存在或不属于该分享")
 			return
 		}
 		// 计次（按取件会话）：多文件逐个下载 ⇒ 同一令牌只扣 1 次。
@@ -986,10 +881,7 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 		// 组装失败**在扣次之前**返回 500（不白吃一次取件次数）。
 		rc, zerr := getShareService().ZipStream(ctx, fileCode)
 		if zerr != nil {
-			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-				"code":    errcode.CodeInternal,
-				"message": "打包下载失败",
-			})
+			resp.NewInternalError(c, errcode.CodeInternal, "打包下载", zerr)
 			return
 		}
 		if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download") {
@@ -1002,10 +894,7 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 	// 如果是文件分享，流式返回文件
 	filePath := fileCode.GetFilePath()
 	if filePath == "" {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "文件路径为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "文件路径为空")
 		return
 	}
 
@@ -1119,7 +1008,7 @@ func requireUserID(c *app.RequestContext) (uint, bool) {
 			return id, true
 		}
 	}
-	c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "未登录"})
+	resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "未登录")
 	return 0, false
 }
 
@@ -1145,9 +1034,7 @@ func UserSharesList(ctx context.Context, c *app.RequestContext) {
 	items, total, err := getShareService().ListUserShares(ctx, uid,
 		string(c.Query("status")), string(c.Query("search")), page, pageSize)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code": errcode.CodeInternal, "message": "获取分享列表失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "获取分享列表", err)
 		return
 	}
 
@@ -1186,16 +1073,16 @@ func UserSharesBatchDelete(ctx context.Context, c *app.RequestContext) {
 	}
 	var req sharemodel.UserShareCodesReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if len(req.Codes) == 0 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "codes 不能为空"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "codes 不能为空")
 		return
 	}
 	n, err := getShareService().BatchDeleteUserShares(ctx, uid, req.Codes)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "删除失败: " + err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "删除分享", err)
 		return
 	}
 	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{
@@ -1214,11 +1101,11 @@ func UserSharesBatchExtend(ctx context.Context, c *app.RequestContext) {
 	}
 	var req sharemodel.UserShareBatchExtendReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if len(req.Codes) == 0 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "codes 不能为空"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "codes 不能为空")
 		return
 	}
 	var newExpire *time.Time
@@ -1229,12 +1116,12 @@ func UserSharesBatchExtend(ctx context.Context, c *app.RequestContext) {
 		t := time.Now().Add(time.Duration(*req.Hours) * time.Hour)
 		newExpire = &t
 	} else {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "hours 必须 > 0 或 forever=true"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "hours 必须 > 0 或 forever=true")
 		return
 	}
 	n, err := getShareService().BatchExtendUserShares(ctx, uid, req.Codes, newExpire)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "延期失败: " + err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "延期分享", err)
 		return
 	}
 	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{
@@ -1253,20 +1140,20 @@ func UserSharesRestore(ctx context.Context, c *app.RequestContext) {
 	}
 	var req sharemodel.UserShareCodeReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if req.Code == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "code 必填"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "code 必填")
 		return
 	}
 	if err := getShareService().RestoreUserShare(ctx, uid, req.Code); err != nil {
 		// 不在回收站（已硬删/不存在/本就活跃）：显式 400，替代 200 静默 no-op
 		if errors.Is(err, shareService.ErrNotInRecycleBin) {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 			return
 		}
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "恢复失败: " + err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "恢复分享", err)
 		return
 	}
 	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{Code: 0, Message: "ok"})
@@ -1281,20 +1168,20 @@ func UserSharesHardDelete(ctx context.Context, c *app.RequestContext) {
 	}
 	var req sharemodel.UserShareCodeReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if req.Code == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "code 必填"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "code 必填")
 		return
 	}
 	if err := getShareService().HardDeleteUserShare(ctx, uid, req.Code); err != nil {
 		// 不在回收站（未软删/不存在）：显式 400，替代 200 静默 no-op
 		if errors.Is(err, shareService.ErrNotInRecycleBin) {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 			return
 		}
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "永久删除失败: " + err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "永久删除", err)
 		return
 	}
 	c.JSON(consts.StatusOK, &sharemodel.UserShareOpResp{Code: 0, Message: "ok"})
