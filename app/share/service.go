@@ -310,14 +310,16 @@ func (s *Service) createWithCode(ctx context.Context, customCode string, build f
 		return nil, errors.New("自定义取件码需为 3-32 位字母、数字、- 或 _")
 	}
 	// 预检占用（glebarez/sqlite 驱动的唯一冲突不映射 gorm.ErrDuplicatedKey，
-	// 直接撞唯一索引会漏出裸 SQL 错误；先查再建 + 落库兜底双保险）
-	if exists, err := s.fileCodeRepo.CheckCodeExists(ctx, customCode, 0); err == nil && exists {
-		return nil, errors.New("自定义取件码已被占用，请换一个")
+	// 直接撞唯一索引会漏出裸 SQL 错误；先查再建 + 落库兜底双保险）。
+	// core#112：预检与唯一索引同域（含回收站软删行）——软删行 purge 前仍占码，
+	// 只查存活行会「预检放行、Create 撞索引」⇒ 幽灵占用；文案按占用方分流。
+	if occ, err := s.fileCodeRepo.CheckCodeOccupancy(ctx, customCode, 0); err == nil && occ != dao.CodeFree {
+		return nil, errors.New(customCodeTakenMessage(occ, false))
 	}
 	// 查询折叠开启时按折叠再查一遍：防 ABC/abc 两条并存后在折叠查询下互撞
 	if conf.CodeFoldEnabledOrDefault() {
-		if exists, err := s.fileCodeRepo.CheckCodeExistsFolded(ctx, customCode, 0); err == nil && exists {
-			return nil, errors.New("自定义取件码已被占用（仅大小写不同），请换一个")
+		if occ, err := s.fileCodeRepo.CheckCodeOccupancyFolded(ctx, customCode, 0); err == nil && occ != dao.CodeFree {
+			return nil, errors.New(customCodeTakenMessage(occ, true))
 		}
 	}
 	// 跨列避让（2026-10-23）：自定义码若与某个**已铸取件码**撞同一字符串，
@@ -340,6 +342,22 @@ func (s *Service) createWithCode(ctx context.Context, customCode string, build f
 		return nil, err
 	}
 	return fc, nil
+}
+
+// customCodeTakenMessage 自定义码占用文案（core#112）：占用方在回收站时点名
+// 「永久删除后可复用」，否则用户只看到「被占用」却找不到占用者（幽灵占用观感）。
+// 所有分支都保留「已被占用」子串——既有测试与集成按此匹配。
+func customCodeTakenMessage(occ dao.CodeOccupancy, folded bool) string {
+	if occ == dao.CodeOccupiedRecycleBin {
+		if folded {
+			return "自定义取件码已被占用（仅大小写不同；该码曾被使用且仍在回收站，永久删除后可复用），请换一个"
+		}
+		return "自定义取件码已被占用（该码曾被使用且仍在回收站，永久删除后可复用），请换一个"
+	}
+	if folded {
+		return "自定义取件码已被占用（仅大小写不同），请换一个"
+	}
+	return "自定义取件码已被占用，请换一个"
 }
 
 // GenerateCode 生成分享代码（8 位字母数字，crypto/rand 经 kit/uidgen 统一收口）。
