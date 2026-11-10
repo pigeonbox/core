@@ -12,6 +12,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -172,7 +173,7 @@ func AdminCreateUser(ctx context.Context, c *app.RequestContext) {
 			resp.NewTypedError(c, err)
 			return
 		}
-		resp.NewErrorWithMessage(c, 40002, "创建用户失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "创建用户", err)
 		return
 	}
 	audit(ctx, "user.create", fmt.Sprintf("user %d (username=%s) created", created.ID, created.Username), true)
@@ -220,7 +221,7 @@ func AdminUpdateUser(ctx context.Context, c *app.RequestContext) {
 		_, err = userSvc.SetUploadSize(ctx, uint(id64), *req.MaxUploadSize)
 	}
 	if err != nil {
-		resp.NewErrorWithMessage(c, 40001, "更新用户失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "更新用户", err)
 		return
 	}
 	audit(ctx, "user.update", fmt.Sprintf("user %d updated (role=%s status=%s)", id64, req.Role, req.Status), true)
@@ -236,7 +237,7 @@ func AdminDeleteUser(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	if err := getManageSvc().DeleteUser(ctx, uint(id64)); err != nil {
-		resp.NewErrorWithMessage(c, 40001, "删除用户失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "删除用户", err)
 		return
 	}
 	resp.SuccessWithMessage(c, "用户已删除", nil)
@@ -259,12 +260,12 @@ func AdminResetUserPassword(ctx context.Context, c *app.RequestContext) {
 	}
 	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 10008, "密码哈希失败")
+		resp.NewInternalError(c, errcode.CodeInternal, "密码哈希", err)
 		return
 	}
 	repo := getManageSvc()
 	if err := repo.ResetUserPassword(ctx, uint(id64), string(hashed)); err != nil {
-		resp.NewErrorWithMessage(c, 40001, "重置密码失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "重置密码", err)
 		return
 	}
 	audit(ctx, "user.reset_password", fmt.Sprintf("user %d password reset", id64), true)
@@ -286,7 +287,7 @@ func AdminListUsersFiltered(ctx context.Context, c *app.RequestContext) {
 		PageSize: pageSize,
 	})
 	if err != nil {
-		resp.NewErrorWithMessage(c, 10008, "查询用户失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "查询用户", err)
 		return
 	}
 	resp.Page(c, users, total, page, pageSize)
@@ -341,8 +342,14 @@ func AdminGetUserSettings(ctx context.Context, c *app.RequestContext) {
 func AdminUpdateUserSettings(ctx context.Context, c *app.RequestContext) {
 	// 字段级合并通道（2026-10-23）：此前绑定进结构体后整段替换 ⇒ 未提及的字段
 	// 被清零（只提交 allowuserregistration 会把 sessionexpiryhours 等一并清零）。
+	// 口径对齐 admin_service.AdminUpdateConfig（A6）：非法 JSON 体 ⇒ 400 + 10001
+	// 静态文案；保存链路故障 ⇒ 内部错误脱敏（此前混合 err.Error() 直出）。
+	if !json.Valid(c.Request.Body()) {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "用户配置体必须是合法 JSON 对象")
+		return
+	}
 	if err := adminapp.Default().UpdateUserSettingsJSON(ctx, c.Request.Body()); err != nil {
-		resp.NewErrorWithMessage(c, 10001, err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "保存用户配置", err)
 		return
 	}
 	resp.Success(c, map[string]interface{}{"affected": 1})
@@ -372,7 +379,7 @@ func AdminUpdateFile(ctx context.Context, c *app.RequestContext) {
 		}
 	}
 	if err := getManageSvc().UpdateFileExpire(ctx, id, expireAt, req.ExpiredCount); err != nil {
-		resp.NewErrorWithMessage(c, 10008, "更新失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "更新", err)
 		return
 	}
 	audit(ctx, "file.update", fmt.Sprintf("file %d updated (expire set, count=%v)", id, req.ExpiredCount), true)
@@ -391,7 +398,7 @@ func AdminBatchDeleteFiles(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getManageSvc().BatchDeleteFiles(ctx, req.IDs)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 10008, "批量删除失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "批量删除", err)
 		return
 	}
 	audit(ctx, "file.batch_delete", fmt.Sprintf("%d files deleted", n), true)
@@ -410,7 +417,7 @@ func AdminRestoreFiles(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getManageSvc().RestoreFiles(ctx, req.IDs)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 50001, "恢复失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "恢复", err)
 		return
 	}
 	audit(ctx, "file.restore", fmt.Sprintf("%d files restored", n), true)
@@ -429,7 +436,7 @@ func AdminPurgeFiles(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getManageSvc().PurgeFiles(ctx, req.IDs)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 50001, "彻底删除失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "彻底删除", err)
 		return
 	}
 	audit(ctx, "file.purge", fmt.Sprintf("%d files purged permanently", n), true)
@@ -455,7 +462,7 @@ func AdminBatchExtendFiles(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getManageSvc().BatchExtendFiles(ctx, req.IDs, *expireAt)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 10008, "批量延期失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "批量延期", err)
 		return
 	}
 	audit(ctx, "file.batch_extend", fmt.Sprintf("%d files extended to %s", n, expireAt.Format(time.RFC3339)), true)
@@ -488,7 +495,7 @@ func AdminDownloadFile(ctx context.Context, c *app.RequestContext) {
 func AdminEnhancedStats(ctx context.Context, c *app.RequestContext) {
 	stats, err := getManageSvc().EnhancedStats(ctx)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 10008, "统计失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "统计", err)
 		return
 	}
 	resp.Success(c, stats)
@@ -531,7 +538,7 @@ func AdminStatsTrend(ctx context.Context, c *app.RequestContext) {
 	}
 	series, err := getManageSvc().TrendSeries(ctx, days)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 10008, "统计上传趋势失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "统计上传趋势", err)
 		return
 	}
 	resp.Success(c, map[string]interface{}{"days": series})
@@ -555,7 +562,7 @@ func AdminTransferLogs(ctx context.Context, c *app.RequestContext) {
 	}
 	logs, total, err := getManageSvc().GetTransferLogs(ctx, query)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 10008, "查询传输日志失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeInternal, "查询传输日志", err)
 		return
 	}
 	// 显式小写字段映射（gorm.Model 默认序列化为大写 CreatedAt，与前端约定不符）
@@ -610,7 +617,7 @@ func AdminListFilesFiltered(ctx context.Context, c *app.RequestContext) {
 
 	files, total, err := getManageSvc().GetFilesFiltered(ctx, q)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 50001, "查询文件列表失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "查询文件列表", err)
 		return
 	}
 	// P0 多文件：批量取子文件数（一次 GROUP BY）
@@ -690,7 +697,7 @@ func AdminSetFileStatus(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getManageSvc().SetFilesStatus(ctx, []uint{uint(id)}, req.Status)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 50001, "设置状态失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "设置状态", err)
 		return
 	}
 	audit(ctx, "file."+req.Status, fmt.Sprintf("file %d status -> %s (affected=%d)", id, req.Status, n), true)
@@ -718,7 +725,7 @@ func AdminBatchSetFilesStatus(ctx context.Context, c *app.RequestContext) {
 	}
 	n, err := getManageSvc().SetFilesStatus(ctx, req.IDs, req.Status)
 	if err != nil {
-		resp.NewErrorWithMessage(c, 50001, "批量设置状态失败: "+err.Error())
+		resp.NewInternalError(c, errcode.CodeDBError, "批量设置状态", err)
 		return
 	}
 	audit(ctx, "file.batch-"+req.Status, fmt.Sprintf("batch status -> %s ids=%d (affected=%d)", req.Status, len(req.IDs), n), true)
