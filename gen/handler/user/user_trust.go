@@ -43,36 +43,25 @@ func trustSessionID(c *app.RequestContext) string {
 	return ""
 }
 
-// writeTrustErr 业务错误 → wire。typed 错误按 ErrCode 透传，其余 500。
+// writeTrustErr 业务错误 → wire。typed 错误（40012/40013/40014、OpError 等）
+// 按 ErrCode 透传并保留可操作文案，HTTP 状态由 pkg/resp.httpStatusForCode 统一
+// 映射（与旧 switch 逐码一致：Unauthorized→401、TooManyAttempts→429、
+// Internal→500、其余→400）；其余（DB/基建故障）按内部错误脱敏进日志——
+// 不再把 err.Error() 原文出网（core#114 A6b）。
 func writeTrustErr(c *app.RequestContext, err error) {
 	var typed interface{ ErrCode() int }
 	if errors.As(err, &typed) {
-		code := typed.ErrCode()
-		status := consts.StatusBadRequest
-		switch code {
-		case errcode.CodeUnauthorized:
-			status = consts.StatusUnauthorized
-		case errcode.CodeTooManyAttempts:
-			status = consts.StatusTooManyRequests
-		case errcode.CodeInternal:
-			status = consts.StatusInternalServerError
-		}
-		c.JSON(status, map[string]interface{}{"code": code, "message": err.Error()})
+		resp.NewTypedError(c, err)
 		return
 	}
-	c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-		"code":    errcode.CodeInternal,
-		"message": err.Error(),
-	})
+	resp.NewInternalError(c, errcode.CodeInternal, "", err)
 }
 
 // TotpSetup . @router /user/totp/setup [POST]
 func TotpSetup(ctx context.Context, c *app.RequestContext) {
 	uid, ok := trustUserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code": errcode.CodeUnauthorized, "message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	res, err := getUserService().TotpSetup(ctx, uid)
@@ -91,16 +80,12 @@ func TotpSetup(ctx context.Context, c *app.RequestContext) {
 func TotpEnable(ctx context.Context, c *app.RequestContext) {
 	uid, ok := trustUserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code": errcode.CodeUnauthorized, "message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	var req usermodel.TotpEnableReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code": errcode.CodeInvalidParam, "message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	codes, err := getUserService().TotpEnable(ctx, uid, req.Code)
@@ -119,16 +104,12 @@ func TotpEnable(ctx context.Context, c *app.RequestContext) {
 func TotpDisable(ctx context.Context, c *app.RequestContext) {
 	uid, ok := trustUserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code": errcode.CodeUnauthorized, "message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	var req usermodel.TotpDisableReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code": errcode.CodeInvalidParam, "message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if err := getUserService().TotpDisable(ctx, uid, req.Password, req.Code); err != nil {
@@ -145,9 +126,7 @@ func TotpDisable(ctx context.Context, c *app.RequestContext) {
 func ForgotPassword(ctx context.Context, c *app.RequestContext) {
 	var req usermodel.PasswordForgotReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code": errcode.CodeInvalidParam, "message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if err := getUserService().RequestPasswordReset(ctx, req.Email); err != nil {
@@ -167,9 +146,7 @@ func ForgotPassword(ctx context.Context, c *app.RequestContext) {
 func ResetPassword(ctx context.Context, c *app.RequestContext) {
 	var req usermodel.PasswordResetReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code": errcode.CodeInvalidParam, "message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if err := getUserService().ResetPassword(ctx, req.Token, req.NewPassword); err != nil {
@@ -186,9 +163,7 @@ func ResetPassword(ctx context.Context, c *app.RequestContext) {
 func UserSessions(ctx context.Context, c *app.RequestContext) {
 	uid, ok := trustUserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code": errcode.CodeUnauthorized, "message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	items, err := getUserService().ListSessions(ctx, uid, trustSessionID(c))
@@ -217,17 +192,13 @@ func UserSessions(ctx context.Context, c *app.RequestContext) {
 func RevokeSession(ctx context.Context, c *app.RequestContext) {
 	uid, ok := trustUserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code": errcode.CodeUnauthorized, "message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	raw := c.Param("id")
 	id, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil || id == 0 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code": errcode.CodeInvalidParam, "message": "会话 ID 非法",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "会话 ID 非法")
 		return
 	}
 	if err := getUserService().RevokeSession(ctx, uid, uint(id)); err != nil {
@@ -244,9 +215,7 @@ func RevokeSession(ctx context.Context, c *app.RequestContext) {
 func RevokeAllSessions(ctx context.Context, c *app.RequestContext) {
 	uid, ok := trustUserID(c)
 	if !ok {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code": errcode.CodeUnauthorized, "message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	n, err := getUserService().RevokeAllSessions(ctx, uid)

@@ -11,6 +11,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
 	p2p "github.com/pigeonbox/contracts/gen/p2p"
+	"github.com/pigeonbox/core/pkg/resp"
 )
 
 // inviteNotifier 邀请到达通知（notify 域 webhook 事件；wiring 注入，nil=跳过）。
@@ -24,12 +25,12 @@ func SetInviteNotifier(fn func(fromName, code, note string)) { inviteNotifier = 
 func PostP2PInvite(ctx context.Context, c *app.RequestContext) {
 	var req p2p.PostP2PInviteReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: errcode.CodeInvalidParam, Message: "请求体无效"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请求体无效")
 		return
 	}
 	inv, err := getFederationMailbox().AddInvite(req.GetCode(), req.GetFromName(), req.GetNote())
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, &p2p.PostP2PInviteResp{Code: errcode.CodeInvalidParam, Message: err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	if inviteNotifier != nil {

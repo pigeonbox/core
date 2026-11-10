@@ -106,6 +106,10 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 		Reason:  "平台面：部署自检快照（2026-10-30），供官方 CLI `pb doctor` 消费——只读的运行事实集合（DB/存储/Redis/版本/部署模式/首启状态），不是业务 API；管理面鉴权（AdminOrAdminKey）",
 		Pending: false,
 	},
+	"POST /admin/notify/channels/test": {
+		Reason:  "业务面（core#122，2026-11-11）：webhook/telegram/bark 渠道测试发送。同族 SMTP/OIDC 测试端点在 IDL（admin.thrift），本条按理也应收敛进 IDL——但 IDL 真相源在 contracts 仓，gen-drift 门禁按 core go.mod 钉版 tag 检出对账 ⇒ 改路由必须先发 contracts 新 tag（跨仓库线动作，不在本批范围）⇒ 先手写注册 + AdminOrAdminKey，待下趟库线列车随 contracts 发版收敛进 IDL",
+		Pending: true,
+	},
 	"POST /api/v1/mcp": {
 		Reason:  "协议面：MCP（Streamable HTTP）JSON-RPC 流，**不是** REST/JSON 包络 ⇒ thrift IDL 模型表达不了",
 		Pending: false,

@@ -180,6 +180,12 @@ func customizedRegister(r *server.Hertz) {
 		r.GET("/admin/backups", middleware.AdminOrAdminKey(), listBackupsHandler)
 		r.GET("/admin/backups/:name", middleware.AdminOrAdminKey(), downloadBackupHandler)
 		r.POST("/admin/backups/run", middleware.AdminOrAdminKey(), runBackupHandler)
+
+		// ===== 通知渠道测试发送（core#122，2026-11-11；管理面）=====
+		// webhook/telegram/bark 三渠道「配完先试一条」反馈回路：固定测试文案
+		// 真实发一条，回 {ok, latency_ms, error_summary}（摘要脱敏，不回凭据片段）。
+		// 与 /admin/notify/smtp/test、/admin/oidc/test 同族；鉴权同款 AdminOrAdminKey。
+		r.POST("/admin/notify/channels/test", middleware.AdminOrAdminKey(), customHandler.AdminTestNotifyChannel)
 	}
 
 	// ===== 前端构建产物静态资源 =====

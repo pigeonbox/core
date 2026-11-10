@@ -127,6 +127,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /openapi.json", "GET /api/config", "GET /robots.txt",
 		// 预览缩略图二进制流（非 JSON 包络；闸门与 /preview/:code 同链）
 		"GET /preview/:code/thumb",
+		// 通知渠道测试发送（core#122 手写注册，见 routes_classification 豁免登记）
+		"POST /admin/notify/channels/test",
 		// MCP（Streamable HTTP；无会话模式：GET/DELETE 按规范回 405，由 SDK 应答）
 		"POST /api/v1/mcp", "GET /api/v1/mcp", "DELETE /api/v1/mcp",
 		// ===== 会话自省（2026-10-26 IDL 化：common 域生成路由；令牌在 handler 内校验）=====
