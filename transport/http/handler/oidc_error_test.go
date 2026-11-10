@@ -116,6 +116,11 @@ func TestOIDCPublicError_Mapping(t *testing.T) {
 	assert.Equal(t, "state_invalid", code)
 	assert.Equal(t, "登录请求已过期，请重新登录", msg)
 
+	// IdP email claim 格式非法（core#119 同族）⇒ 独立短码，不回显 claim 原值
+	code, msg = oidcPublicError(oidcApp.ErrEmailInvalid)
+	assert.Equal(t, "email_invalid", code)
+	assert.Equal(t, "身份提供方返回的邮箱格式无效", msg)
+
 	// IdP 故障 ⇒ 通用短码，且**不得**泄露内部细节
 	secret := errors.New("token 交换失败: http://idp.internal/realms/pb/token 响应片段 abc123")
 	code, msg = oidcPublicError(secret)

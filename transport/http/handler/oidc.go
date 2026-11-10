@@ -68,6 +68,10 @@ func oidcPublicError(err error) (code, msg string) {
 		return "account_disabled", "账号已被禁用"
 	case errors.Is(err, oidcApp.ErrStateInvalid):
 		return "state_invalid", "登录请求已过期，请重新登录"
+	case errors.Is(err, oidcApp.ErrEmailInvalid):
+		// core#119 同族：IdP email claim 格式非法 ⇒ 独立短码（受限映射，
+		// 不透传原始 err——那会把 claim 原值回显进回跳 query）
+		return "email_invalid", "身份提供方返回的邮箱格式无效"
 	default:
 		// 其余（IdP discovery 失败 / token 交换失败 / userinfo 失败 / 建号失败…）
 		// 全部归到通用失败：不透传细节，也不区分（区分需要透传细节）。

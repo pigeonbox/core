@@ -22,6 +22,11 @@ import (
 
 // fakeIdP 假 OIDC Provider：discovery + token + userinfo 三端点
 func fakeIdP(t *testing.T) (*httptest.Server, *int) {
+	return fakeIdPFull(t, "alice@example.com", true)
+}
+
+// fakeIdPFull 可指定 email claim 与 email_verified 的假 IdP（core#119 同族用例用）。
+func fakeIdPFull(t *testing.T, email string, emailVerified bool) (*httptest.Server, *int) {
 	t.Helper()
 	tokHits := 0
 	mux := http.NewServeMux()
@@ -55,8 +60,8 @@ func fakeIdP(t *testing.T) (*httptest.Server, *int) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"sub":                "user-sub-42",
-			"email":              "alice@example.com",
-			"email_verified":     true,
+			"email":              email,
+			"email_verified":     emailVerified,
 			"preferred_username": "alice",
 			"name":               "Alice",
 		})
