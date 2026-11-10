@@ -171,6 +171,13 @@ func (s *Service) Create(ctx context.Context, req *CreateUserReq) (*model.UserRe
 	if err := utils.ValidateUsername(req.Username); err != nil {
 		return nil, pkgerrors.BadRequest(err.Error())
 	}
+	// 邮箱格式收口（core#119）：SMTP 头注入面在输入层拒绝（注册与管理端建号
+	// 共用本收口）。空邮箱按既有业务口径放行（管理端建号允许不填），非空才校验。
+	if req.Email != "" {
+		if err := utils.ValidateEmail(req.Email); err != nil {
+			return nil, pkgerrors.BadRequest(err.Error())
+		}
+	}
 
 	existing, err := s.repo.GetByUsername(ctx, req.Username)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {

@@ -44,6 +44,16 @@ func RefreshSession(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusForbidden, map[string]interface{}{"code": errcode.CodeForbidden, "message": "缺少 CSRF 头"})
 		return
 	}
+	// core#106：续签前按 identityFresh 同款口径复核（账号 active + 纪元一致 +
+	// 带 sid 的令牌回查会话存活）。此前 refresh 只验签名/过期/黑名单 ⇒ 改密、
+	// 找回重置、退出所有设备、管理员重置/封禁（纪元 +1）的止损全部可被
+	//「旧令牌换新令牌」绕过。复核失败回 401（与刷新失败同形），前端 401
+	// 拦截器照常跳登录。
+	if claims, perr := auth.ParseToken(oldToken); perr != nil || !middleware.IdentityFresh(ctx, claims) {
+		middleware.ClearSessionCookie(c)
+		c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "账号状态已变更，请重新登录"})
+		return
+	}
 	newToken, err := auth.RefreshToken(ctx, oldToken)
 	if err != nil {
 		middleware.ClearSessionCookie(c)

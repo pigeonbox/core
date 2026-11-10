@@ -36,6 +36,37 @@ func TestRefreshToken_Blacklist(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestRefreshToken_InheritsSessionID 刷新必须继承旧 sid（core#106）。
+// 此前 RefreshToken 走 GenerateToken（sid 置空）⇒ 刷新一次会话回查即永久跳过，
+// 「踢设备」止损被绕过。
+// 负对照：把 GenerateTokenWithSession(..., claims.SessionID) 改回 GenerateToken
+// ⇒ 本用例转红（新令牌 sid 变空）。
+func TestRefreshToken_InheritsSessionID(t *testing.T) {
+	SetJWTSecret("test-secret-for-refresh")
+	t.Cleanup(func() { SetJWTSecret("") })
+
+	token, err := GenerateTokenWithSession(7, "alice", "user", "sid-42")
+	require.NoError(t, err)
+	newToken, err := RefreshToken(context.Background(), token)
+	require.NoError(t, err)
+
+	claims, err := ParseToken(newToken)
+	require.NoError(t, err)
+	assert.Equal(t, "sid-42", claims.SessionID,
+		"新令牌必须继承旧 sid（不得签出无 sid 令牌让会话回查永久跳过）")
+
+	// 无 sid 的老令牌刷新后仍无 sid（不凭空造会话；其止损靠纪元判定）。
+	// 身份参数与同包其它用例错开：claims 全同 + 同秒签发 ⇒ 两枚令牌字节串
+	// 相同，前一用例写进全局黑名单的条目会命中这里（实测踩过）。
+	oldStyle, err := GenerateToken(7007, "alice-nosid", "user")
+	require.NoError(t, err)
+	newStyle, err := RefreshToken(context.Background(), oldStyle)
+	require.NoError(t, err)
+	c2, err := ParseToken(newStyle)
+	require.NoError(t, err)
+	assert.Empty(t, c2.SessionID)
+}
+
 func TestRefreshToken_Invalid(t *testing.T) {
 	SetJWTSecret("test-secret-for-refresh")
 	t.Cleanup(func() { SetJWTSecret("") })

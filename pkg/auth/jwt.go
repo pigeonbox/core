@@ -143,6 +143,12 @@ func ParseToken(tokenString string) (*Claims, error) {
 // 轮换语义（2026-10-05 审计 P1 修复）：签发新 token 的同时把旧 token 按剩余
 // 有效期加入黑名单——否则被盗 token 可与真用户并行使用到自然过期，且每次
 // 刷新都无法止损。
+//
+// sid 继承（core#106）：新 token **继承旧 token 的会话标识**。此前这里调
+// GenerateToken（GenerateTokenWithSession(..., "")）⇒ 刷新一次就把 sid 洗掉
+// ⇒ 认证侧的会话回查（identityFresh 对空 sid 整段跳过）对新令牌永久失效，
+// 「踢设备」止损被刷新绕过。注意本函数只负责「同 sid 重签」；纪元/会话存活
+// 复核在调用方（RefreshSession 按 identityFresh 同款口径先行把关）。
 func RefreshToken(ctx context.Context, tokenString string) (string, error) {
 	claims, err := ParseToken(tokenString)
 	if err != nil {
@@ -151,7 +157,7 @@ func RefreshToken(ctx context.Context, tokenString string) (string, error) {
 	if IsTokenRevoked(ctx, tokenString) {
 		return "", ErrTokenRevoked
 	}
-	newToken, err := GenerateToken(claims.UserID, claims.Username, claims.Role)
+	newToken, err := GenerateTokenWithSession(claims.UserID, claims.Username, claims.Role, claims.SessionID)
 	if err != nil {
 		return "", err
 	}
