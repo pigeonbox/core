@@ -11,6 +11,7 @@ import (
 	"github.com/oekit/core/version"
 	"github.com/pigeonbox/contracts/errcode"
 	adminsvc "github.com/pigeonbox/core/app/admin"
+	"github.com/pigeonbox/core/pkg/resp"
 )
 
 var adminService *adminsvc.Service
@@ -32,10 +33,7 @@ func getAdminService() *adminsvc.Service {
 func CleanExpiredFiles(ctx context.Context, c *app.RequestContext) {
 	count, freed, err := getAdminService().CleanExpiredFiles(ctx)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "清理过期文件失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "清理过期文件", err)
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
@@ -53,10 +51,7 @@ func CleanExpiredFiles(ctx context.Context, c *app.RequestContext) {
 func CleanTempFiles(ctx context.Context, c *app.RequestContext) {
 	count, err := getAdminService().CleanupIncompleteUploads(ctx, 24)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "清理临时文件失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "清理临时文件", err)
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{
@@ -119,10 +114,7 @@ func GetStorageStatus(ctx context.Context, c *app.RequestContext) {
 func OptimizeDatabase(ctx context.Context, c *app.RequestContext) {
 	driver, detail, err := getAdminService().OptimizeDatabase(ctx)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "数据库优化失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "数据库优化", err)
 		return
 	}
 	c.JSON(consts.StatusOK, map[string]interface{}{

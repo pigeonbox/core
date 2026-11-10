@@ -49,10 +49,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 	// 检查是否允许用户注册：管理后台"用户配置"持久化值优先，
 	// 无记录回退 yaml（经注入的 DefaultsProvider，修复管理端开关不生效）
 	if !getUserService().RegistrationAllowed(ctx) {
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeForbidden,
-			"message": "用户注册已关闭",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeForbidden, "用户注册已关闭")
 		return
 	}
 
@@ -60,10 +57,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 	var req usermodel.RegisterReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -83,17 +77,11 @@ func Register(ctx context.Context, c *app.RequestContext) {
 		// 显式映射（不依赖 httpStatusForCode 的 10016 自动映射——该映射
 		// 尚未登记，见 pkg/resp）。
 		if errors.Is(err, userservice.ErrUsernameExists) {
-			c.JSON(consts.StatusConflict, map[string]interface{}{
-				"code":    errcode.CodeConflict,
-				"message": "用户名已存在，请更换",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeConflict, "用户名已存在，请更换")
 			return
 		}
 		if errors.Is(err, userservice.ErrEmailExists) {
-			c.JSON(consts.StatusConflict, map[string]interface{}{
-				"code":    errcode.CodeConflict,
-				"message": "该邮箱已被注册",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeConflict, "该邮箱已被注册")
 			return
 		}
 		// 其余 typed 业务错误按码透传（如用户名格式非法 CodeBadRequest→400）。
@@ -105,10 +93,7 @@ func Register(ctx context.Context, c *app.RequestContext) {
 			resp.NewTypedError(c, err)
 			return
 		}
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "注册", err)
 		return
 	}
 
@@ -136,10 +121,7 @@ func Login(ctx context.Context, c *app.RequestContext) {
 	var req usermodel.LoginReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -147,10 +129,7 @@ func Login(ctx context.Context, c *app.RequestContext) {
 	lock := middleware.GetDefaultLockout()
 	lockKey := middleware.FormatLockKey("login", middleware.ClientIP(c), req.Username)
 	if remain, locked := lock.CheckLocked(ctx, lockKey); locked {
-		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
-			"code":    errcode.CodeTooManyAttempts,
-			"message": "尝试过于频繁，账户已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, "尝试过于频繁，账户已临时锁定，请 "+strconv.Itoa(remain)+" 秒后重试")
 		return
 	}
 
@@ -168,25 +147,22 @@ func Login(ctx context.Context, c *app.RequestContext) {
 		//   ② 40013 验证码无效 = 真失败 ⇒ 计入锁定桶（否则二验码可无限试）。
 		var need *userservice.TotpRequiredError
 		if errors.As(err, &need) {
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeTotpRequired,
-				"message": err.Error(),
-			})
+			resp.NewTypedError(c, err) // 40012 ⇒ 400 + body code（前端按 code 40012 弹二验框）
 			return
 		}
 		_, _ = lock.RecordFailure(ctx, lockKey)
 		var bad *userservice.TotpInvalidError
 		if errors.As(err, &bad) {
-			c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeTotpInvalid,
-				"message": err.Error(),
-			})
+			resp.NewTypedError(c, err) // 40013 ⇒ 400 + body code
 			return
 		}
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": err.Error(),
-		})
+		// 凭据/账号状态类（哨兵错误）保留可操作文案；其余（DB/令牌签发故障）
+		// 按内部错误脱敏进日志——不再把 SQL/驱动文本随 401 出网（core#114 A6b）
+		if errors.Is(err, userservice.ErrBadCredentials) || errors.Is(err, userservice.ErrAccountDisabled) {
+			resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, err.Error())
+			return
+		}
+		resp.NewInternalError(c, errcode.CodeInternal, "登录", err)
 		return
 	}
 	lock.Reset(ctx, lockKey)
@@ -225,29 +201,20 @@ func UserInfo(ctx context.Context, c *app.RequestContext) {
 		// ListAPIKeys …）**同口径**：未登录 ⇒ 401。
 		// 此前此处返回 **200 + code 0 + 无 data 字段** ⇒ 客户端把「没登录」
 		// 读成「登录了但没有用户信息」⇒ 静默降级、且状态码上看不出认证失败。
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
 	// 获取用户信息
 	user, err := getUserService().GetByID(ctx, userID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "获取用户信息失败",
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "获取用户信息", err)
 		return
 	}
 
@@ -283,18 +250,12 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 	// 未登录 ⇒ 401；否则匿名访客能靠 400 的字段报错反推契约结构。
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
@@ -302,10 +263,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 	var req usermodel.UpdateProfileReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -313,10 +271,7 @@ func UpdateProfile(ctx context.Context, c *app.RequestContext) {
 		Nickname: req.Nickname,
 		Avatar:   req.Avatar,
 	}); err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "更新失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "更新", err)
 		return
 	}
 
@@ -335,18 +290,12 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 	// 未登录 ⇒ 401（此前先校验 body ⇒ 匿名拿到 400 字段报错）。
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
@@ -354,18 +303,19 @@ func ChangePassword(ctx context.Context, c *app.RequestContext) {
 	var req usermodel.ChangePasswordReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
 	if err := getUserService().ChangePassword(ctx, userID, req.OldPassword, req.NewPassword); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		// 业务可读错误（旧密码错误/用户不存在，OpError）按业务码透传保留可操作文案；
+		// 其余（bcrypt/DB 故障）按内部错误脱敏进日志（core#114 A6b）
+		var typed interface{ ErrCode() int }
+		if errors.As(err, &typed) {
+			resp.NewTypedError(c, err)
+			return
+		}
+		resp.NewInternalError(c, errcode.CodeInternal, "修改密码", err)
 		return
 	}
 
@@ -383,27 +333,18 @@ func UserStats(ctx context.Context, c *app.RequestContext) {
 	// 从上下文获取用户ID（此前返回硬编码 0）
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
 	stats, err := getUserService().GetStats(ctx, userID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "获取统计失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "获取统计", err)
 		return
 	}
 
@@ -435,29 +376,20 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	// 从上下文获取用户ID
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
 	var req usermodel.UserFilesReq
 	err := c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -474,10 +406,7 @@ func UserFiles(ctx context.Context, c *app.RequestContext) {
 	// 调用 service 获取用户文件列表
 	fileList, err := getUserService().GetUserFiles(ctx, uint(userID), int(page), int(pageSize))
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "获取文件列表失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "获取文件列表", err)
 		return
 	}
 
@@ -498,28 +427,19 @@ func ListAPIKeys(ctx context.Context, c *app.RequestContext) {
 	// 从上下文获取用户ID
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
 	keys, err := getUserService().ListAPIKeys(ctx, userID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "获取 API Key 失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "获取 API Key", err)
 		return
 	}
 
@@ -557,19 +477,13 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 	// 从上下文获取用户ID
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
@@ -582,10 +496,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 		Scopes []string `json:"scopes"`
 	}
 	if err := c.Bind(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "请求参数错误: " + err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -596,10 +507,7 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 	if req.ExpiresAt != "" {
 		t, err := time.Parse(time.RFC3339, strings.TrimSpace(req.ExpiresAt))
 		if err != nil {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeInvalidParam,
-				"message": "expires_at 必须为 RFC3339 格式",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "expires_at 必须为 RFC3339 格式")
 			return
 		}
 		expiresAt = &t
@@ -617,10 +525,13 @@ func CreateAPIKey(ctx context.Context, c *app.RequestContext) {
 		Scopes:        req.Scopes,
 	})
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		// 数量触顶/非法 scope（OpError）按 10001 保留可操作文案；DB 故障脱敏
+		var typed interface{ ErrCode() int }
+		if errors.As(err, &typed) {
+			resp.NewTypedError(c, err)
+			return
+		}
+		resp.NewInternalError(c, errcode.CodeInternal, "创建 API Key", err)
 		return
 	}
 
@@ -653,47 +564,38 @@ func DeleteAPIKey(ctx context.Context, c *app.RequestContext) {
 	// 从上下文获取用户ID
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
 	// 获取路径参数中的 key ID
 	keyIDStr := c.Param("id")
 	if keyIDStr == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "密钥ID不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "密钥ID不能为空")
 		return
 	}
 
 	keyID, err := strconv.ParseUint(keyIDStr, 10, 64)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "密钥ID格式错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "密钥ID格式错误")
 		return
 	}
 
 	// 调用 service 撤销 API Key
 	if err := getUserService().DeleteAPIKey(ctx, uint(userID), uint(keyID)); err != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": err.Error(),
-		})
+		// 「API Key 不存在或已撤销」（OpError）按 404+10004 保留文案；DB 故障脱敏
+		var typed interface{ ErrCode() int }
+		if errors.As(err, &typed) {
+			resp.NewTypedError(c, err)
+			return
+		}
+		resp.NewInternalError(c, errcode.CodeInternal, "撤销 API Key", err)
 		return
 	}
 
@@ -716,27 +618,18 @@ func formatTime(t *time.Time) string {
 func RevokeAllAPIKeys(ctx context.Context, c *app.RequestContext) {
 	userIDVal, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(consts.StatusUnauthorized, map[string]interface{}{
-			"code":    errcode.CodeUnauthorized,
-			"message": "用户未登录",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "用户未登录")
 		return
 	}
 	userID, ok := userIDVal.(uint)
 	if !ok {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "用户ID类型错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "用户ID类型错误")
 		return
 	}
 
 	revoked, err := getUserService().RevokeAllAPIKeys(ctx, userID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "吊销全部 API Key", err)
 		return
 	}
 

@@ -118,43 +118,28 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	var req chunkmodel.ChunkUploadInitReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
 	// 参数验证（前置于配额计数：非法请求不得消耗配额；负数 FileSize 曾可把
 	// 字节计数打成负数绕过日配额）
 	if req.FileName == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "文件名不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "文件名不能为空")
 		return
 	}
 	if req.FileSize <= 0 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "文件大小必须大于0",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "文件大小必须大于0")
 		return
 	}
 	if req.ChunkSize <= 0 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "分片大小必须大于0",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "分片大小必须大于0")
 		return
 	}
 	// 分片计划自洽校验（2026-10-08 加固）：TotalChunks 客户端可控且此前无上限，
 	// 虚高总数可刷 DB 行/逐片存储写，不足总数制造 Complete 永不满足的僵尸会话
 	if err := chunkService.ValidateChunkPlan(req.FileSize, int64(req.ChunkSize), int(req.TotalChunks)); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
@@ -174,10 +159,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	// 上传ID字符白名单（UUID/哈希十六进制）：客户端可自报哈希，须从词法上
 	// 排除路径语义（2026-10-05 审计 P0 配套）
 	if !validUploadID(uploadID) {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "文件哈希格式非法（仅支持十六进制/UUID）",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "文件哈希格式非法（仅支持十六进制/UUID）")
 		return
 	}
 
@@ -198,18 +180,12 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 						password = *req.Password
 					}
 					if password == "" {
-						c.JSON(consts.StatusBadRequest, map[string]interface{}{
-							"code":    errcode.CodeInvalidParam,
-							"message": "开启密码保护时必须提供密码",
-						})
+						resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "开启密码保护时必须提供密码")
 						return
 					}
 					hash, perr := utils.HashPassword(password)
 					if perr != nil {
-						c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-							"code":    errcode.CodeInternal,
-							"message": "密码处理失败",
-						})
+						resp.NewInternalError(c, errcode.CodeInternal, "密码处理", perr)
 						return
 					}
 					passwordHash = hash
@@ -296,10 +272,8 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 	if err != nil {
 		// 他人进行中的会话（已含分片数据）→ 409，防截胡（2026-10-05 审计 P1）
 		if errors.Is(err, chunkService.ErrSessionConflict) {
-			c.JSON(consts.StatusConflict, map[string]interface{}{
-				"code":    errcode.CodeConflict,
-				"message": "该文件已有进行中的上传会话，请稍后重试或更换文件",
-			})
+			// 他人进行中的会话（已含分片数据）→ 409，防截胡（10016→409 已登记 pkg/resp）
+			resp.NewErrorWithMessage(c, errcode.CodeConflict, "该文件已有进行中的上传会话，请稍后重试或更换文件")
 			return
 		}
 		// typed 业务错误（如单次上传大小上限 CodeTooLarge→413）按业务码透传，
@@ -309,10 +283,7 @@ func ChunkUploadInit(ctx context.Context, c *app.RequestContext) {
 			resp.NewTypedError(c, err)
 			return
 		}
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "初始化上传失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "初始化上传", err)
 		return
 	}
 
@@ -346,19 +317,13 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	chunkIndexStr := c.Param("chunk_index")
 
 	if uploadID == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "上传ID不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "上传ID不能为空")
 		return
 	}
 
 	chunkIndex, err := strconv.Atoi(chunkIndexStr)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "分片索引格式错误",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "分片索引格式错误")
 		return
 	}
 
@@ -366,45 +331,30 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	// 会话不存在必须 404 拒绝——2026-10-05 审计 P0：此前 `ierr == nil &&` 短路让
 	// 不存在的 uploadID 跳过校验直接落盘（存储侧彼时无逃逸守卫，构成任意路径写）。
 	if !validUploadID(uploadID) {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "上传ID格式非法",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "上传ID格式非法")
 		return
 	}
 	info, ierr := getChunkService().GetUploadInfo(ctx, uploadID)
 	if ierr != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "上传记录不存在",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "上传记录不存在")
 		return
 	}
 	if !ownedByCaller(info, c) {
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeForbidden,
-			"message": "无权操作该上传会话",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeForbidden, "无权操作该上传会话")
 		return
 	}
 
 	// 获取上传的文件
 	file, err := c.FormFile("chunk")
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "请上传分片文件",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请上传分片文件")
 		return
 	}
 
 	// 读取文件内容
 	src, err := file.Open()
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "读取文件失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "读取文件", err)
 		return
 	}
 	defer func() { _ = src.Close() }()
@@ -413,10 +363,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	data := make([]byte, file.Size)
 	_, err = io.ReadFull(src, data)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "读取文件内容失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "读取文件内容", err)
 		return
 	}
 
@@ -452,11 +399,9 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 			expected = "" // 未知长度不校验（可选项不破坏上传）
 		}
 		if expected != "" && subtle.ConstantTimeCompare([]byte(digest), []byte(expected)) != 1 {
-			c.JSON(consts.StatusUnprocessableEntity, map[string]interface{}{
-				"code":    errcode.CodeChunkInvalid,
-				"message": "分片哈希校验失败，请重试该分片",
-				"data":    map[string]interface{}{"chunk_index": chunkIndex, "retryable": true},
-			})
+			// 422（20009→422 已登记 pkg/resp；data.retryable 保留——前端 multifile.ts 按 422/20009 判单片可重试）
+			resp.NewErrorWithData(c, errcode.CodeChunkInvalid, "分片哈希校验失败，请重试该分片",
+				map[string]interface{}{"chunk_index": chunkIndex, "retryable": true})
 			return
 		}
 	}
@@ -464,10 +409,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 	// 保存分片到存储
 	err = getChunkService().SaveChunkData(ctx, uploadID, chunkIndex, data)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "保存分片失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "保存分片", err)
 		return
 	}
 
@@ -481,10 +423,7 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 
 	result, err := getChunkService().UploadChunk(ctx, uploadReq)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "记录分片信息失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "记录分片信息", err)
 		return
 	}
 
@@ -508,39 +447,27 @@ func ChunkUploadStatus(ctx context.Context, c *app.RequestContext) {
 	// 获取上传ID
 	uploadID := c.Param("upload_id")
 	if uploadID == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "上传ID不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "上传ID不能为空")
 		return
 	}
 
 	// 获取上传信息
 	info, err := getChunkService().GetUploadInfo(ctx, uploadID)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "上传记录不存在",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "上传记录不存在")
 		return
 	}
 
 	// 归属校验（治理）：会话元数据（文件名/进度）不向第三方泄露
 	if !ownedByCaller(info, c) {
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeForbidden,
-			"message": "无权操作该上传会话",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeForbidden, "无权操作该上传会话")
 		return
 	}
 
 	// 获取已上传分片索引
 	uploadedIndexes, err := getChunkService().GetUploadedChunkIndexes(ctx, uploadID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "获取上传进度失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "获取上传进度", err)
 		return
 	}
 
@@ -650,10 +577,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	// 获取上传ID
 	uploadID := c.Param("upload_id")
 	if uploadID == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "上传ID不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "上传ID不能为空")
 		return
 	}
 
@@ -661,29 +585,20 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	var req chunkmodel.ChunkUploadCompleteReq
 	err = c.BindAndValidate(&req)
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
 	// 获取上传信息
 	info, err := getChunkService().GetUploadInfo(ctx, uploadID)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "上传记录不存在",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "上传记录不存在")
 		return
 	}
 
 	// 归属校验（治理）：仅归属方可 Complete，防猜中 uploadID 劫持他人上传会话
 	if !ownedByCaller(info, c) {
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeForbidden,
-			"message": "无权操作该上传会话",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeForbidden, "无权操作该上传会话")
 		return
 	}
 
@@ -723,28 +638,19 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	// 检查所有分片是否已上传
 	uploadedIndexes, err := getChunkService().GetUploadedChunkIndexes(ctx, uploadID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "检查上传状态失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "检查上传状态", err)
 		return
 	}
 
 	if len(uploadedIndexes) < info.TotalChunks {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": fmt.Sprintf("还有 %d 个分片未上传", info.TotalChunks-len(uploadedIndexes)),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, fmt.Sprintf("还有 %d 个分片未上传", info.TotalChunks-len(uploadedIndexes)))
 		return
 	}
 
 	// 合并分片（磁盘布局与合并操作收口 app/chunk，与直传落盘同源）
 	relativePath, err := getChunkService().MergeUpload(ctx, uploadID, info.TotalChunks, info.FileName)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "合并分片失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "合并分片", err)
 		return
 	}
 
@@ -784,10 +690,8 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		if err := utils.CheckUploadContent(info.FileName, head); err != nil {
 			getChunkService().DeleteMergedFile(ctx, relativePath)
 			_ = getChunkService().DeleteUpload(ctx, uploadID)
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeFileTypeDenied,
-				"message": err.Error(),
-			})
+			// 30011 ⇒ 415（与首片预检同一出口口径；业务文案保留可操作）
+			resp.NewErrorWithMessage(c, errcode.CodeFileTypeDenied, err.Error())
 			return
 		}
 	}
@@ -798,29 +702,20 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		if maxFile := utils.GetMaxFileSize(); maxFile > 0 && actualSize > maxFile {
 			getChunkService().DeleteMergedFile(ctx, relativePath)
 			_ = getChunkService().DeleteUpload(ctx, uploadID)
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeTooLarge,
-				"message": fmt.Sprintf("合并后文件大小 %d 字节超过上限 %d 字节", actualSize, maxFile),
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeTooLarge, fmt.Sprintf("合并后文件大小 %d 字节超过上限 %d 字节", actualSize, maxFile))
 			return
 		}
 		if info.FileSize > 0 && actualSize != info.FileSize {
 			getChunkService().DeleteMergedFile(ctx, relativePath)
 			_ = getChunkService().DeleteUpload(ctx, uploadID)
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeChunkInvalid,
-				"message": fmt.Sprintf("合并后文件大小 %d 与申报大小 %d 不符", actualSize, info.FileSize),
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeChunkInvalid, fmt.Sprintf("合并后文件大小 %d 与申报大小 %d 不符", actualSize, info.FileSize))
 			return
 		}
 	}
 
 	// 计算过期时间
 	if err := utils.CheckExpireStyleAllowed(req.ExpireStyle); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": err.Error(),
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	expireTime := utils.CalculateExpireTime(int(req.ExpireValue), req.ExpireStyle)
@@ -853,18 +748,12 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 			password = *req.Password
 		}
 		if password == "" {
-			c.JSON(consts.StatusBadRequest, map[string]interface{}{
-				"code":    errcode.CodeInvalidParam,
-				"message": "开启密码保护时必须提供密码",
-			})
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "开启密码保护时必须提供密码")
 			return
 		}
 		hash, pwErr := utils.HashPassword(password)
 		if pwErr != nil {
-			c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-				"code":    errcode.CodeInternal,
-				"message": "密码处理失败",
-			})
+			resp.NewInternalError(c, errcode.CodeInternal, "密码处理", pwErr)
 			return
 		}
 		passwordHash = hash
@@ -955,10 +844,7 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	// 获取上传ID
 	uploadID := c.Param("upload_id")
 	if uploadID == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "上传ID不能为空",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "上传ID不能为空")
 		return
 	}
 
@@ -967,25 +853,16 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	// 让不存在的 uploadID 跳过校验直达 CleanSessionFiles，uploadID 携 `..` 时
 	// RemoveAll(chunks/..) 即删整个 data 根（库+全部上传文件）。
 	if !validUploadID(uploadID) {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "上传ID格式非法",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "上传ID格式非法")
 		return
 	}
 	info, ierr := getChunkService().GetUploadInfo(ctx, uploadID)
 	if ierr != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{
-			"code":    errcode.CodeNotFound,
-			"message": "上传记录不存在",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "上传记录不存在")
 		return
 	}
 	if !ownedByCaller(info, c) {
-		c.JSON(consts.StatusForbidden, map[string]interface{}{
-			"code":    errcode.CodeForbidden,
-			"message": "无权操作该上传会话",
-		})
+		resp.NewErrorWithMessage(c, errcode.CodeForbidden, "无权操作该上传会话")
 		return
 	}
 
@@ -998,10 +875,7 @@ func ChunkUploadCancel(ctx context.Context, c *app.RequestContext) {
 	// 删除上传记录
 	err = getChunkService().DeleteUpload(ctx, uploadID)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
-			"code":    errcode.CodeInternal,
-			"message": "取消上传失败: " + err.Error(),
-		})
+		resp.NewInternalError(c, errcode.CodeInternal, "取消上传", err)
 		return
 	}
 

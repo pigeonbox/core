@@ -80,10 +80,10 @@ type TotpSetupResult struct {
 func (s *Service) TotpSetup(ctx context.Context, userID uint) (*TotpSetupResult, error) {
 	u, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, errors.New("用户不存在")
+		return nil, errParam("用户不存在")
 	}
 	if u.TotpEnabled {
-		return nil, errors.New("二次验证已开启，请先关闭再重新绑定")
+		return nil, errParam("二次验证已开启，请先关闭再重新绑定")
 	}
 	secret, err := totp.GenerateSecret()
 	if err != nil {
@@ -104,13 +104,13 @@ func (s *Service) TotpSetup(ctx context.Context, userID uint) (*TotpSetupResult,
 func (s *Service) TotpEnable(ctx context.Context, userID uint, code string) ([]string, error) {
 	u, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, errors.New("用户不存在")
+		return nil, errParam("用户不存在")
 	}
 	if u.TotpEnabled {
-		return nil, errors.New("二次验证已开启")
+		return nil, errParam("二次验证已开启")
 	}
 	if strings.TrimSpace(u.TotpSecret) == "" {
-		return nil, errors.New("请先获取绑定密钥")
+		return nil, errParam("请先获取绑定密钥")
 	}
 	if !totp.Validate(u.TotpSecret, code, time.Now()) {
 		return nil, &TotpInvalidError{}
@@ -132,10 +132,10 @@ func (s *Service) TotpEnable(ctx context.Context, userID uint, code string) ([]s
 func (s *Service) TotpDisable(ctx context.Context, userID uint, password, code string) error {
 	u, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return errors.New("用户不存在")
+		return errParam("用户不存在")
 	}
 	if !u.TotpEnabled {
-		return errors.New("二次验证未开启")
+		return errParam("二次验证未开启")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
 		return &TotpInvalidError{Msg: "密码错误"}

@@ -325,12 +325,12 @@ func (s *Service) LoginByEmail(ctx context.Context, email, password string) (*mo
 func (s *Service) ChangePassword(ctx context.Context, userID uint, oldPassword, newPassword string) error {
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return errors.New("用户不存在")
+		return errParam("用户不存在")
 	}
 
 	// 验证旧密码
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPassword)); err != nil {
-		return errors.New("旧密码错误")
+		return errParam("旧密码错误")
 	}
 
 	// 生成新密码哈希
@@ -550,7 +550,8 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIK
 		return nil, fmt.Errorf("统计用户 API Key 失败: %w", err)
 	}
 	if count >= maxUserAPIKeys {
-		return nil, fmt.Errorf("最多只能保留 %d 个有效 API Key，请先删除旧的密钥", maxUserAPIKeys)
+		// 有效密钥数触顶 = 参数/业务类拒绝 ⇒ 10001 保留可操作文案（core#114 A6b）
+		return nil, errParam(fmt.Sprintf("最多只能保留 %d 个有效 API Key，请先删除旧的密钥", maxUserAPIKeys))
 	}
 
 	// 处理过期时间
@@ -582,7 +583,8 @@ func (s *Service) CreateAPIKey(ctx context.Context, userID uint, req *CreateAPIK
 	// 权限范围：校验取值（非法值直接报错，不静默放宽）
 	scopes, err := middleware.ValidateAPIKeyScopes(req.Scopes)
 	if err != nil {
-		return nil, err
+		// 非法 scope = 参数类拒绝（文案含合法值清单）⇒ 10001 保留可操作文案
+		return nil, errParam(err.Error())
 	}
 
 	// 创建记录
@@ -648,7 +650,7 @@ func (s *Service) DeleteAPIKey(ctx context.Context, userID, id uint) error {
 
 	err := s.apiKeyRepo.RevokeByID(ctx, userID, id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return errors.New("API Key 不存在或已撤销")
+		return errNotFound("API Key 不存在或已撤销")
 	}
 	if err != nil {
 		return fmt.Errorf("撤销 API Key 失败: %w", err)

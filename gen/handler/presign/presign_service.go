@@ -245,7 +245,7 @@ func Init(ctx context.Context, c *app.RequestContext) {
 			resp.NewTypedError(c, err)
 			return
 		}
-		resp.NewErrorWithMessage(c, errcode.CodePresignFailed, err.Error())
+		resp.NewInternalError(c, errcode.CodePresignFailed, "生成预签名", err)
 		return
 	}
 	resp.Success(c, &presignmodel.InitData{
@@ -341,7 +341,7 @@ func Abort(ctx context.Context, c *app.RequestContext) {
 		case presignapp.ErrTokenInvalid:
 			resp.NewErrorByCode(c, errcode.CodePresignToken)
 		default:
-			resp.NewErrorWithMessage(c, errcode.CodeInternal, err.Error())
+			resp.NewInternalError(c, errcode.CodeInternal, "中止上传", err)
 		}
 		return
 	}

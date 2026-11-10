@@ -139,7 +139,7 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 		return &ResetTokenBadError{}
 	}
 	if len(newPassword) < resetPasswordMinLen {
-		return fmt.Errorf("新密码至少 %d 位", resetPasswordMinLen)
+		return errParam(fmt.Sprintf("新密码至少 %d 位", resetPasswordMinLen))
 	}
 	if s.resetRepo == nil {
 		return &ResetTokenBadError{}

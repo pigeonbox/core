@@ -244,6 +244,24 @@ func httpStatusForCode(code int) int {
 	case code == errcode.CodeContentRejected:
 		// 内容未通过审核 ⇒ 403
 		return consts.StatusForbidden
+	case code == errcode.CodeConflict, code == errcode.CodeUserExists:
+		// 资源冲突（10016/40002）⇒ 409。⚠️ 10016 此前未登记（注册面/分片面各自
+		// 手写 409、AdminCreateUser 走映射却落 default ⇒ **HTTP 200**）——同一
+		// 语义事件两个状态码 + 业务错误进 200（core#115 同族缺陷）。A6b 统一。
+		return consts.StatusConflict
+	case code == errcode.CodeChunkInvalid:
+		// 分片无效（20009）⇒ 422 Unprocessable Entity（前端 multifile.ts 按
+		// 「HTTP 422 或 body 20009」判定单片可重试，两个判据之一保持成立）。
+		return consts.StatusUnprocessableEntity
+	case code == errcode.CodeTotpRequired, code == errcode.CodeTotpInvalid:
+		// 二次验证（40012/40013）⇒ 400。⚠️ 不用 401：/user/totp/* 等信任面
+		// 收到 401 会被前端拦截器当成会话失效 ⇒ 误触发 refresh/跳登录；登录流
+		// 的二验弹框判据也只有 body code 40012（views/user/Login.vue），
+		// 且登录面注释本就写明「40012 不返回 401」——统一 400 与两处口径都一致。
+		return consts.StatusBadRequest
+	case code == errcode.CodeResetTokenBad:
+		// 重置链接无效/过期（40014）⇒ 400（客户端可换链接重试，非服务端故障）。
+		return consts.StatusBadRequest
 	case code == errcode.CodeInternal:
 		// 内部错误（10008）⇒ 500。⚠️ 此前未显式枚举 ⇒ 落到下方 IsClientError
 		//（10001–10999 也是 1xxxx 段）⇒ **HTTP 400**：「服务端坏了」被报成
@@ -289,7 +307,10 @@ func NewTypedError(c *app.RequestContext, err error) {
 		NewErrorWithMessage(c, biz.BizCode, biz.Message)
 		return
 	}
-	NewErrorWithMessage(c, errcode.CodeInternal, err.Error())
+	// 兜底也是内部错误 ⇒ 同样脱敏（core#114 A6b：此前这里裸回 err.Error()，
+	// 未实现 ErrCode 的错误把 SQL/驱动文本经 10008 出网——与 NewInternalError
+	// 的口径对齐：细节进日志，对外只留脱敏文案）。
+	NewInternalError(c, errcode.CodeInternal, "", err)
 }
 
 func Page(c *app.RequestContext, list interface{}, total int64, page, pageSize int) {
