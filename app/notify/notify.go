@@ -72,6 +72,10 @@ type Service struct {
 	// ⚠️ 同 webhookURL：运行期热重建写、请求路径读 ⇒ 一律 atomic.Pointer 原子持有。
 	telegramCfg atomic.Pointer[TelegramConfig]
 	barkCfg     atomic.Pointer[BarkConfig]
+
+	// chanTestSenders 渠道测试发送分发表（core#122；见 channeltest.go）。
+	// 构造期装配一次后只读，无并发写 ⇒ 无需原子持有。
+	chanTestSenders map[string]channelTestSender
 }
 
 // webhookTarget 当前生效的 Webhook 地址（空串 = 禁用）。
@@ -88,7 +92,9 @@ func (s *Service) bark() *BarkConfig         { return s.barkCfg.Load() }
 
 // NewService 创建 service（repo 构造注入，去全局化终态）
 func NewService(gormDB *gorm.DB) *Service {
-	return &Service{notifyRepo: dao.NewNotifyRepository(gormDB)}
+	s := &Service{notifyRepo: dao.NewNotifyRepository(gormDB)}
+	s.initChannelTestSenders()
+	return s
 }
 
 // ListItem 列表项
