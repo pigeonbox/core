@@ -4,34 +4,70 @@ package handler
 
 import (
 	"context"
-	"github.com/pigeonbox/contracts/errcode"
+	"fmt"
 	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
+	"github.com/pigeonbox/contracts/errcode"
 
 	shareService "github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/transfer"
 	"github.com/pigeonbox/core/pkg/utils"
 )
 
-func localRootQuery(c *app.RequestContext) int {
-	if v, err := strconv.Atoi(c.Query("root")); err == nil {
-		return v
+// parseLocalRoot 解析查询参数 root（白名单根目录序号）——**严格解析**（core#113）。
+//
+// 旧行为：strconv.Atoi 失败**静默落 root 0** ⇒ DELETE /admin/local-files?root=2
+// 里 root 打错（非数字/空格/URL 编码错）会被悄悄改成 root 0，删除/导入打到
+// **另一个根目录**上的同名相对路径，接口照样回「删除成功」——破坏性端点 +
+// 静默换目标，与 core#102「解析失败必须显式失败」同族。
+//
+// 口径（对齐 core#102/#104/#123 家族）：
+//   - 缺省/空串 ⇒ 0（默认根，与「没传」同义，历史行为不动）；
+//   - 非数字（含空格/小数/0x 形态）⇒ 400 + 10001 + 点名参数（paging.ParamError 形态）；
+//   - 数字但越界（<0 或 ≥ 已配置根数）⇒ 400 + 10001 + 点名参数；
+//   - roots 为空（功能未启用/未配置）不做越界判定，交服务端回「未启用」引导语。
+//
+// path 侧的穿越防护不在本函数：app/share.resolveLocalPath → pathx.SanitizeRelStrict
+// 严格档（统一按反斜杠分隔符、拒绝对路径/UNC/盘符/显式 .. 段），EvalSymlinks 后
+// 复核落点仍在根内。本函数只管 root 索引的解析口径。
+func parseLocalRoot(c *app.RequestContext) (int, bool) {
+	s := c.Query("root")
+	if s == "" {
+		return 0, true // 未传 ⇒ 默认根 0（历史口径不动）
 	}
-	return 0
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		perr := &paging.ParamError{Param: "root", Value: s, Expect: "非负整数（白名单根目录序号）"}
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+		return 0, false
+	}
+	if roots := shareService.LocalImportRoots(); len(roots) > 0 && (v < 0 || v >= len(roots)) {
+		perr := &paging.ParamError{Param: "root", Value: s,
+			Expect: fmt.Sprintf("0..%d 的整数（白名单根目录序号）", len(roots)-1)}
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+		return 0, false
+	}
+	return v, true
 }
 
 // AdminListLocalFiles GET /admin/local-files?root=0&dir=sub/dir
 // 返回 {roots: [...], entries: [...]}（roots 供前端切换根目录）
 func AdminListLocalFiles(ctx context.Context, c *app.RequestContext) {
+	// root 严格解析前置于服务就绪检查：解析失败在触达服务前就 400 返回。
+	root, ok := parseLocalRoot(c)
+	if !ok {
+		return
+	}
 	if shareSvc == nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "share service 未就绪"})
 		return
 	}
-	entries, err := getShareService().ListLocalFiles(localRootQuery(c), c.Query("dir"))
+	entries, err := getShareService().ListLocalFiles(root, c.Query("dir"))
 	if err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
@@ -44,6 +80,12 @@ func AdminListLocalFiles(ctx context.Context, c *app.RequestContext) {
 
 // AdminDeleteLocalFile DELETE /admin/local-files?root=0&path=a/b.txt
 func AdminDeleteLocalFile(ctx context.Context, c *app.RequestContext) {
+	// root 严格解析前置于服务就绪检查（core#113）：root 打错绝不能静默落到
+	// root 0 —— 删除是破坏性端点，打错根目录 = 删错文件。
+	root, ok := parseLocalRoot(c)
+	if !ok {
+		return
+	}
 	if shareSvc == nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "share service 未就绪"})
 		return
@@ -53,7 +95,7 @@ func AdminDeleteLocalFile(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "缺少 path"})
 		return
 	}
-	if err := getShareService().DeleteLocalFile(localRootQuery(c), path); err != nil {
+	if err := getShareService().DeleteLocalFile(root, path); err != nil {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
 	}

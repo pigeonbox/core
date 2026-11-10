@@ -16,12 +16,12 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
-	"github.com/oekit/pkg/convert"
 	"github.com/oekit/pkg/pathx"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/app/chunk"
 	presignApp "github.com/pigeonbox/core/app/presign"
 	shareService "github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -159,17 +159,30 @@ func parseMultiCommonFromJSON(ctx context.Context, c *app.RequestContext) *multi
 	return finishMultiCommon(ctx, c, body.ExpireValue, body.ExpireStyle, body.RequireAuth, body.Password, body.Encrypted, body.WrappedKey, body.CustomCode, body.Note)
 }
 
-// parseMultiCommonFromForm multipart 表单版本
+// parseMultiCommonFromForm multipart 表单版本。
+//
+// expire_value 走**严格解析**（core#110）：旧实现 convert.Str2Int(.., 0) 把
+// 非数字静默当 0 ⇒ day 样式被静默改义成 1 天（用户以为 30 天）、count 样式
+// 0 = 建完即死的服务端还回 success。同一份语义两套方言（严格版
+// utils.ParseExpireParams 零生产调用、宽松版在跑）——现收编严格版：
+// 非数字 / ≤0（forever 除外）⇒ 400 + 10001 + 点名参数（paging.ParamError 形态）。
 func parseMultiCommonFromForm(ctx context.Context, c *app.RequestContext) *multiCommonParams {
-	expireValue := convert.Str2Int(c.DefaultPostForm("expire_value", "1"), 0)
-	expireStyle := c.DefaultPostForm("expire_style", "day")
-	requireAuth := c.DefaultPostForm("require_auth", "false") == "true"
+	expireValueStr := c.DefaultPostForm("expire_value", "1")
+	expParams, parseErr := utils.ParseExpireParams(expireValueStr,
+		c.DefaultPostForm("expire_style", "day"),
+		c.DefaultPostForm("require_auth", "false"))
+	if parseErr != nil {
+		perr := &paging.ParamError{Param: "expire_value", Value: expireValueStr,
+			Expect: "正整数（expire_style=forever 时可为 0）"}
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+		return nil
+	}
 	password := c.DefaultPostForm("password", "")
 	encrypted := c.DefaultPostForm("encrypted", "false") == "true"
 	wrappedKey := c.DefaultPostForm("wrapped_key", "")
 	customCode := c.DefaultPostForm("custom_code", "")
 	note := c.DefaultPostForm("note", "")
-	return finishMultiCommon(ctx, c, expireValue, expireStyle, requireAuth, password, encrypted, wrappedKey, customCode, note)
+	return finishMultiCommon(ctx, c, expParams.ExpireValue, expParams.ExpireStyle, expParams.RequireAuth, password, encrypted, wrappedKey, customCode, note)
 }
 
 // finishMultiCommon 公共参数收尾：样式白名单/密码哈希/身份

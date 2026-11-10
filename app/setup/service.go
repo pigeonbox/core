@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
+	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"golang.org/x/crypto/bcrypt"
@@ -65,6 +67,16 @@ func (s *Service) InitializeSystem(ctx context.Context, req *InitializeSystemReq
 	}
 	if count > 0 {
 		return ErrAlreadyInitialized
+	}
+
+	// AdminEmail 格式收口（core#119 同族）：初始化建号的邮箱直入库、并流入
+	// SMTP To 头（通知链路）⇒ 与注册面同款 utils.ValidateEmail。空邮箱保持
+	// A1 放行口径（建号允许不填），非空非法 ⇒ typed 参数错误（400 + 10001
+	// 全站信封，点名 admin_email）。
+	if req.AdminEmail != "" {
+		if err := utils.ValidateEmail(req.AdminEmail); err != nil {
+			return pkgerrors.BadRequest(fmt.Sprintf("参数 admin_email 非法：%s", err.Error()))
+		}
 	}
 
 	// 检查用户名是否已存在

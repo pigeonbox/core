@@ -29,6 +29,7 @@ import (
 	"github.com/oekit/pkg/secretx"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/outbound"
+	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -40,6 +41,11 @@ const discoveryTTL = time.Hour
 
 // ErrAccountDisabled 匹配命中的本地账号已被禁用（回调不发 JWT，2026-10-08 加固）
 var ErrAccountDisabled = errors.New("OIDC 登录被拒绝：账号已被禁用")
+
+// ErrEmailInvalid IdP 返回的 email claim 格式非法（core#119 同族收口）：
+// JIT 建号会把该值落库并流入 SMTP To 头 ⇒ 校验失败**显式拒绝登录**，
+// 绝不把注入类邮箱写进库/参与匹配（不静默降级占位邮箱——那又是静默改义）。
+var ErrEmailInvalid = errors.New("OIDC 登录被拒绝：身份提供方返回的邮箱格式无效")
 
 // ErrStateInvalid state 校验失败（过期/伪造/缺少浏览器绑定）。
 //
@@ -344,6 +350,12 @@ func (s *Service) matchOrCreate(ctx context.Context, claims idClaims) (*model.Us
 	}
 	// 按邮箱匹配（用户先以密码注册、后用 OIDC 登录的场景）——仅限已验证邮箱
 	if claims.Email != "" && claims.EmailVerified {
+		// core#119 同族收口：email claim 会按此值 JIT 建号落库（下方）并流入
+		// SMTP To 头 ⇒ 与注册面同款 utils.ValidateEmail 严格校验，非法即显式
+		// 失败（ErrEmailInvalid）。未验证邮箱不受此闸（本就不落库，走占位邮箱）。
+		if err := utils.ValidateEmail(claims.Email); err != nil {
+			return nil, ErrEmailInvalid
+		}
 		if u, err := s.userRepo.GetByEmail(ctx, claims.Email); err == nil && u != nil {
 			if u.Status != "active" {
 				return nil, ErrAccountDisabled

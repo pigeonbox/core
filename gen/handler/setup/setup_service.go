@@ -14,6 +14,8 @@ import (
 	adminsvc "github.com/pigeonbox/core/app/admin"
 	setupservice "github.com/pigeonbox/core/app/setup"
 	"github.com/pigeonbox/core/conf"
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
+	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/utils"
 )
 
@@ -112,6 +114,13 @@ func Initialize(ctx context.Context, c *app.RequestContext) {
 				"code":    errcode.CodeConflict,
 				"message": err.Error(),
 			})
+			return
+		}
+		// typed 参数错误（core#119 同族的 admin_email 格式收口）⇒ 400 + 10001
+		// 全站信封（resp.NewTypedError 按 BizCode 透传），不落 500「系统初始化失败」。
+		var biz *pkgerrors.AppError
+		if errors.As(err, &biz) {
+			resp.NewTypedError(c, err)
 			return
 		}
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{
