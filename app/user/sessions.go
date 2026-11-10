@@ -71,7 +71,7 @@ func (s *Service) RevokeSession(ctx context.Context, userID, id uint) error {
 		return err
 	}
 	if !ok {
-		return errors.New("会话不存在或已退出")
+		return errNotFound("会话不存在或已退出")
 	}
 	middleware.InvalidateIdentity(userID)
 	return nil
