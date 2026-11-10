@@ -44,6 +44,13 @@ const (
 	TargetFederation Target = "federation"
 	// TargetFederationDelivery 跨站投递（柜间通道；转发为流式上传）。
 	TargetFederationDelivery Target = "federation_delivery"
+	// TargetFederationInvite 联邦邀请推送（POST <对端站点>/api/v1/p2p/invite；
+	// app/federation pushInvite）。core#116：此前用 http.DefaultClient（零超时 +
+	// 盲跟重定向绕过 SSRF 逐跳复验）。
+	TargetFederationInvite Target = "federation_invite"
+	// TargetFederationDirectory 联邦名录查询（GET <registry>/v1/directory；
+	// app/federation PeerDirectory）。core#116：此前同用 http.DefaultClient。
+	TargetFederationDirectory Target = "federation_directory"
 )
 
 // DefaultTimeout 统一超时基准（core#87：此前三处各写一个常量，改一处忘两处）。
@@ -111,6 +118,18 @@ var policies = map[Target]policy{
 		checkRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	},
+	// core#116 两个联邦出站（原 http.DefaultClient 两处）。10s / 5s 均为**迁移**
+	// 不是新决策：原 pushInvite / directory.go 构造现场的 ctx 预算值（两处调用点
+	// 仍各自带同值 ctx deadline）。重定向逐跳复验 SSRF（ssrfRedirectGuard，见
+	// ssrf_redirect.go 的口径说明）。
+	TargetFederationInvite: {
+		timeout:       10 * time.Second,
+		checkRedirect: ssrfRedirectGuard,
+	},
+	TargetFederationDirectory: {
+		timeout:       5 * time.Second,
+		checkRedirect: ssrfRedirectGuard,
 	},
 }
 

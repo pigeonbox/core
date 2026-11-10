@@ -31,6 +31,7 @@ import (
 	"github.com/oekit/kitx/uidgen"
 
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/pkg/paircode"
 	"github.com/pigeonbox/core/pkg/security"
 )
@@ -227,6 +228,8 @@ func newEnvelopeID() (string, error) {
 // SSRF 基线（严格版）：目标按公网口径校验（私网目标需全局
 // security.ssrf.allow_private_networks 放行）——手动推送的目标是**调用方
 // 当场输入**的 URL，不是管理员登记项，没有可依的对端粒度授权。
+// 3xx 重定向目标逐跳复验同一套 SSRF（core#116，outbound.ssrfRedirectGuard）：
+// 校验过的 URL 只是第一跳，重定向不能成为绕过校验的第二跳。
 func PushInvite(ctx context.Context, targetURL, code, fromName, note string) error {
 	return pushInvite(ctx, targetURL, code, fromName, note, false)
 }
@@ -267,7 +270,10 @@ func pushInvite(ctx context.Context, targetURL, code, fromName, note string, all
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	// 出站统一走 pkg/outbound（core#116）：client 级 10s 超时（原 http.DefaultClient
+	// 零超时 ⇒ 对端不响应即 goroutine 永久挂起）+ 重定向逐跳复验 SSRF（对端 302
+	// 到内网不再能绕过发送前校验、口令不外带）。
+	resp, err := outbound.New(outbound.TargetFederationInvite).Do(req)
 	if err != nil {
 		return fmt.Errorf("推送失败: %w", err)
 	}
