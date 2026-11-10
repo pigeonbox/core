@@ -20,6 +20,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/pigeonbox/contracts/errcode"
 	usermodel "github.com/pigeonbox/contracts/gen/user"
+	"github.com/pigeonbox/core/pkg/resp"
 )
 
 // trustUserID 取当前登录用户 ID（AuthMiddleware 已注入；缺失即 401）。
@@ -149,7 +150,13 @@ func ForgotPassword(ctx context.Context, c *app.RequestContext) {
 		})
 		return
 	}
-	_ = getUserService().RequestPasswordReset(ctx, req.Email)
+	if err := getUserService().RequestPasswordReset(ctx, req.Email); err != nil {
+		// core#119：邮箱格式非法 = 参数错误（400，全站信封）。恒成功语义只
+		// 覆盖账号枚举 oracle（邮箱是否存在/SMTP/发信失败），格式非法是纯
+		// 输入校验，不泄露注册状态。
+		resp.NewTypedError(c, err)
+		return
+	}
 	c.JSON(consts.StatusOK, &usermodel.PasswordForgotResp{
 		Code:    0,
 		Message: "若该邮箱已注册，我们已发送重置链接（请检查收件箱与垃圾邮件）",

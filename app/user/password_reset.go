@@ -7,6 +7,8 @@ package user
 //  1. **forgot 恒成功**：无论邮箱是否存在、SMTP 是否配置、发信是否失败，
 //     对外一律 200。任何差异化的响应都会把「这个邮箱注册过本站」这份
 //     信息卖给任意访客（账号枚举），而对真实用户毫无帮助。
+//     唯一例外（core#119）：邮箱**格式**非法按参数错误 400——纯输入校验
+//     （与 BindAndValidate 同类），不泄露注册状态。
 //  2. **令牌一次性 + 短窗口**：sha256 落库、30 分钟过期、MarkUsed 原子
 //     抢占（同 token 并发提交两次只有一次成功）。邮件里的链接是最容易被
 //     转发/截图的东西，把它变成可重复使用的凭据等于开一条后门。
@@ -26,8 +28,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pigeonbox/contracts/errcode"
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
+	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/model"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -54,11 +58,17 @@ type ResetTokenBadError struct{}
 func (e *ResetTokenBadError) Error() string { return "链接已失效，请重新申请找回密码" }
 func (e *ResetTokenBadError) ErrCode() int  { return errcode.CodeResetTokenBad }
 
-// RequestPasswordReset 申请找回密码（**恒成功**，见文件头）。
+// RequestPasswordReset 申请找回密码（**恒成功**，见文件头；格式非法除外）。
 func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
 	email = strings.TrimSpace(email)
 	if email == "" {
 		return nil
+	}
+	// core#119：格式非法是**参数错误**（400），不属于「恒成功」——恒成功只
+	// 覆盖账号枚举 oracle（邮箱是否存在 / SMTP 是否可用 / 发信是否失败），
+	// 格式非法不泄露任何注册状态，且注入类输入不该静默走查库流程。
+	if err := utils.ValidateEmail(email); err != nil {
+		return pkgerrors.BadRequest(err.Error())
 	}
 	u, err := s.repo.GetByEmail(ctx, email)
 	if err != nil {
