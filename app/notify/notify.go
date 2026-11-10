@@ -140,7 +140,11 @@ func (s *Service) List(ctx context.Context, req ListReq) (*ListData, error) {
 		return nil, err
 	}
 	var items []model.Notify
-	if err := tx.Order("created_at DESC").Offset((req.Page - 1) * req.PageSize).Limit(req.PageSize).Find(&items).Error; err != nil {
+	// 偏移走 NotifyPolicy.Offset（core#111）：手写 (req.Page-1)*req.PageSize 无
+	// 溢出保护——req.Page 不封顶页码，超大页码乘法回绕（可回绕成正数）⇒ 偏移量
+	// 完全错误（翻到别人页）；Policy.Offset 乘法前判溢出。上面已按同域归一化
+	// ⇒ Offset 内含的再归一化是恒等变换（幂等前提由 offset_guard_test 钉住）。
+	if err := tx.Order("created_at DESC").Offset(paging.NotifyPolicy.Offset(req.Page, req.PageSize)).Limit(req.PageSize).Find(&items).Error; err != nil {
 		return nil, err
 	}
 	result := &ListData{
