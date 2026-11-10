@@ -151,7 +151,8 @@ func FederationAllowedInMode(mode string) bool {
 
 // FederationConfig P2P 联邦接入（M2；默认关闭。对端服务：github.com/pigeonbox/p2p）。
 // 启用后本站注册进联邦注册中心，口令分享跨站可达（文件仍从本站直出，
-// 注册中心不落盘不见明文）。详见 docs/specs/2026-10-04-p2p-registry-service-design.md。
+// 注册中心不落盘不见明文）。详见 pigeonbox/pigeonbox 仓 docs/specs/2026-10-04-p2p-registry-service-design.md
+// （https://github.com/pigeonbox/pigeonbox/blob/main/docs/specs/2026-10-04-p2p-registry-service-design.md ）。
 type FederationConfig struct {
 	// Enabled 总开关（默认 false）。env: PB_FEDERATION_ENABLED
 	Enabled bool `mapstructure:"enabled" json:"enabled"`

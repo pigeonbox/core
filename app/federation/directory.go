@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/pkg/registry"
 )
 
@@ -67,7 +68,9 @@ func (d *PeerDirectory) Peers(ctx context.Context) ([]DirectoryPeer, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// 出站统一走 pkg/outbound（core#116）：client 级 5s 超时（原 http.DefaultClient
+	// 零超时）+ 重定向逐跳复验 SSRF。
+	resp, err := outbound.New(outbound.TargetFederationDirectory).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("名录查询失败: %w", err)
 	}

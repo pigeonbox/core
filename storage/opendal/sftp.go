@@ -161,7 +161,7 @@ func (d *sftpDriver) Read(ctx context.Context, key string) ([]byte, error) {
 		return nil, d.notExistWrap(key, err)
 	}
 	defer func() { _ = f.Close() }()
-	return io.ReadAll(f)
+	return ReadAllLimited(f, MaxWholeReadBytes)
 }
 
 func (d *sftpDriver) Reader(ctx context.Context, key string) (io.ReadCloser, error) {

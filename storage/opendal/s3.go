@@ -111,7 +111,7 @@ func (d *s3Driver) Read(ctx context.Context, key string) ([]byte, error) {
 		return nil, d.wrapErr(key, err)
 	}
 	defer func() { _ = obj.Close() }()
-	data, err := io.ReadAll(obj)
+	data, err := ReadAllLimited(obj, MaxWholeReadBytes)
 	if err != nil {
 		return nil, d.wrapErr(key, err)
 	}

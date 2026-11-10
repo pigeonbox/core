@@ -79,11 +79,14 @@ func (d *webdavDriver) WriteStream(ctx context.Context, key string, r io.Reader,
 }
 
 func (d *webdavDriver) Read(ctx context.Context, key string) ([]byte, error) {
-	data, err := d.client.Read(d.abs(key))
+	// gowebdav.Client.Read 内部整读无上限（core#118 同族）⇒ 改走 ReadStream +
+	// 限量整读（404 归一语义不变）。
+	rc, err := d.client.ReadStream(d.abs(key))
 	if err != nil {
 		return nil, d.notExistWrap(key, err)
 	}
-	return data, nil
+	defer func() { _ = rc.Close() }()
+	return ReadAllLimited(rc, MaxWholeReadBytes)
 }
 
 func (d *webdavDriver) Reader(ctx context.Context, key string) (io.ReadCloser, error) {

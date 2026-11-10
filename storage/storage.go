@@ -295,17 +295,30 @@ func (s *StorageService) DeleteFile(ctx context.Context, filePath string) error 
 	return os.Remove(fullPath)
 }
 
-// GetFile 获取文件内容
+// ErrReadTooLarge 整读超限（core#118）：对象超过 opendal.MaxWholeReadBytes。
+// 转发 opendal.ErrReadTooLarge，调用方用 errors.Is 判断（同 ErrRangeUnsupported 先例）。
+var ErrReadTooLarge = opendal.ErrReadTooLarge
+
+// GetFile 获取文件内容（限量整读，core#118：超限显式报错而非静默截断）。
+//
+// 整读只服务「取内容」类消费（MCP 下载等），大对象走流式 GetFileReader——
+// 此前本地 os.ReadFile / 远端 op.Read 均无上限整读进内存，用户上传对象可达
+// max_file_size ⇒ 多并发取内容 = OOM 面。
 func (s *StorageService) GetFile(ctx context.Context, filePath string) ([]byte, error) {
 	_, op := s.current()
 	if op != nil {
-		return op.Read(ctx, filePath)
+		return op.Read(ctx, filePath) // 驱动 Read 已收编 ReadAllLimited
 	}
 	fullPath, err := s.localContain(filePath)
 	if err != nil {
 		return nil, err
 	}
-	return os.ReadFile(fullPath)
+	f, err := os.Open(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return opendal.ReadAllLimited(f, opendal.MaxWholeReadBytes)
 }
 
 // FileExists 检查文件是否存在

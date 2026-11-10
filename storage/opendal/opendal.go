@@ -295,10 +295,15 @@ func (op *Operator) WriteStream(ctx context.Context, path string, r io.Reader, s
 	return op.driver.WriteStream(ctx, op.key(path), r, size)
 }
 
-// Read 读取整个文件
+// Read 读取整个文件（限量整读，core#118：超 MaxWholeReadBytes 显式报错）
 func (op *Operator) Read(ctx context.Context, path string) ([]byte, error) {
 	if op.scheme == SchemeFS {
-		return os.ReadFile(op.resolvePath(path))
+		f, err := os.Open(op.resolvePath(path))
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = f.Close() }()
+		return ReadAllLimited(f, MaxWholeReadBytes)
 	}
 	return op.driver.Read(ctx, op.key(path))
 }
