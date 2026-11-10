@@ -46,6 +46,13 @@ func (c ClamAVConfig) Normalized() ClamAVConfig {
 	return c
 }
 
+// maxClamdReplyBytes clamd 响应读取上限（core#120）。
+//
+// PING 回复是 "PONG\0" 量级、INSTREAM 回复是单行 "stream: …"，4KB 富余。
+// clamd 地址可配（moderation.clamav.addr）⇒ 可能指向不可信/被劫持的服务，
+// 无界读（io.ReadAll(conn)）是内存放大面：deadline 之前到达的字节全部进内存。
+const maxClamdReplyBytes = 1 << 12
+
 // ContentOpener 扫描器读取文件内容的抽象（bootstrap 注入 storage service）
 type ContentOpener interface {
 	GetFileReader(ctx context.Context, filePath string) (io.ReadCloser, int64, error)
@@ -77,7 +84,7 @@ func (m *ClamAVModerator) Ping() error {
 	if _, err := conn.Write([]byte("zPING\x00")); err != nil {
 		return err
 	}
-	resp, err := io.ReadAll(conn)
+	resp, err := io.ReadAll(io.LimitReader(conn, maxClamdReplyBytes))
 	if err != nil {
 		return err
 	}
@@ -127,7 +134,7 @@ func (m *ClamAVModerator) ScanReader(ctx context.Context, r io.Reader) (string, 
 		return "", fmt.Errorf("clamd 收尾失败: %w", err)
 	}
 
-	line, err := bufio.NewReader(conn).ReadString('\n')
+	line, err := bufio.NewReader(io.LimitReader(conn, maxClamdReplyBytes)).ReadString('\n')
 	if err != nil && line == "" {
 		return "", fmt.Errorf("clamd 响应读取失败: %w", err)
 	}
