@@ -48,6 +48,11 @@ type Service struct {
 	// 用于识别「重试成功」这一时刻：此时须把持久化配置**热应用**回全局 conf，
 	// 否则「配置中心恢复了、运行时闸门还钉在默认值」（闸门读的是全局 conf）。
 	configLoadFailed bool
+	// configLoadErr 最近一次装载的错误（nil = 成功/无记录）。
+	// 内部消费方继续走「失败用默认值顶班 + 自动重试」的降级口径；管理面经
+	// LoadError() 拿它显式失败（core#137：默认值不是管理员配的值，不能当
+	// 成功配置 200 展示）。
+	configLoadErr error
 
 	hooksMu       sync.RWMutex
 	reconfigurers *ReconfigureHooks
@@ -259,6 +264,7 @@ func (s *Service) ensureConfigLoaded(ctx context.Context) {
 		logger.Error("failed to load persisted system config, using defaults", zap.Error(err))
 		loaded = false
 		s.configLoadFailed = true
+		s.configLoadErr = err
 	case persisted != nil:
 		s.config = persisted
 		siteName := ""
@@ -281,6 +287,7 @@ func (s *Service) ensureConfigLoaded(ctx context.Context) {
 	// 与每次 UpdateConfig 都会经过 overlay）
 	s.applyUserSideEffects(s.config.User)
 	if loaded {
+		s.configLoadErr = nil // 装载成功（含「无记录」）⇒ 清除上次失败痕迹
 		if s.configLoadFailed {
 			// **重试成功**（此前装载失败过）⇒ 把持久化配置热应用回全局 conf：
 			// 运行时闸门（pkg/gate 等）读的是全局 conf，不是本域的 s.config ⇒
@@ -303,6 +310,17 @@ func (s *Service) applyUserSideEffects(u *UserSettings) {
 	if u.SessionExpiryHours > 0 {
 		auth.SetSessionExpiry(time.Duration(u.SessionExpiryHours) * time.Hour)
 	}
+}
+
+// LoadError 最近一次从 DB 装载持久化配置的错误（nil = 装载成功或无记录）。
+//
+// core#137：GetConfig 的内部降级口径（装载失败用默认值顶班、恒 nil error）
+// 对管理面是撒谎——坏库/坏记录下管理台会把默认值当「你配的值」200 展示。
+// 管理面门面（app/admin.GetConfig）据此显式失败；内部消费方不动。
+func (s *Service) LoadError() error {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.configLoadErr
 }
 
 // GetConfig 获取系统配置（首次调用会从 DB 加载管理后台保存的配置）

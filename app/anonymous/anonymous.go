@@ -417,7 +417,7 @@ type AnonymousShareParams struct {
 	FilePath       string
 	FileName       string
 	FileSize       int64
-	ExpireAt       *time.Time // 必填，决定 DB 过期时间 + Redis TTL
+	ExpireAt       *time.Time // nil=永久（DB expired_at NULL，不写 KV 映射）；非空决定 DB 过期时间 + KV TTL
 	MaxPickupCount int        // -1=无限, 0=默认无限, >0=限制
 	Password       string     // 空=无密码
 }
@@ -426,8 +426,13 @@ type AnonymousShareParams struct {
 // 供 gen handler 调用，避免 handler 直接操作 DAO；密码在此 bcrypt 哈希后存 DB。
 // 返回 6 位取件码。
 func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousShareParams) (string, error) {
-	if p.ExpireAt == nil {
-		return "", errors.New("ExpireAt 必填")
+	// core#137：ExpireAt nil = **永久分享**（DB expired_at NULL = 永久，IsExpired
+	// 恒 false、janitor 按 expired_at < now 清理天然跳过）——与 MintForShare
+	// 「expireAt nil ⇒ 零值传 GenerateCode（不写 KV）」同一约定。此前此处
+	// 把 nil 当参数错误，永久语义进不来。
+	var expireAt time.Time
+	if p.ExpireAt != nil {
+		expireAt = *p.ExpireAt
 	}
 	maxCount := p.MaxPickupCount
 	if maxCount == 0 {
@@ -465,7 +470,7 @@ func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousSharePara
 		FileName:    p.FileName,
 		FileSize:    p.FileSize,
 		RequireAuth: p.Password != "",
-	}, *p.ExpireAt)
+	}, expireAt) // 零值 = 永久（不写 KV，取件走 DB 回退）
 	if err != nil {
 		// 回滚 DB 记录（物理文件未落库，无需清）
 		if dErr := s.fileCodeRepo.Delete(ctx, fc.ID); dErr != nil {

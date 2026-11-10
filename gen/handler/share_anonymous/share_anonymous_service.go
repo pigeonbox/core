@@ -119,9 +119,15 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	safeName := utils.SanitizeFileName(req.FileName)
-	// 过期时间：从请求读，默认 24h
-	expireAt := time.Now().Add(24 * time.Hour)
-	if req.IsSetExpireValue() && req.IsSetExpireStyle() {
+	// 过期时间：从请求读，默认 24h；expire_style=forever ⇒ **显式永不过期**
+	//（expireAt = nil，DB expired_at NULL = 永久——与 share_multi 的 multiExpire、
+	// MintForShare 的「expireAt nil ⇒ 零值传 GenerateCode 不写 KV」同一约定）。
+	//
+	// core#137：修复前 forever 时 CalculateExpireTime 返回 nil 被丢弃、expireAt
+	// 保持默认 24h ⇒ 用户选「永久」拿到的是 24 小时过期的分享（静默改义）。
+	var expireAt *time.Time
+	switch {
+	case req.IsSetExpireValue() && req.IsSetExpireStyle():
 		// expire_value 走**严格解析**（core#110）：旧 convert.Str2Int(.., 0) 把
 		// 非数字静默当 0 ⇒ day 静默改义 1 天、count 0 = 建完即死。收编严格版
 		// utils.ParseExpireParams：非法值显式 400 + 10001 + 点名参数。
@@ -136,9 +142,22 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
 			return
 		}
-		if t := utils.CalculateExpireTime(expParams.ExpireValue, expParams.ExpireStyle); t != nil {
-			expireAt = *t
+		if strings.EqualFold(expParams.ExpireStyle, "forever") {
+			expireAt = nil // 永久
+		} else {
+			expireAt = utils.CalculateExpireTime(expParams.ExpireValue, expParams.ExpireStyle)
 		}
+	case req.IsSetExpireStyle() && strings.EqualFold(req.GetExpireStyle(), "forever"):
+		// 只给样式没给值：forever 同样是「永久」（前端「永久」选项对 falsy
+		// expire_value 不提交，走的正是本分支）。
+		if err := utils.CheckExpireStyleAllowed("forever"); err != nil {
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+			return
+		}
+		expireAt = nil
+	default:
+		d := time.Now().Add(24 * time.Hour)
+		expireAt = &d
 	}
 	// 次数：默认无限
 	maxCount := -1
@@ -154,7 +173,7 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 		FilePath:       "", // 匿名取件文件路径由前端直传后回填；此处先建占位记录
 		FileName:       safeName,
 		FileSize:       req.FileSize,
-		ExpireAt:       &expireAt,
+		ExpireAt:       expireAt, // nil = 永久（DB expired_at NULL）
 		MaxPickupCount: maxCount,
 		Password:       password,
 	})
@@ -179,10 +198,20 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 		// 注意：此刻文件可能还没上传（占位分享）⇒ 对方打开会看到
 		// 「分享未完成上传」（20001，与匿名通道同码同文案）；上传完成后同一链接
 		// 即展示文件。查元数据仍走 GET /anonymous/search/{取件码}。
-		URL:            anonymousPageURL(ctx, pickupCode),
-		ExpireSeconds:  int32(time.Until(expireAt).Seconds()),
+		URL: anonymousPageURL(ctx, pickupCode),
+		// 剩余秒数：永久 = -1（无限，与 max_pickup_count 的 -1 同口径；
+		// core#137 修前永久时发的是默认 24h 的假剩余秒数）。
+		ExpireSeconds:  expireSeconds(expireAt),
 		MaxPickupCount: int32(maxCount),
 	})
+}
+
+// expireSeconds 剩余秒数 wire 值：nil（永久）⇒ -1 = 无限。
+func expireSeconds(expireAt *time.Time) int32 {
+	if expireAt == nil {
+		return -1
+	}
+	return int32(time.Until(*expireAt).Seconds())
 }
 
 // Retrieve 按取件码取件（校验密码 + 扣减次数，DB 为准）。

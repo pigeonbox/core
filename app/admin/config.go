@@ -8,6 +8,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 
 	appconfig "github.com/pigeonbox/core/app/config"
 	"github.com/pigeonbox/core/conf"
@@ -39,6 +40,12 @@ func (s *Service) GetConfig(ctx context.Context) (*SystemConfig, error) {
 	cfg, err := s.cfg.GetConfig(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// core#137：坏库/坏记录下 config 域用默认值顶班（内部降级口径），但管理台
+	// **不能**把默认值当成功配置展示——「配置被静默重置」必须可见。失败显式
+	// 带回（handler 侧 resp.NewInternalError 脱敏出网，错误原文进日志）。
+	if lerr := s.cfg.LoadError(); lerr != nil {
+		return nil, fmt.Errorf("系统配置尚未成功装载: %w", lerr)
 	}
 	return appconfig.SanitizeForAdmin(cfg), nil
 }

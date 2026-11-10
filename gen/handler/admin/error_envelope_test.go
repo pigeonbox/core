@@ -106,9 +106,8 @@ func TestAdminErrorEnvelope_BusinessNotHTTP200(t *testing.T) {
 func TestAdminErrorEnvelope_InternalSanitized(t *testing.T) {
 	newBrokenAdminEnv(t)
 
-	// 注：AdminStats/GetConfig 在查询失败时静默回退零值/默认配置（不报错），
-	// 坏库驱动不出它们的错误路径——错误出口形态由同构的 AdminListUsers/
-	// AdminUpdateUserStatus/AdminUpdateConfig 用例覆盖（同一套 NewInternalError 出口）。
+	// AdminStats/GetConfig 的错误路径已随 core#137（坏库显式失败）由
+	// failvisible_test.go 覆盖（同一套 NewInternalError 出口）。
 	for _, tc := range []struct{ method, path, body, what string }{
 		{"GET", "/admin/users?page=1&page_size=10", "", "AdminListUsers"},
 		{"PUT", "/admin/users/1/status", "{\"status\":0}", "AdminUpdateUserStatus"},
