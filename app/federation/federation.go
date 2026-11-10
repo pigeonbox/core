@@ -1,6 +1,7 @@
 // Package federation 将本站点接入 PigeonBox P2P 联邦（github.com/pigeonbox/p2p）。
 //
-// 职责（M2，设计文档 docs/specs/2026-10-04-p2p-registry-service-design.md §5）：
+// 职责（M2，设计文档 pigeonbox/pigeonbox 仓 docs/specs/2026-10-04-p2p-registry-service-design.md §5
+// https://github.com/pigeonbox/pigeonbox/blob/main/docs/specs/2026-10-04-p2p-registry-service-design.md ）：
 //   - 节点注册/心跳：Ed25519 签名租约，断线自动重注册 + 全量补公告（自愈）；
 //   - 口令联邦路由：share 生命周期钩子公告/撤销 SHA-256(code)→本节点；
 //   - 解析代理：GET /api/v1/federation/resolve 转查 registry（浏览器免跨域）。
