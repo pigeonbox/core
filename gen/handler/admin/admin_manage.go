@@ -533,47 +533,26 @@ func AdminTransferLogs(ctx context.Context, c *app.RequestContext) {
 // 相比 IDL /admin/files（仅 keyword）补充滥用定位维度，返回项含 owner_ip/status/
 // upload_type/user_id（owner_ip 仅管理端可见）。
 func AdminListFilesFiltered(ctx context.Context, c *app.RequestContext) {
-	q := model.FileCodeQuery{}
-	q.Keyword = c.Query("keyword")
-	q.UploadType = c.Query("upload_type")
-	q.OwnerIP = c.Query("owner_ip")
-	q.Status = c.Query("status")
-	if s := c.Query("user_id"); s != "" {
-		if id, err := strconv.ParseUint(s, 10, 64); err == nil && id > 0 {
-			uid := uint(id)
-			q.UserID = &uid
-		}
+	// 参数解析与校验抽到 parseAdminFilesFilter（core#102）：**非法值不再被静默丢弃**。
+	//
+	// ⚠️ 旧行为（就地解析，解析失败即不设条件）：非法值 ⇒ 条件被丢 ⇒ 返回**全量**
+	//   （实测 103：created_after 传 "+0800" ⇒ total=122 = 全量，而调用方以为
+	//   "筛过了只是没筛中"）⇒ 「筛选失败」比「筛选为空」危险（多给数据）。
+	// ⇒ 现在：解析失败 ⇒ 400 + 业务码 10001，消息点名是哪个参数、期望什么格式。
+	q, err := adminapp.ParseFilesFilter(c.Query)
+	if err != nil {
+		// **错误响应统一走全站信封**（resp.NewErrorWithMessage）：
+		// {code, message, trace_id} + HTTP 状态由业务码自动映射
+		// （10001 属 1xxxx 客户端错 ⇒ 400）。
+		//
+		// ⚠️ 为什么成功响应仍是 legacy 形状（code=0/"success" + data{items,total,...}）：
+		//   那是**前端可见的既有契约**（frontend-core 的 Files.vue 按
+		//   res.code===200 && res.data.items/total 读），改形状 = 改前端 ⇒ 不做。
+		//   成功与错误用不同信封是历史遗留；本轮只把**错误**这一侧统一到全站模式
+		//   （此前本端点的错误也是 legacy 手写 map，与全站其它端点不一致）。
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+		return
 	}
-	if s := c.Query("min_size"); s != "" {
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
-			q.MinSize = &v
-		}
-	}
-	if s := c.Query("max_size"); s != "" {
-		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
-			q.MaxSize = &v
-		}
-	}
-	if s := c.Query("created_after"); s != "" {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			q.CreatedAfter = &t
-		}
-	}
-	if s := c.Query("created_before"); s != "" {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			q.CreatedBefore = &t
-		}
-	}
-	if s := c.Query("expired"); s == "true" || s == "false" {
-		b := s == "true"
-		q.Expired = &b
-	}
-	// 回收站筛选（回收站=仅已删 / all=含已删；缺省仅存活）
-	q.Deleted = c.Query("deleted")
-	// 健康洞察过滤（2026-10-07；口径见 dao.applyHealthFilter，空=不过滤）
-	q.Health = c.Query("health")
-	q.Page, _ = strconv.Atoi(c.Query("page"))
-	q.PageSize, _ = strconv.Atoi(c.Query("page_size"))
 
 	files, total, err := getManageSvc().GetFilesFiltered(ctx, q)
 	if err != nil {
