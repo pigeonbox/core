@@ -365,7 +365,10 @@ func (s *Service) ListForUser(ctx context.Context, userID uint, page, pageSize i
 
 	var rows []model.Notify
 	if err := q.Order("created_at DESC").
-		Offset((page - 1) * pageSize).Limit(pageSize).
+		// 偏移走 oekit Policy.Offset（core#104）：带**乘法前**溢出保护
+		//（page 外部可控 ⇒ 超大页码会让手写乘法溢出回绕）。
+		// ⚠️ 幂等前提：上面已按 NotifyPolicy 归一化（≤100）⇒ Normalize 是恒等。
+		Offset(paging.NotifyPolicy.Offset(page, pageSize)).Limit(pageSize).
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}

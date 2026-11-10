@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/oekit/gormx"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 )
@@ -157,9 +158,17 @@ func (r *ChunkRepository) GetUploadList(ctx context.Context, page, pageSize int)
 		return nil, 0, err
 	}
 
-	// 分页查询
-	offset := (page - 1) * pageSize
-	err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&chunks).Error
+	// 分页：先按 dao 域口径归一化，再由 oekit Policy 给出偏移与页长（core#104）。
+	//
+	// ⚠️ 旧实现**没有归一化**：pageSize=0 ⇒ Limit(0) ⇒ SQL "LIMIT 0" ⇒ **返回空列表**；
+	//    page=0 ⇒ offset=-1（GORM 忽略负偏移 ⇒ 从头查）。归一化后与其它 dao 列表同口径。
+	//
+	// ⚠️ 幂等前提：归一化后 page≥1、pageSize≤200 ⇒ Policy.Offset 的 Normalize 是恒等。
+	page, pageSize = paging.DAOPolicy.Normalize(page, pageSize)
+	err := query.Order("created_at DESC").
+		Offset(paging.DAOPolicy.Offset(page, pageSize)).
+		Limit(pageSize).
+		Find(&chunks).Error
 
 	return chunks, total, err
 }

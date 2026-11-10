@@ -124,7 +124,12 @@ func normalizeLogPage(page, pageSize int) (int, int) {
 func (s *Service) GetSystemLogs(ctx context.Context, level string, page, pageSize int) ([]*LogEntry, int64, error) {
 	page, pageSize = normalizeLogPage(page, pageSize)
 
-	entries, total := logger.RecentLogs(level, (page-1)*pageSize, pageSize)
+	// 偏移走 oekit Policy.Offset（core#104）：带**乘法前**溢出保护
+	//（page 外部可控 ⇒ 超大页码会让手写乘法溢出回绕 ⇒ 偏移量完全错误）。
+	//
+	// ⚠️ 幂等前提：上面已用 normalizeLogPage 归一化（≤500）⇒ Offset 的 Normalize
+	//    对已归一化输入是恒等 ⇒ 偏移量与旧实现一致。
+	entries, total := logger.RecentLogs(level, paging.AdminSystemLogPolicy.Offset(page, pageSize), pageSize)
 	logs := make([]*LogEntry, 0, len(entries))
 	for _, e := range entries {
 		logs = append(logs, &LogEntry{

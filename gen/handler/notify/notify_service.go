@@ -9,10 +9,10 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
-	"github.com/oekit/pkg/convert"
 	"github.com/pigeonbox/contracts/errcode"
 	notifymodel "github.com/pigeonbox/contracts/gen/notify"
 	notifyapp "github.com/pigeonbox/core/app/notify"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
 )
@@ -299,8 +299,15 @@ func Mine(ctx context.Context, c *app.RequestContext) {
 	if !ok {
 		return
 	}
-	page := convert.Str2Int(string(c.Query("page")), 0)
-	pageSize := convert.Str2Int(string(c.Query("page_size")), 0)
+	// 分页：**严格解析**（core#104）—— 非数字 ⇒ 400 + 10001。
+	//
+	// ⚠️ 归一化仍在 service 侧（NotifyPolicy：默认 20 / 上限 100 / 超限回落），
+	//    口径一字不改；本轮只把"非数字"从"静默当默认页"变成显式失败。
+	page, pageSize, err := paging.ParsePageParams(c.Query)
+	if err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+		return
+	}
 	data, err := getService().ListForUser(ctx, uid, page, pageSize)
 	if err != nil {
 		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})

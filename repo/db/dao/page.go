@@ -37,7 +37,15 @@ func paginate[T any](q *gorm.DB, page, pageSize int) ([]*T, int64, error) {
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	offset := (page - 1) * pageSize
+	// 偏移走 oekit 的 Policy.Offset（core#104）：内含**乘法前**溢出保护 ——
+	// page 来自外部可控的 query，超大页码会让手写乘法溢出回绕
+	//（回绕后可能仍是**正数** ⇒ 旧判据放过去 ⇒ 偏移量完全错误）。
+	//
+	// ⚠️ 幂等前提：调用点必须已按 dao 域口径归一化（≤200）⇒
+	//    DAOPolicy.Normalize 对已归一化输入是恒等 ⇒ 偏移量与旧实现逐条一致。
+	//    （若将来引入**不限上限**的域并复用本函数，必须改签名传该域 Policy ——
+	//      否则 DAOPolicy 会把超大页长悄悄截到 200 ⇒ 偏移量与旧实现不一致。）
+	offset := paging.DAOPolicy.Offset(page, pageSize)
 	var rows []*T
 	if err := q.Offset(offset).Limit(pageSize).Find(&rows).Error; err != nil {
 		return nil, 0, err
