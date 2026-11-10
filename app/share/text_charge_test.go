@@ -42,6 +42,10 @@ func TestTextViewKey_PerViewer(t *testing.T) {
 
 // 不同取件人各扣 1 次；同一取件人重复交付只扣 1 次。
 func TestChargePickup_TextPerViewer(t *testing.T) {
+	// 自带前置（core#131）：计次键依赖全局密钥，此前只靠源码顺序在前的
+	// TestTextViewKey_PerViewer 顺带注入 ⇒ -run 孤立跑时密钥为空、TextViewKey
+	// 回空串 ⇒ 空指纹每次交付都扣次 ⇒ 判据全崩（单跑恒红、全量恒绿）。
+	SetTestSecret(t)
 	svc, g, _, _, _ := newTestServiceWithDB(t)
 	ctx := context.Background()
 	rec := modelFileCode("TXTCHG", 3)
