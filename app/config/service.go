@@ -317,6 +317,16 @@ func (s *Service) GetConfig(ctx context.Context) (*SystemConfig, error) {
 // 防御性合并：handler 会从请求重建 SystemConfig，请求不含 runtime_storage
 // （存储域维护的运行时段），为 nil 时保留旧值，避免保存站点配置时被冲掉。
 func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) error {
+	// 掩码哨兵回填（core#108，与下方 OIDC 写侧守卫同族）：管理台读侧把全部
+	// 凭据字段脱敏成 conf.SecretMask，表单原样回传 ⇒ 提交值 == 掩码即「未改」，
+	// 回填现值——须**先于校验/落库**（校验与持久化看到的必须是回填后的值）。
+	s.ensureConfigLoaded(ctx)
+	s.configMu.RLock()
+	cur := s.config
+	s.configMu.RUnlock()
+	if err := restoreMaskedSecrets(newConfig, cur); err != nil {
+		return err
+	}
 	if err := validateSystemConfig(newConfig); err != nil {
 		return err
 	}
