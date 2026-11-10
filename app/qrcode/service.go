@@ -8,18 +8,51 @@ import (
 	"github.com/skip2/go-qrcode"
 )
 
+// 生成参数边界（core#109）：/qrcode 系列端点匿名可达，size 此前无上限——
+// size=20000 单请求分配 ~size²×4 字节 RGBA 缓冲（≈1.6GB）⇒ 单请求 OOM
+// （限流桶只限频率，挡不住单发大图；base64 返回再放大 4/3）。
+// 口径与 utils.CheckUploadSize 同款：**显式拒绝，不静默钳制**。
+const (
+	// DefaultSize 未指定 size（0）时的默认尺寸（像素，历史口径）。
+	DefaultSize = 256
+	// MinSize size 下限（像素）。过小的位图不可用，且区间外一律显式拒绝。
+	MinSize = 64
+	// MaxSize size 上限（像素）。2048²×4 ≈ 16MB RGBA/请求，单请求安全线内。
+	MaxSize = 2048
+	// MaxDataBytes data 字节上限 = go-qrcode Medium 纠错等级 Version 40 的
+	// 字节容量。超长在生成阶段报错（handler 侧塌成 500）——收在参数校验层给 400。
+	MaxDataBytes = 2331
+)
+
+// ValidateGenerateParams 校验生成参数（core#109）。
+//
+// 拒绝口径（与 core#102/#104/#123 家族对齐）：非法取值显式报错（点名参数），
+// 不静默钳制、不静默归默认。size==0 = 「未传」⇒ 合法（生成时取 DefaultSize）。
+func ValidateGenerateParams(data string, size int) error {
+	if data == "" {
+		return fmt.Errorf("参数 data 不能为空")
+	}
+	if len(data) > MaxDataBytes {
+		return fmt.Errorf("参数 data 过长：%d 字节，上限 %d 字节（QR Version 40 Medium 纠错容量）", len(data), MaxDataBytes)
+	}
+	if size != 0 && (size < MinSize || size > MaxSize) {
+		return fmt.Errorf("参数 size 非法：%d，合法区间 %d..%d（0 = 默认 %d）", size, MinSize, MaxSize, DefaultSize)
+	}
+	return nil
+}
+
 // GenerateQRCode 生成二维码PNG图片
 // @param data 二维码数据内容
 // @param size 二维码尺寸（像素）
 // @return []byte PNG图片数据
 // @return error 错误信息
 func GenerateQRCode(data string, size int) ([]byte, error) {
-	if data == "" {
-		return nil, fmt.Errorf("二维码数据不能为空")
+	if err := ValidateGenerateParams(data, size); err != nil {
+		return nil, err
 	}
 
 	if size <= 0 {
-		size = 256 // 默认尺寸
+		size = DefaultSize
 	}
 
 	// 生成二维码
@@ -66,8 +99,10 @@ func ValidateQRCodeData(data string) bool {
 		return false
 	}
 
-	// 检查数据长度（二维码有容量限制）
-	if len(data) > 4296 { // QR Code Version 40 最大容量
+	// 检查数据长度（二维码有容量限制）：与生成口径同源 MaxDataBytes
+	//（Medium 纠错的 Version 40 字节容量；此前写死 4296 是 Low 容量，
+	// 该长度在 Medium 下根本生成不出来）。core#109。
+	if len(data) > MaxDataBytes {
 		return false
 	}
 

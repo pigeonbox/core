@@ -12,6 +12,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	qrcode "github.com/pigeonbox/contracts/gen/qrcode"
 	qrcodeservice "github.com/pigeonbox/core/app/qrcode"
+	"github.com/pigeonbox/core/pkg/resp"
 )
 
 // QRCodeStore 存储生成的二维码（内存存储）。
@@ -82,28 +83,19 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// 验证二维码数据
-	if req.Data == "" {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "二维码数据不能为空",
-		})
+	// 参数校验（core#109）：data/size 越界**显式 400**，不再只兜下限——
+	// 修前 size 无上限 ⇒ 匿名单请求 size=20000 分配 ~1.6GB RGBA 缓冲（单请求
+	// 内存 DoS）；data 超 Medium 容量也从「生成失败塌 500」提前成 400。
+	// 错误响应走全站信封（400 + 10001 + 点名参数，core#102/#104/#123 家族口径）。
+	if err := qrcodeservice.ValidateGenerateParams(req.Data, int(req.Size)); err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 
-	// 设置默认尺寸
+	// 设置默认尺寸（0 = 未传，历史口径默认 256）
 	size := int(req.Size)
 	if size <= 0 {
-		size = 256
-	}
-
-	// 验证数据长度
-	if len(req.Data) > 4296 {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{
-			"code":    errcode.CodeInvalidParam,
-			"message": "二维码数据过长，最大支持4296个字符",
-		})
-		return
+		size = qrcodeservice.DefaultSize
 	}
 
 	// 生成二维码
@@ -134,8 +126,8 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 		Size:    size,
 	})
 
-	// 构建响应
-	resp := &qrcode.GenerateQRCodeResp{
+	// 构建响应（变量名避开包名 resp）
+	out := &qrcode.GenerateQRCodeResp{
 		Code:    0,
 		Message: "生成成功",
 		Data: &qrcode.QRCodeData{
@@ -155,13 +147,13 @@ func GenerateQRCode(ctx context.Context, c *app.RequestContext) {
 			})
 			return
 		}
-		resp.Data.Base64Data = base64Data
+		out.Data.Base64Data = base64Data
 	} else {
 		// 返回图片URL
-		resp.Data.ImageURL = fmt.Sprintf("/qrcode/%s", id)
+		out.Data.ImageURL = fmt.Sprintf("/qrcode/%s", id)
 	}
 
-	c.JSON(consts.StatusOK, resp)
+	c.JSON(consts.StatusOK, out)
 }
 
 // GetQRCode .

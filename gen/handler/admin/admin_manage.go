@@ -494,13 +494,40 @@ func AdminEnhancedStats(ctx context.Context, c *app.RequestContext) {
 	resp.Success(c, stats)
 }
 
+// parseTrendDays days 参数**严格解析**（core#123）：缺省/空串 ⇒ 7（历史口径）；
+// 非法或越界（合法区间 1..30）⇒ 400 + 10001 + 点名参数。
+//
+// ⚠️ 旧行为（解析失败/越界**静默归 7**）是 core#102/#104「解析失败显式失败」
+// 口径的同族第 3 例：
+//
+//	days=abc ⇒ 静默 7 天（调用方以为拉的是自己要的窗口）；
+//	days=45  ⇒ 也静默 7 天——既不报错也不是 30 上限 ⇒ 悄悄少给 15 天，
+//	  报表集成方拿到「45 天趋势」实际只有 7 个点。
+//
+// 错误形状复用 paging.ParamError（点名参数 + 原值 + 期望格式），响应统一
+// 全站信封 resp.NewErrorWithMessage（10001 属客户端错 ⇒ 400）。
+func parseTrendDays(c *app.RequestContext) (int, bool) {
+	const defaultDays = 7
+	s := c.Query("days")
+	if s == "" {
+		return defaultDays, true
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 1 || v > 30 {
+		perr := &paging.ParamError{Param: "days", Value: s, Expect: "1..30 的整数（缺省 7）"}
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+		return 0, false
+	}
+	return v, true
+}
+
 // AdminStatsTrend 趋势序列（连续 N 天，缺失日补 0）：
 // uploads 来自 file_codes 按天创建数，downloads 来自 transfer_logs（pkg/transfer 写入）。
 // GET /admin/stats/trend?days=7
 func AdminStatsTrend(ctx context.Context, c *app.RequestContext) {
-	days := 7
-	if v, err := strconv.Atoi(c.Query("days")); err == nil && v > 0 && v <= 30 {
-		days = v
+	days, ok := parseTrendDays(c)
+	if !ok {
+		return
 	}
 	series, err := getManageSvc().TrendSeries(ctx, days)
 	if err != nil {
