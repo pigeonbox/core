@@ -14,11 +14,11 @@ import (
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"go.uber.org/zap"
 
-	"github.com/oekit/pkg/convert"
 	"github.com/pigeonbox/contracts/errcode"
 	anonmodel "github.com/pigeonbox/contracts/gen/share_anonymous"
 	anonapp "github.com/pigeonbox/core/app/anonymous"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -122,12 +122,21 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 	// 过期时间：从请求读，默认 24h
 	expireAt := time.Now().Add(24 * time.Hour)
 	if req.IsSetExpireValue() && req.IsSetExpireStyle() {
-		v := convert.Str2Int(req.GetExpireValue(), 0)
+		// expire_value 走**严格解析**（core#110）：旧 convert.Str2Int(.., 0) 把
+		// 非数字静默当 0 ⇒ day 静默改义 1 天、count 0 = 建完即死。收编严格版
+		// utils.ParseExpireParams：非法值显式 400 + 10001 + 点名参数。
 		if err := utils.CheckExpireStyleAllowed(req.GetExpireStyle()); err != nil {
 			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 			return
 		}
-		if t := utils.CalculateExpireTime(v, req.GetExpireStyle()); t != nil {
+		expParams, parseErr := utils.ParseExpireParams(req.GetExpireValue(), req.GetExpireStyle(), "")
+		if parseErr != nil {
+			perr := &paging.ParamError{Param: "expire_value", Value: req.GetExpireValue(),
+				Expect: "正整数（expire_style=forever 时可为 0）"}
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+			return
+		}
+		if t := utils.CalculateExpireTime(expParams.ExpireValue, expParams.ExpireStyle); t != nil {
 			expireAt = *t
 		}
 	}
