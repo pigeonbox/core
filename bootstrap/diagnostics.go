@@ -36,6 +36,7 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/oekit/core/version"
 
+	moderationApp "github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/pkg/resp"
 )
 
@@ -66,6 +67,12 @@ type DiagnosticsReport struct {
 	Setup DiagnosticsSetup `json:"setup"`
 	// Capabilities 能力快照（生效值）。
 	Capabilities CapabilitySnapshot `json:"capabilities"`
+	// Moderation 内容审核/病毒扫描可观测（core#121）。
+	//
+	// ClamAV 是 fail-open（扫描器故障时放行、不阻塞业务）——段的意义是让
+	// 「静默失效」变可见：clamd 挂掉时诊断必须 30 秒内显出 degraded，
+	// 而不是让管理台继续显示「已启用」。
+	Moderation DiagnosticsModeration `json:"moderation"`
 	// Backup 定时自动备份状态（5.1.0）。
 	//
 	// 放诊断而不是只放管理台：灾备是否在跑，与 DB/存储是否可用属同一类
@@ -138,6 +145,52 @@ type DiagnosticsSite struct {
 	PublicURL string `json:"public_url,omitempty"`
 	// PublicURLSet 是否已配置。
 	PublicURLSet bool `json:"public_url_set"`
+}
+
+// DiagnosticsModeration 内容审核状态。
+type DiagnosticsModeration struct {
+	// Enabled moderation.enabled 生效值（审核钩子总开关）。
+	Enabled bool `json:"enabled"`
+	// ClamAV 文件病毒扫描状态。
+	ClamAV DiagnosticsClamAV `json:"clamav"`
+}
+
+// DiagnosticsClamAV ClamAV 文件扫描可观测段（core#121）。
+//
+// wire 形状单独定义（不直接复用 app/moderation 的类型），与 UpdateStatus
+// 同一条理由：诊断端点的契约不随业务包类型演化漂移。
+type DiagnosticsClamAV struct {
+	// Enabled 文件扫描是否已装配生效（moderation + clamav 双开关且已接线）。
+	Enabled bool `json:"enabled"`
+	// Addr clamd 地址（enabled 时）。
+	Addr string `json:"addr,omitempty"`
+	// LastPing 最近一次探活（诊断端点读取前惰性探测）；未启用时缺省。
+	LastPing *DiagnosticsClamAVPing `json:"last_ping,omitempty"`
+	// Degraded 已启用但扫描器当前不可用（fail-open 放行中）。
+	Degraded bool `json:"degraded"`
+	// DegradedCount 近 WindowSize 次扫描里因 fail-open 放行的次数（issue 的
+	// 「degraded 计数」）。
+	DegradedCount int `json:"degraded_count"`
+	// WindowSize 扫描窗口容量（近 N 次）。
+	WindowSize int `json:"window_size"`
+	// ScansInWindow 窗口内已记录的扫描次数。
+	ScansInWindow int `json:"scans_in_window"`
+	// HitsInWindow 窗口内命中签名的次数。
+	HitsInWindow int `json:"hits_in_window"`
+	// SkippedInWindow 窗口内策略跳过（未扫描）的次数。
+	SkippedInWindow int `json:"skipped_in_window"`
+}
+
+// DiagnosticsClamAVPing 一次探活结果。
+type DiagnosticsClamAVPing struct {
+	// OK 是否探通（clamd 回 PONG）。
+	OK bool `json:"ok"`
+	// At 探测时刻。
+	At time.Time `json:"at"`
+	// DurationMs 耗时（毫秒）。
+	DurationMs int64 `json:"duration_ms"`
+	// Error 失败原因摘要（OK=true 时为空）。
+	Error string `json:"error,omitempty"`
 }
 
 // DiagnosticsSetup 首启状态。
@@ -226,6 +279,12 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 
 	report.Capabilities = capabilitySnapshot(ctx)
 
+	// ===== 内容审核 / ClamAV（core#121）=====
+	// 读取前惰性探活（Ping 的生产调用方）：每次诊断都现场探，无缓存 ⇒
+	// 停掉 clamd 后下一次读取即显 degraded（issue 验收「30 秒内」）；
+	// 探活自身封顶约 5s（pingProbeDialCap），扫描器故障不拖垮其余段落。
+	report.Moderation = diagnosticsModeration()
+
 	// ===== 定时自动备份 =====
 	// **纯本地**（列一次目录 + 读内存状态），不出站、不触发备份 ⇒ 放哪都安全。
 	report.Backup = autoBackupStatus()
@@ -245,6 +304,45 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 		Error:     upd.Error,
 	}
 	return report
+}
+
+// clamavModerator 运行期的 ClamAV 文件扫描器实例（wiring.go 装配时注入；
+// nil = 文件扫描未启用）。诊断端点用它惰性探活 + 读扫描窗口计数。
+var clamavModerator *moderationApp.ClamAVModerator
+
+// diagnosticsModeration 采集内容审核/病毒扫描状态。
+//
+// fail-open 语义保持：探测只记录、只上报，不阻塞、不改变任何放行行为。
+func diagnosticsModeration() DiagnosticsModeration {
+	mod := DiagnosticsModeration{}
+	if config != nil {
+		mod.Enabled = config.Moderation.Enabled
+	}
+	clam := clamavModerator
+	if clam == nil {
+		return mod
+	}
+	mod.ClamAV.Enabled = true
+	mod.ClamAV.Addr = clam.Addr()
+	_ = clam.Ping() // 惰性探活（结果记入 Health；错误不向请求方传播）
+	h := clam.Health()
+	if h.LastPing != nil {
+		mod.ClamAV.LastPing = &DiagnosticsClamAVPing{
+			OK:         h.LastPing.OK,
+			At:         h.LastPing.At,
+			DurationMs: h.LastPing.DurationMs,
+			Error:      h.LastPing.Error,
+		}
+		if !h.LastPing.OK {
+			mod.ClamAV.Degraded = true
+		}
+	}
+	mod.ClamAV.DegradedCount = h.FailOpenInWindow
+	mod.ClamAV.WindowSize = h.WindowSize
+	mod.ClamAV.ScansInWindow = h.ScansInWindow
+	mod.ClamAV.HitsInWindow = h.HitsInWindow
+	mod.ClamAV.SkippedInWindow = h.SkippedInWindow
+	return mod
 }
 
 // diagnosticsHandler 部署自检端点（GET /admin/diagnostics，管理面）。

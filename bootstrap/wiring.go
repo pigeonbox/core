@@ -137,6 +137,7 @@ func initThriftIDLServices(database *gorm.DB) {
 				config.Moderation.ClamAV.MaxScanBytes,
 				getBootstrapStorageService())
 			mod = moderationApp.NewCombinedModerator(wordMod, clam)
+			clamavModerator = clam // 诊断端点惰性探活 + 扫描窗口计数（core#121）
 			logger.Info("ClamAV file scanning enabled",
 				zap.String("addr", config.Moderation.ClamAV.Addr))
 		}
