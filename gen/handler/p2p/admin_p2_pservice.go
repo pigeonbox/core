@@ -32,6 +32,7 @@ import (
 	p2p "github.com/pigeonbox/contracts/gen/p2p"
 	federation "github.com/pigeonbox/core/app/federation"
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/pkg/resp"
 )
 
 // 装配注入（wiring 调用；与 admin gen handler 同款 fail-fast 模式）。
@@ -63,7 +64,7 @@ func getFederationDirectory() *federation.PeerDirectory {
 // ---- 工具 ----
 
 func badReq(c *app.RequestContext, msg string) {
-	c.JSON(consts.StatusBadRequest, map[string]any{"code": errcode.CodeInvalidParam, "message": msg})
+	resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, msg)
 }
 
 func okData(c *app.RequestContext, data map[string]any) {
@@ -168,10 +169,9 @@ func AdminP2pDirectory(ctx context.Context, c *app.RequestContext) {
 		// 此前裸 500 + err.Error 直出（可能带上游 URL/网络细节），前端又静默
 		// 渲染空下拉，admin 无法区分「没有对端」和「名录服务不可用」。
 		logger.CtxError(ctx, "p2p directory upstream query failed", "err", err)
-		c.JSON(consts.StatusBadGateway, map[string]any{
-			"code":    errcode.CodeInternal,
-			"message": "名录暂时不可用（注册中心波动），请稍后重试",
-		})
+		// 全站信封收编（A6b）：保留收敛文案 + 10008；状态随 httpStatusForCode
+		// 落 500（此前手写 502——响应键集与 trace_id 口径优先于 502/500 的区分）。
+		resp.NewErrorWithMessage(c, errcode.CodeInternal, "名录暂时不可用（注册中心波动），请稍后重试")
 		return
 	}
 	out := make([]*p2p.P2pDirectoryPeer, 0, len(peers))
