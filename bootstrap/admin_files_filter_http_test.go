@@ -39,6 +39,8 @@ func TestAdminListFilesFiltered_InvalidParamReturns400(t *testing.T) {
 		{"非法 min_size", "min_size=abc", "min_size"},
 		{"非法 max_size", "max_size=-1", "max_size"},
 		{"非法 expired", "expired=maybe", "expired"},
+		{"非法 page", "page=abc", "page"},
+		{"非法 page_size", "page_size=xyz", "page_size"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -24,9 +24,9 @@
 //	· 数值（min_size/max_size/user_id）：必须是合法整数；
 //	  user_id 还必须 > 0（0 不是合法用户 id）；尺寸不得为负。
 //	· 布尔（expired）：只接受 "true"/"false"。
-//	· 分页（page/page_size）：非法值**沿用既有归一化**（见下），不改成 400——
-//	  分页口径是**既有契约**（internal/paging 收编过），改判据会让
-//	  "page=0 / page_size=99999"这类历史调用的行为漂移。
+//	· 分页（page/page_size）：**严格解析**（core#104）——
+//	  非数字 ⇒ 400 + 业务码 10001（点名参数与期望格式）；
+//	  零 / 负数 / 超上限 ⇒ 仍按各域 Policy 归一化（**口径不变**）。
 package admin
 
 import (
@@ -34,23 +34,22 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
 // FilterParamError 管理端过滤参数的非法值（core#102）。
 //
+// ⚠️ 它现在是 internal/paging.ParamError 的**别名**（不是新类型）：
+//
+//	分页解析层（internal/paging/parse.go）也需要同一种"点名参数 + 期望格式"的
+//	error ⇒ 两处各造一个类型 ⇒ handler 侧要写两套类型断言 ⇒ 迟早漏一处。
+//	⇒ 收敛成**一个**类型（core#104）；别名保留旧名 ⇒ 既有引用不用改。
+//
 // ⚠️ 带上**参数名 + 期望格式**：只说"参数错误"等于让调用方回去猜
 //
 //	（实测：created_after 传哪种偏移形式才合法，文档里没写）。
-type FilterParamError struct {
-	Param  string
-	Value  string
-	Expect string
-}
-
-func (e *FilterParamError) Error() string {
-	return fmt.Sprintf("参数 %s 取值 %q 非法：期望 %s", e.Param, e.Value, e.Expect)
-}
+type FilterParamError = paging.ParamError
 
 // ParseFilesFilter 解析管理端文件列表的过滤参数（core#102）。
 //
@@ -62,12 +61,10 @@ func (e *FilterParamError) Error() string {
 //	成功 ⇒ (q, nil)：q 里零值字段 = 该维度不过滤。
 //	失败 ⇒ (零值 q, err)：调用方必须回 400，**不得**继续查询。
 //
-// ⚠️ 分页（page/page_size）刻意**不做严格校验**：
+// ⚠️ 分页（page/page_size）：**严格解析**（core#104）——
 //
-//	internal/paging 已把分页口径收编成声明式 Policy（dao 通用口径：
-//	默认 20 / 上限 200 / 超限截断），非法页长由 normalizePage 归一化。
-//	那是**既有契约**（响应条数是消费方可见的）⇒ 这里不改成 400，
-//	只保证"非数字"不会变成"0 之外的怪值"（Atoi 失败 ⇒ 0 ⇒ 归一化回默认）。
+//	非数字 ⇒ 400 + 业务码 10001（点名参数与期望格式）；
+//	零 / 负数 / 超上限 ⇒ 仍按各域 Policy 归一化（**口径不变**）。
 func ParseFilesFilter(get func(string) string) (model.FileCodeQuery, error) {
 	var q model.FileCodeQuery
 
@@ -136,12 +133,16 @@ func ParseFilesFilter(get func(string) string) (model.FileCodeQuery, error) {
 		}
 	}
 
-	// 分页：非数字 ⇒ 0 ⇒ 由 dao 侧 normalizePage 归一化（既有口径，见 internal/paging）。
-	// ⚠️ 这里**不**返回错误：分页归一化是既有契约（internal/paging 收编过），
-	//    把"page=abc"改成 400 会让历史调用的响应条数漂移。
-	//    但"非数字"绝不能被当成"合法页码"传下去 ⇒ 解析失败一律置 0（= 默认页）。
-	q.Page, _ = strconv.Atoi(get("page"))
-	q.PageSize, _ = strconv.Atoi(get("page_size"))
+	// 分页：**严格解析**（core#104）—— 非数字 ⇒ 报错（400 + 10001）。
+	//
+	// ⚠️ 归一化口径仍**一字不改**：page=0 / 负数 / page_size 超上限 ⇒ 依旧由
+	//    dao 侧 normalizePage 按 dao 域口径归一化（既有契约：响应条数对消费方可见）。
+	//    本轮只把"非数字"从"静默当默认页"变成显式失败。
+	page, pageSize, err := paging.ParsePageParams(get)
+	if err != nil {
+		return q, err
+	}
+	q.Page, q.PageSize = page, pageSize
 	if q.Page < 0 {
 		q.Page = 0
 	}

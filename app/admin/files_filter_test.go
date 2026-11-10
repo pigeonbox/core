@@ -122,22 +122,59 @@ func TestParseAdminFilesFilter_ValidValuesSetConditions(t *testing.T) {
 	}
 }
 
-// TestParseAdminFilesFilter_PagingNotStrict 锁住**分页不做严格校验**这个决定：
-// 分页归一化是既有契约（internal/paging），改成 400 会让历史调用的响应条数漂移；
-// 但"非数字"绝不能被当成合法页码 ⇒ 必须归零（= 默认页）。
-func TestParseAdminFilesFilter_PagingNotStrict(t *testing.T) {
-	q, err := ParseFilesFilter(getFromMap(map[string]string{"page": "abc", "page_size": "xyz"}))
-	if err != nil {
-		t.Fatalf("分页非法值不应报错（沿用既有归一化口径）：%v", err)
+// TestParseAdminFilesFilter_PagingNonNumericRejected 锁住「分页非数字 ⇒ 报错」
+// （core#104）。
+//
+// ⚠️ 这是**改判据**：被替换掉的旧用例 TestParseAdminFilesFilter_PagingNotStrict
+// 锁的是「分页不做严格校验」——那个决定只覆盖了「非数字被静默当成默认页」
+// 这一种失败，代价是调用方分不清"我翻到了第 abc 页"和"服务只给我第 1 页"。
+//
+// ⚠️ 归一化口径仍然**一个字不改**（page=0 / 负数 / 超上限 ⇒ 仍由各域 Policy
+// 归一化；那是响应条数可见的既有契约）——本轮只把"非数字"变成显式失败。
+func TestParseAdminFilesFilter_PagingNonNumericRejected(t *testing.T) {
+	cases := []struct {
+		name      string
+		query     map[string]string
+		wantParam string
+	}{
+		{"page 非数字", map[string]string{"page": "abc"}, "page"},
+		{"page_size 非数字", map[string]string{"page_size": "xyz"}, "page_size"},
+		{"page 小数", map[string]string{"page": "1.5"}, "page"},
+		{"page 超 int64", map[string]string{"page": "99999999999999999999"}, "page"},
+		{"page_size 超 int64", map[string]string{"page_size": "99999999999999999999"}, "page_size"},
 	}
-	if q.Page != 0 || q.PageSize != 0 {
-		t.Fatalf("非数字分页必须归零（交给 normalizePage 归一化），实际 page=%d page_size=%d", q.Page, q.PageSize)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ParseFilesFilter(getFromMap(c.query))
+			if err == nil {
+				t.Fatalf("query %v 期望被拒（分页解析失败必须显式失败），实际 nil", c.query)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, c.wantParam) {
+				t.Fatalf("错误消息必须点名参数 %q，实际 %q", c.wantParam, msg)
+			}
+			if !strings.Contains(msg, "期望") {
+				t.Fatalf("错误消息必须说明期望格式，实际 %q", msg)
+			}
+		})
 	}
+}
+
+// TestParseAdminFilesFilter_PagingNumericUnchanged 锁住「合法分页值的行为不变」：
+// 负数仍归零（既有行为），零与正常值原样透传（归一化交给 dao 侧 Policy）。
+func TestParseAdminFilesFilter_PagingNumericUnchanged(t *testing.T) {
 	neg, err := ParseFilesFilter(getFromMap(map[string]string{"page": "-3", "page_size": "-5"}))
 	if err != nil {
 		t.Fatalf("负数分页不应报错：%v", err)
 	}
 	if neg.Page != 0 || neg.PageSize != 0 {
-		t.Fatalf("负数分页必须归零，实际 page=%d page_size=%d", neg.Page, neg.PageSize)
+		t.Fatalf("负数分页必须归零（既有行为），实际 page=%d page_size=%d", neg.Page, neg.PageSize)
+	}
+	q, err := ParseFilesFilter(getFromMap(map[string]string{"page": "2", "page_size": "50"}))
+	if err != nil {
+		t.Fatalf("合法分页不应报错：%v", err)
+	}
+	if q.Page != 2 || q.PageSize != 50 {
+		t.Fatalf("合法分页必须原样透传，实际 page=%d page_size=%d", q.Page, q.PageSize)
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	adminapp "github.com/pigeonbox/core/app/admin"
 	userapp "github.com/pigeonbox/core/app/user"
+	"github.com/pigeonbox/core/internal/paging"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/security"
@@ -76,11 +77,31 @@ func paramID(c *app.RequestContext, label string) (uint, bool) {
 	return uint(id64), true
 }
 
-// parsePage 分页查询参数解析（缺失/非法回退 1/20；上限截断由 dao clampPage 统一兜底）。
-func parsePage(c *app.RequestContext) (page, pageSize int) {
-	page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	return
+// parsePage 分页查询参数解析（**严格**：非数字 ⇒ 400 + 10001；上限截断由 dao 统一兜底）。
+//
+// ⚠️ 缺省仍是 1/20（c.DefaultQuery 的历史口径）：响应里回报的 page/page_size
+//
+//	是**前端可见契约**（resp.Page / respondLegacyPage 原样回传）
+//	⇒ 不能因为改成严格解析就连"没传参数时回什么"都变掉。
+//
+// ⚠️ 归一化口径（page=0 / 负数 / page_size 超上限 ⇒ 各域 Policy 处理）一字不改：
+//
+//	本轮只把"非数字"从"静默当默认页"变成显式失败（core#104）。
+func parsePage(c *app.RequestContext) (page, pageSize int, ok bool) {
+	page, pageSize, err := paging.ParsePageParams(func(key string) string {
+		switch key {
+		case "page":
+			return c.DefaultQuery("page", "1")
+		case "page_size":
+			return c.DefaultQuery("page_size", "20")
+		}
+		return ""
+	})
+	if err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+		return 0, 0, false
+	}
+	return page, pageSize, true
 }
 
 // respondLegacyPage 管理端分页的历史约定包络：前端判 code===200 且读
@@ -253,7 +274,10 @@ func AdminResetUserPassword(ctx context.Context, c *app.RequestContext) {
 // AdminListUsersFiltered 带筛选的用户列表（keyword/status/role）
 // GET /admin/users/filter?keyword=&status=&role=&page=&page_size=
 func AdminListUsersFiltered(ctx context.Context, c *app.RequestContext) {
-	page, pageSize := parsePage(c)
+	page, pageSize, ok := parsePage(c)
+	if !ok {
+		return
+	}
 	users, total, err := getManageSvc().ListUsersFiltered(ctx, adminapp.UserListFilter{
 		Keyword:  c.Query("keyword"),
 		Status:   c.Query("status"),
@@ -492,7 +516,10 @@ func AdminStatsTrend(ctx context.Context, c *app.RequestContext) {
 // AdminTransferLogs 传输日志分页查询
 // GET /admin/logs/transfer?page=&page_size=&operation=&keyword=
 func AdminTransferLogs(ctx context.Context, c *app.RequestContext) {
-	page, pageSize := parsePage(c)
+	page, pageSize, ok := parsePage(c)
+	if !ok {
+		return
+	}
 	query := model.TransferLogQuery{
 		Operation: c.Query("operation"),
 		Search:    c.Query("keyword"),

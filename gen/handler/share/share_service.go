@@ -16,7 +16,6 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/oekit/concurrency/async"
-	"github.com/oekit/pkg/convert"
 	"github.com/oekit/pkg/ptrx"
 	"go.uber.org/zap"
 
@@ -1132,8 +1131,16 @@ func UserSharesList(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	page := convert.Str2Int(string(c.Query("page")), 0)
-	pageSize := convert.Str2Int(string(c.Query("page_size")), 0)
+	// 分页：**严格解析**（core#104）—— 非数字 ⇒ 400 + 10001，不再静默当默认页。
+	//
+	// ⚠️ 归一化仍**留在查询之后**（与原实现同序）：查询用原始 page/pageSize，
+	//    归一化只用于算响应里的 page/page_size/total_pages ⇒ 换序会让
+	//    「报告的页长」与「实际查询条数」错位（响应条数随之变化）。
+	page, pageSize, err := paging.ParsePageParams(c.Query)
+	if err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+		return
+	}
 
 	items, total, err := getShareService().ListUserShares(ctx, uid,
 		string(c.Query("status")), string(c.Query("search")), page, pageSize)
