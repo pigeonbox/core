@@ -235,7 +235,7 @@ func (d *azblobDriver) Read(ctx context.Context, key string) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = rc.Close() }()
-	return io.ReadAll(rc)
+	return ReadAllLimited(rc, MaxWholeReadBytes)
 }
 
 func (d *azblobDriver) Reader(ctx context.Context, key string) (io.ReadCloser, error) {
