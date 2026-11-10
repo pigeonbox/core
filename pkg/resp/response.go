@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/pkg/errors"
+	"github.com/pigeonbox/core/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // Response 全站统一响应 envelope
@@ -137,6 +139,29 @@ func NewErrorWithData(c *app.RequestContext, code int, message string, data inte
 	})
 }
 
+// InternalFailureMsg 内部（DB/基建）错误的对外脱敏文案（core#114）。
+//
+// err 原文**永不**透出——SQL/驱动文本（no such column / database is locked /
+// 表名方言）可探测库结构；op 只保留「哪一步失败」的操作语义，可读且无内部细节。
+func InternalFailureMsg(op string) string {
+	if op == "" {
+		return "操作失败，请稍后重试"
+	}
+	return op + "失败，请稍后重试"
+}
+
+// NewInternalError 内部（DB/基建）错误统一出口（core#114）：
+//   - err 全文进服务端结构化日志（trace_id 可与响应对账）；
+//   - 对外只回脱敏文案（InternalFailureMsg）+ 业务码（自动映射 HTTP 状态）+ trace_id。
+//
+// 与 gen/handler/share_anonymous 的 sanitizeInternalMsg 同口径；那边是按基建
+// 特征（dial tcp/redis/timeout）模式匹配、只覆盖匿名面，本出口是无条件脱敏，
+// 用于一切 500 类错误响应（点名参数类错误仍应回可操作文案，走 NewErrorWithMessage）。
+func NewInternalError(c *app.RequestContext, code int, op string, err error) {
+	logger.Error("internal error", zap.String("op", op), zap.Error(err))
+	NewErrorWithMessage(c, code, InternalFailureMsg(op))
+}
+
 // httpStatusForCode 业务码 → HTTP 状态码 映射
 func httpStatusForCode(code int) int {
 	switch {
@@ -219,6 +244,12 @@ func httpStatusForCode(code int) int {
 	case code == errcode.CodeContentRejected:
 		// 内容未通过审核 ⇒ 403
 		return consts.StatusForbidden
+	case code == errcode.CodeInternal:
+		// 内部错误（10008）⇒ 500。⚠️ 此前未显式枚举 ⇒ 落到下方 IsClientError
+		//（10001–10999 也是 1xxxx 段）⇒ **HTTP 400**：「服务端坏了」被报成
+		//「参数传错」，监控/网关按 4xx 记健康度、客户端按传参问题排查
+		//（core#114 修错误信封统一时暴露的映射缺陷）。
+		return consts.StatusInternalServerError
 	case errcode.IsServerError(code):
 		return consts.StatusInternalServerError
 	case errcode.IsClientError(code):

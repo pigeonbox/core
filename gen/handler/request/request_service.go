@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	requestmodel "github.com/pigeonbox/contracts/gen/request"
 	requestApp "github.com/pigeonbox/core/app/request"
 	"github.com/pigeonbox/core/pkg/resp"
@@ -82,7 +81,7 @@ func Create(ctx context.Context, c *app.RequestContext) {
 	}
 	var req requestmodel.CreateReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "请求体解析失败"})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请求体解析失败")
 		return
 	}
 	fr, err := getRequestService().Create(ctx, uid, requestApp.CreateReq{
@@ -93,7 +92,7 @@ func Create(ctx context.Context, c *app.RequestContext) {
 		ExpireStyle: derefString(req.ExpireStyle),
 	})
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	resp.Success(c, toFileRequestData(fr))
@@ -108,7 +107,7 @@ func ListMine(ctx context.Context, c *app.RequestContext) {
 	}
 	list, err := getRequestService().ListForUser(ctx, uid)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "查询投递链接列表", err)
 		return
 	}
 	items := make([]*requestmodel.FileRequestData, 0, len(list))
@@ -127,16 +126,16 @@ func Delete(ctx context.Context, c *app.RequestContext) {
 	}
 	var req requestmodel.TokenReq
 	if err := c.BindAndValidate(&req); err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
 	deleted, err := getRequestService().Delete(ctx, uid, req.Token)
 	if err != nil {
-		c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": err.Error()})
+		resp.NewInternalError(c, errcode.CodeInternal, "撤销投递链接", err)
 		return
 	}
 	if !deleted {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "链接不存在"})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "链接不存在")
 		return
 	}
 	resp.Success(c, &requestmodel.DeletedData{Deleted: true})
@@ -149,7 +148,7 @@ func PublicGet(ctx context.Context, c *app.RequestContext) {
 	_ = c.BindAndValidate(&req)
 	view, err := getRequestService().GetPublic(ctx, req.Token)
 	if err != nil {
-		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": err.Error()})
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, err.Error())
 		return
 	}
 	resp.Success(c, &requestmodel.PublicViewData{
