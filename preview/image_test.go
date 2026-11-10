@@ -118,3 +118,60 @@ func TestImageGenerator_Generate(t *testing.T) {
 		t.Fatal("炸弹图应被拒绝")
 	}
 }
+
+// TestImageGenerator_Generate_StagedNoExtThumbPersists 缩略图落盘不得依赖
+// 输入文件名的扩展名（回归锁，缺陷：图片缩略图从未落盘）。
+//
+// 生产链路（app/preview/service.go generatePreview）把源文件暂存成**无扩展名**
+// 的 pb-preview-* 临时名再生成缩略图 ⇒ 缩略图保存格式若按文件名扩展名猜
+// （imaging.Save ⇒ FormatFromFilename）⇒ 恒 ErrUnsupportedFormat，且 Generate
+// 吞错回空 ⇒ Thumbnail 恒空、图片缩略图从未落盘（video/audio 固定后缀不受影响）。
+//
+// 本用例以生产同构的暂存名复现并锁修：缩略图必须真实落盘（可解码图像字节）
+// 且文件名保留 _thumb 标记（janitor 对账口径）。
+// 负对照（实做）：把保存格式改回「按文件名猜」⇒ data.Thumbnail 恒空 ⇒ 本用例红。
+func TestImageGenerator_Generate_StagedNoExtThumbPersists(t *testing.T) {
+	dir := t.TempDir()
+	g := NewImageGenerator(&Config{
+		EnablePreview:    true,
+		ThumbnailWidth:   100,
+		ThumbnailHeight:  100,
+		PreviewCachePath: dir,
+	})
+
+	// 生产同构暂存：无扩展名的 pb-preview-* 临时名（app/preview 的 os.CreateTemp）
+	staged := filepath.Join(dir, "pb-preview-1234567890")
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 16, 8))
+	img.Set(0, 0, color.RGBA{G: 255, A: 255})
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staged, buf.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := g.Generate(t.Context(), staged, ".png")
+	if err != nil {
+		t.Fatalf("生成失败: %v", err)
+	}
+	if data.Thumbnail == "" {
+		t.Fatal("缩略图为空：无扩展名暂存名 ⇒ 保存格式无法从文件名推断 ⇒ 缩略图从未落盘（缺陷本体）")
+	}
+	fi, err := os.Stat(data.Thumbnail)
+	if err != nil || fi.IsDir() {
+		t.Fatalf("缩略图未落盘: %v", err)
+	}
+	if !strings.Contains(filepath.Base(data.Thumbnail), "_thumb") {
+		t.Fatalf("缩略图名必须带 _thumb 标记（janitor 对账只动带标记的文件）: %s", data.Thumbnail)
+	}
+	// 真实图像字节（不是空文件/错格式占位）
+	f, err := os.Open(data.Thumbnail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	if _, _, err := image.DecodeConfig(f); err != nil {
+		t.Fatalf("缩略图不是可解码图像: %v", err)
+	}
+}

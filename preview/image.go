@@ -84,7 +84,7 @@ func (g *ImageGenerator) Generate(ctx context.Context, filePath string, ext stri
 	}
 
 	// 生成缩略图（复用已解码图像）
-	thumbnailPath, err := g.thumbnailFromImage(img, filePath)
+	thumbnailPath, err := g.thumbnailFromImage(img, format, filePath)
 	if err != nil {
 		// 缩略图生成失败不影响主流程
 		thumbnailPath = ""
@@ -115,22 +115,62 @@ func (g *ImageGenerator) GenerateThumbnail(ctx context.Context, filePath string,
 	}
 	defer func() { _ = f.Close() }()
 
-	img, _, err := decodeImageGuarded(f)
+	img, format, err := decodeImageGuarded(f)
 	if err != nil {
 		return "", err
 	}
-	return g.thumbnailFromImage(img, filePath)
+	return g.thumbnailFromImage(img, format, filePath)
 }
 
-// thumbnailFromImage 从已解码图像生成缩略图落盘（不再重新解码原图）
-func (g *ImageGenerator) thumbnailFromImage(img image.Image, filePath string) (string, error) {
+// thumbnailSaveFormat 确定缩略图的保存格式与扩展名：以**解码得到的内容格式**
+// 为真相源（core#131）。
+//
+// 生成链路把源文件暂存成无扩展名的 pb-preview-* 临时名再生成缩略图，此前保存
+// 格式按**输入文件名的扩展名**推断（imaging.Save ⇒ FormatFromFilename）⇒ 暂存名
+// 无扩展名恒 ErrUnsupportedFormat，且 Generate 吞错回空 ⇒ 图片缩略图从未落盘。
+// 内容格式是唯一不依赖文件名的真相源；未识别时回退文件扩展名，仍不识别则默认
+// PNG（imaging 可编码 ⇒ 保底落盘，不再静默空手而归）。
+func thumbnailSaveFormat(contentFormat, filePath string) (imaging.Format, string) {
+	switch strings.ToLower(contentFormat) {
+	case "jpeg", "jpg":
+		return imaging.JPEG, ".jpg"
+	case "png":
+		return imaging.PNG, ".png"
+	case "gif":
+		return imaging.GIF, ".gif"
+	case "tif", "tiff":
+		return imaging.TIFF, ".tif"
+	case "bmp":
+		return imaging.BMP, ".bmp"
+	}
+	if f, err := imaging.FormatFromFilename(filePath); err == nil {
+		switch f {
+		case imaging.JPEG:
+			return imaging.JPEG, ".jpg"
+		case imaging.PNG:
+			return imaging.PNG, ".png"
+		case imaging.GIF:
+			return imaging.GIF, ".gif"
+		case imaging.TIFF:
+			return imaging.TIFF, ".tif"
+		case imaging.BMP:
+			return imaging.BMP, ".bmp"
+		}
+	}
+	return imaging.PNG, ".png"
+}
+
+// thumbnailFromImage 从已解码图像生成缩略图落盘（不再重新解码原图）。
+// contentFormat 为 image.Decode 报告的内容格式，保存格式由它显式指定
+// （见 thumbnailSaveFormat）；文件名保留 _thumb 标记（janitor 对账口径）。
+func (g *ImageGenerator) thumbnailFromImage(img image.Image, contentFormat, filePath string) (string, error) {
 	// 生成缩略图（保持宽高比）
 	thumbnail := imaging.Resize(img, g.config.ThumbnailWidth, 0, imaging.Lanczos)
 
 	// 构建缩略图路径
+	format, ext := thumbnailSaveFormat(contentFormat, filePath)
 	fileName := filepath.Base(filePath)
-	ext := filepath.Ext(fileName)
-	baseName := strings.TrimSuffix(fileName, ext)
+	baseName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
 	thumbnailFileName := fmt.Sprintf("%s_thumb%s", baseName, ext)
 	thumbnailPath := filepath.Join(g.config.PreviewCachePath, thumbnailFileName)
 
@@ -139,8 +179,18 @@ func (g *ImageGenerator) thumbnailFromImage(img image.Image, filePath string) (s
 		return "", fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	// 保存缩略图
-	if err := imaging.Save(thumbnail, thumbnailPath); err != nil {
+	// 保存缩略图：显式按格式编码（不再走 imaging.Save 的「按文件名猜格式」——
+	// 暂存输入无扩展名时那条路恒 ErrUnsupportedFormat）
+	f, err := os.Create(thumbnailPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create thumbnail: %w", err)
+	}
+	if err := imaging.Encode(f, thumbnail, format); err != nil {
+		_ = f.Close()
+		_ = os.Remove(thumbnailPath)
+		return "", fmt.Errorf("failed to save thumbnail: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return "", fmt.Errorf("failed to save thumbnail: %w", err)
 	}
 
