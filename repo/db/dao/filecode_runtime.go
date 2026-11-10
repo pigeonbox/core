@@ -13,22 +13,36 @@ import (
 // InsightStats 存储洞察聚合（/admin/storage/insights 用）：
 // total/totalSize = 未 purge 全量行（软删对象在 purge 前仍占存储），
 // alive = 存活分享数，softDeleted = 回收站行数。
+//
+// 2026-11-11（core#107）：两个口径此前都与注释承诺相悖——GORM 软删 scope 给
+// Model(&model.FileCode{}) 的一切查询自动追加 `deleted_at IS NULL`：
+//   - total/totalSize 漏计软删行 ⇒ 恒等于 alive（「回收站还占多少存储」不可见）；
+//   - softDeleted 的 `WHERE deleted_at IS NOT NULL` 与 scope 自相矛盾 ⇒ 恒 0。
+//
+// 口径修正：total/totalSize/softDeleted 一律 Unscoped()（含软删行），alive 走
+// 软删 scope（= deleted_at IS NULL）；三者同一事务取数，避免并发写下
+// alive+softDeleted 与 total 撕裂。
 func (r *FileCodeRepository) InsightStats(ctx context.Context) (total, totalSize, alive, softDeleted int64, err error) {
 	var a struct {
 		Cnt  int64
 		Size int64
 	}
-	if err = r.db().WithContext(ctx).Model(&model.FileCode{}).
-		Select("COUNT(*) AS cnt, COALESCE(SUM(size),0) AS size").Scan(&a).Error; err != nil {
+	err = r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Model(&model.FileCode{}).
+			Select("COUNT(*) AS cnt, COALESCE(SUM(size),0) AS size").Scan(&a).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.FileCode{}).
+			Where("deleted_at IS NULL").Count(&alive).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Model(&model.FileCode{}).
+			Where("deleted_at IS NOT NULL").Count(&softDeleted).Error
+	})
+	if err != nil {
 		return
 	}
-	if err = r.db().WithContext(ctx).Model(&model.FileCode{}).
-		Where("deleted_at IS NULL").Count(&alive).Error; err != nil {
-		return
-	}
-	err = r.db().WithContext(ctx).Model(&model.FileCode{}).
-		Where("deleted_at IS NOT NULL").Count(&softDeleted).Error
-	return a.Cnt, a.Size, alive, softDeleted, err
+	return a.Cnt, a.Size, alive, softDeleted, nil
 }
 
 // HardDeleteByCode 永久删除（仅 owner，已软删除的）。返回实际删除行数：

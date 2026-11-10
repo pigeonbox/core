@@ -17,6 +17,7 @@ import (
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
+	previewPkg "github.com/pigeonbox/core/preview"
 	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 )
@@ -192,6 +193,13 @@ func startMaintenanceJanitor() {
 			logger.Warn("remote presign orphan cleanup failed", zap.Error(err))
 		} else if n > 0 {
 			logger.Info("remote presign orphan objects removed", zap.Int("count", n))
+		}
+		// 预览缩略图缓存对账（core#117）：分享 purge 后其缩略图此前只写不删。
+		// 缓存目录取自预览引擎单例（nil-safe，引擎未初始化=无写入方=静默跳过）。
+		if files, rows, err := j.CleanupPreviewCache(ctx, previewPkg.GetService().CachePath(), 24*time.Hour); err != nil {
+			logger.Warn("preview cache cleanup failed", zap.Error(err))
+		} else if files > 0 || rows > 0 {
+			logger.Info("preview cache cleaned", zap.Int("files", files), zap.Int64("rows", rows))
 		}
 	}))
 }

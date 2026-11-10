@@ -22,6 +22,7 @@ import (
 
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/dao"
+	"github.com/pigeonbox/core/repo/db/dao_preview"
 	"github.com/pigeonbox/core/storage"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -48,6 +49,7 @@ type Janitor struct {
 	chunkRepo    *dao.ChunkRepository
 	transferRepo *dao.TransferLogRepository
 	adminLogRepo *dao.AdminOperationLogRepository
+	previewRepo  *dao_preview.FilePreviewRepository
 }
 
 // NewJanitor 创建 janitor。
@@ -60,6 +62,7 @@ func NewJanitor(gormDB *gorm.DB, svc StorageProvider, retentionDays int) *Janito
 		chunkRepo:     dao.NewChunkRepository(gormDB),
 		transferRepo:  dao.NewTransferLogRepository(gormDB),
 		adminLogRepo:  dao.NewAdminOperationLogRepository(gormDB),
+		previewRepo:   dao_preview.NewFilePreviewRepository(gormDB),
 	}
 }
 
@@ -372,4 +375,97 @@ func (j *Janitor) ScanRemotePresignOrphans(ctx context.Context, olderThan time.D
 		orphanKeys = append(orphanKeys, o.Key)
 	}
 	return orphanKeys, nil
+}
+
+// CleanupPreviewCache 预览缩略图缓存对账（core#117）。返回 (清理文件数, 清理孤儿行数, error)。
+//
+// 此前缩略图缓存**只写不删**：三个生成器往 PreviewCachePath 写 *_thumb.*，
+// 全仓无任何淘汰调用方 ⇒ 分享 purge 后缩略图仍占盘，长期运行的 NAS/单盘部署
+// 持续吃盘。
+//
+// 判据（对账式，**不是** TTL）：缩略图对存活分享**不可再生**——file_previews 行
+// 存在即走缓存命中（GetOrCreate 不校验文件是否还在、GetThumb 缺文件直接不可用），
+// 删掉活分享的缩略图 = 永久 404。所以只能「无主才删」：
+//   - 缓存文件被 file_previews 行引用，且该行的 file_code_id 在 file_codes 里
+//     存在（**含软删/回收站**——恢复后还要出图）⇒ 保留；
+//   - 其余（分享已 purge、生成后行写失败的落盘残留、历史遗留）⇒ 超宽限期即删。
+//
+// 顺带清理 file_previews 孤儿行（file_code_id 无主；core#62 同款「子行与主表
+// 同生共死」纪律），其缓存文件同轮回收。
+//
+// ⚠️ 缩略图文件名与源文件名**无映射**：生成链路拿到的是 pb-preview-* 暂存名
+// （app/preview/service.go generatePreview 先落临时盘再生成）⇒ 唯一可靠映射是
+// file_previews.thumbnail 列，本方法不猜文件名（issue 里「baseName 反查源文件」
+// 的方案不成立，见 A3 报告）。
+//
+// 只动缓存目录下的**平铺文件**（不递归）；文件名不含 "_thumb" 的不动
+// （非生成器产物，宁可漏删不误删）。cacheDir 为空 = 预览引擎未初始化
+// （无写入方即无回收需求）⇒ 静默跳过。
+func (j *Janitor) CleanupPreviewCache(ctx context.Context, cacheDir string, olderThan time.Duration) (filesRemoved int, rowsRemoved int64, err error) {
+	if cacheDir == "" {
+		return 0, 0, nil
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, 0, nil // 缓存目录尚未建过（预览从未使用）
+		}
+		return 0, 0, err
+	}
+
+	// 引用集：file_previews.thumbnail（Base 归一）∩ file_code_id 仍存在（含软删）。
+	// 引用集取失败直接放弃本轮（引用集不全 = 误删风险），与 ReconcileOrphans 同纪律。
+	rows, err := j.previewRepo.ListThumbnailRefs(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	fileCodes, err := j.fileCodeRepo.ListAllIncludingDeleted(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	existing := make(map[uint]bool, len(fileCodes))
+	for _, fc := range fileCodes {
+		existing[fc.ID] = true
+	}
+	keep := make(map[string]bool, len(rows))
+	for _, ref := range rows {
+		if ref.Thumbnail == "" || !existing[ref.FileCodeID] {
+			continue
+		}
+		keep[filepath.Base(ref.Thumbnail)] = true
+	}
+
+	// mtime 宽限期：生成先落盘、file_previews 行后落库，太新的先放过（在途预览）。
+	cutoff := time.Now().Add(-olderThan)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.Contains(name, "_thumb") || keep[name] {
+			continue
+		}
+		fi, ierr := e.Info()
+		if ierr != nil {
+			continue
+		}
+		if fi.ModTime().After(cutoff) {
+			continue
+		}
+		if rerr := os.Remove(filepath.Join(cacheDir, name)); rerr != nil {
+			logger.Warn("preview cache delete failed", zap.String("name", name), zap.Error(rerr))
+			continue
+		}
+		filesRemoved++
+	}
+
+	rowsRemoved, err = j.previewRepo.DeleteOrphanRows(ctx)
+	if err != nil {
+		return filesRemoved, 0, err
+	}
+	if filesRemoved > 0 || rowsRemoved > 0 {
+		logger.Info("preview cache reconcile done",
+			zap.Int("files_removed", filesRemoved), zap.Int64("rows_removed", rowsRemoved))
+	}
+	return filesRemoved, rowsRemoved, nil
 }
