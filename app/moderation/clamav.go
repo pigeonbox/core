@@ -62,6 +62,7 @@ type ContentOpener interface {
 type ClamAVModerator struct {
 	cfg    ClamAVConfig
 	opener ContentOpener
+	state  clamavState // 存活/降级可观测（core#121），见 clamav_health.go
 }
 
 // NewClamAVModerator 构建 clamd 扫描审核器（仅文件侧；文本判定请叠加词表审核器）。
@@ -73,9 +74,33 @@ func NewClamAVModerator(addr string, timeoutSeconds int, maxScanBytes int64, ope
 // InspectText 文件侧审核器不判文本（组合审核器把文本路由给词表）。
 func (m *ClamAVModerator) InspectText(context.Context, string) Verdict { return VerdictAllow }
 
-// Ping clamd 存活检查（部署验证/健康巡检用）
+// pingProbeDialCap Ping 是存活检查：拨号超时封顶 5s。cfg.TimeoutSeconds 是
+// 单文件扫描超时（默认 60s），不能拿来当探活等待上限——否则诊断端点会被
+// 黑洞路由（SYN 丢弃）拖住整整 60s。
+const pingProbeDialCap = 5 * time.Second
+
+// Ping clamd 存活检查（生产调用方：GET /admin/diagnostics 读取前惰性探测，
+// 见 bootstrap/diagnostics.go）。结果记入 Health()（ok/fail + 耗时 + 错误
+// 摘要），错误照常返回——core#121：Ping 不再是零调用方的死 API。
 func (m *ClamAVModerator) Ping() error {
-	conn, err := net.DialTimeout("tcp", m.cfg.Addr, time.Duration(m.cfg.TimeoutSeconds)*time.Second)
+	start := time.Now()
+	err := m.ping()
+	m.state.recordPing(time.Since(start), err)
+	return err
+}
+
+// Health 存活/降级快照（近 N 次扫描窗口 + 最近一次探活）。
+func (m *ClamAVModerator) Health() ClamAVHealth { return m.state.snapshot() }
+
+// Addr clamd 地址（诊断输出用）。
+func (m *ClamAVModerator) Addr() string { return m.cfg.Addr }
+
+func (m *ClamAVModerator) ping() error {
+	dialTimeout := time.Duration(m.cfg.TimeoutSeconds) * time.Second
+	if dialTimeout > pingProbeDialCap {
+		dialTimeout = pingProbeDialCap
+	}
+	conn, err := net.DialTimeout("tcp", m.cfg.Addr, dialTimeout)
 	if err != nil {
 		return err
 	}
@@ -157,16 +182,19 @@ func (m *ClamAVModerator) ScanReader(ctx context.Context, r io.Reader) (string, 
 // pending 策略由 CombinedModerator/配置层转换——与词表审核器同一约定）。
 func (m *ClamAVModerator) InspectFile(ctx context.Context, meta UploadMeta) Verdict {
 	if meta.StoragePath == "" || m.opener == nil {
+		m.state.recordOutcome(outcomeSkipped)
 		return VerdictAllow
 	}
 	if m.cfg.MaxScanBytes > 0 && meta.Size > m.cfg.MaxScanBytes {
 		log.Printf("[moderation] clamd skip (size %d > max %d): %s", meta.Size, m.cfg.MaxScanBytes, meta.FileName)
+		m.state.recordOutcome(outcomeSkipped)
 		return VerdictAllow
 	}
 
 	rc, _, err := m.opener.GetFileReader(ctx, meta.StoragePath)
 	if err != nil {
 		log.Printf("[moderation] clamd open failed (fail-open): %v", err)
+		m.state.recordOutcome(outcomeFailOpen)
 		return VerdictAllow
 	}
 	defer func() { _ = rc.Close() }()
@@ -174,12 +202,15 @@ func (m *ClamAVModerator) InspectFile(ctx context.Context, meta UploadMeta) Verd
 	sig, err := m.ScanReader(ctx, rc)
 	if err != nil {
 		log.Printf("[moderation] clamd scan failed (fail-open): %s: %v", meta.FileName, err)
+		m.state.recordOutcome(outcomeFailOpen)
 		return VerdictAllow
 	}
 	if sig != "" {
 		log.Printf("[moderation] clamd HIT: %s: %s", meta.FileName, sig)
+		m.state.recordOutcome(outcomeHit)
 		return VerdictReject
 	}
+	m.state.recordOutcome(outcomeClean)
 	return VerdictAllow
 }
 
