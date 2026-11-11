@@ -39,6 +39,7 @@ require (
 	github.com/oekit/redisx v0.12.0
 	github.com/pkg/sftp v1.13.12
 	github.com/studio-b12/gowebdav v0.13.0
+	golang.org/x/image v0.47.0
 	golang.org/x/net v0.62.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
@@ -102,7 +103,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/arch v0.32.0 // indirect
-	golang.org/x/image v0.47.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
