@@ -108,7 +108,11 @@ var policies = map[Target]policy{
 	// 15s = 原 app/oidc 构造现场值，即统一基准本尊。
 	TargetOIDC: {timeout: DefaultTimeout},
 	// 5s = 原 app/federation/client.go 构造现场值（注册 / 心跳 / 公告短平快调用）。
-	TargetFederation: {timeout: 5 * time.Second},
+	// core#140：挂 ssrfRedirectGuard（此前 checkRedirect = nil = Go 默认盲跟 10 跳）
+	// ——registry 回 302 到内网即 302 绕过面（core#116 同族）。逐跳复验与
+	// p2p.federation.registry_url 配置期校验**同一函数**（security.ValidateEndpointURL，
+	// 尊重全局 security.ssrf.allow_private_networks），不另写第二份校验。
+	TargetFederation: {timeout: 5 * time.Second, checkRedirect: ssrfRedirectGuard},
 	// **不设客户端级超时**（原 DeliveryClient 语义）：跨站转发是流式上传——
 	// client.Timeout 覆盖整个请求周期**含请求体**，设 15s 会腰斩大文件转发；
 	// 时长由调用方 ctx 截止治理（两处调用点均带 deadline）。禁跟随重定向：

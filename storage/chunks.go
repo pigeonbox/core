@@ -3,6 +3,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,13 +13,42 @@ import (
 	"github.com/pigeonbox/core/storage/opendal"
 )
 
+// MaxChunkBytes 单分片字节硬上限（core#140，core#118 族补界）：50MiB，与
+// opendal.MaxWholeReadBytes 同锚点同值（整读硬顶）。此前单片字节数**无真界**：
+// 实际分片大小从不与申报计划对账（UploadChunk 只记录 file.Size），唯一偶然是
+// Hertz 全局请求体上限 max(upload.upload_size, upload.max_file_size)——随
+// upload.max_file_size 配置漂移（配 10GB 就是 10GB/片）。本上限是 OOM 面硬顶，
+// 刻意不做配置（与 core#118 同理由：配置语义允许 0=不限，硬顶必须与配置漂移
+// 解耦）。三处同尺生效：handler 读入内存前拒（app/chunk.ValidateChunkBytes）、
+// SaveChunk 入库闸、MergeChunks 逐片有界整读。
+//
+// ⚠️ 变量而非常量：测试换桩留口（有界消费判据需小上限 + 计数读端；参照
+// federation randSource / outbound defaultObserver 先例）；生产恒为 50MiB，
+// 运行期不改写。
+var MaxChunkBytes int64 = opendal.MaxWholeReadBytes
+
+// ErrChunkTooLarge 单分片字节超限（SaveChunk 入库闸；调用方 errors.Is 判断）。
+var ErrChunkTooLarge = errors.New("storage: 分片超过单片字节上限")
+
+// openChunkFile 分片文件打开口（测试换桩留口：MergeChunks 逐片有界消费判据需
+// 注入计数读端；生产恒为 os.Open）。
+var openChunkFile = func(path string) (io.ReadCloser, error) { return os.Open(path) }
+
 // chunkKey 分片对象 key（fs/远端统一 '/' 分隔；fs 侧 filepath.Join 兼容处理）
 func chunkKey(uploadID string, index int) string {
 	return "chunks/" + uploadID + fmt.Sprintf("/chunk_%d", index)
 }
 
-// SaveChunk 保存分片
+// SaveChunk 保存分片。
+//
+// 入库闸（core#140）：单片字节数超 MaxChunkBytes 显式拒绝——storage 层是分片
+// 尺寸契约的最终落点（handler 侧 app/chunk.ValidateChunkBytes 已在读入内存前
+// 拒，此处兜底其他调用方与未来路径），保证 MergeChunks 的逐片整读上限永远不会
+// 被合法入库数据触到。
 func (s *StorageService) SaveChunk(ctx context.Context, uploadID string, chunkIndex int, data []byte) error {
+	if int64(len(data)) > MaxChunkBytes {
+		return fmt.Errorf("%w（%d 字节）", ErrChunkTooLarge, MaxChunkBytes)
+	}
 	_, op := s.current()
 	key := chunkKey(uploadID, chunkIndex)
 	if op != nil {
@@ -77,9 +107,18 @@ func (s *StorageService) MergeChunks(ctx context.Context, uploadID string, total
 		if err != nil {
 			return fmt.Errorf("读取分片 %d 失败: %w", i, err)
 		}
-		chunkData, err := os.ReadFile(chunkPath)
+		// 逐片限量整读（core#140，收编 core#118 的 ReadAllLimited）：原
+		// os.ReadFile 无界整读——单片可随全局请求体上限漂到 GB 级（见
+		// MaxChunkBytes 注释）。超限显式报错不静默截断（截断会把半截分片
+		// 当完整内容拼进合并产物）。
+		cf, err := openChunkFile(chunkPath)
 		if err != nil {
 			return fmt.Errorf("读取分片 %d 失败: %w", i, err)
+		}
+		chunkData, rerr := opendal.ReadAllLimited(cf, MaxChunkBytes)
+		_ = cf.Close()
+		if rerr != nil {
+			return fmt.Errorf("读取分片 %d 失败: %w", i, rerr)
 		}
 		if _, err := dst.Write(chunkData); err != nil {
 			return fmt.Errorf("写入分片 %d 失败: %w", i, err)

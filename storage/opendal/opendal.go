@@ -427,19 +427,34 @@ func (op *Operator) List(ctx context.Context, path string) ([]*Metadata, error) 
 	return nil, errors.New("list not implemented for scheme: " + string(op.scheme))
 }
 
-// Copy 复制文件
+// Copy 复制文件。
+//
+// FS 分支**流式**拷贝（core#140，core#118 同族残留收口）：原 os.ReadFile 把源
+// 文件整读进内存再写出——本地→本地拷贝峰值内存 ≈ 文件大小（无界整读面）。
+// 拷贝不是「取内容」消费，**刻意不套** MaxWholeReadBytes 整读上限（封顶会砍掉
+// 合法大文件拷贝），改为打开两端 io.Copy 流式推进：峰值内存 = io.Copy 的固定
+// 缓冲，与文件大小无关。
 func (op *Operator) Copy(ctx context.Context, src, dst string) error {
 	if op.scheme == SchemeFS {
 		srcPath := op.resolvePath(src)
 		dstPath := op.resolvePath(dst)
-		data, err := os.ReadFile(srcPath)
+		in, err := os.Open(srcPath)
 		if err != nil {
 			return err
 		}
+		defer func() { _ = in.Close() }()
 		if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
 			return err
 		}
-		return os.WriteFile(dstPath, data, 0644)
+		out, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			_ = out.Close()
+			return err
+		}
+		return out.Close()
 	}
 	if c, ok := op.driver.(copier); ok {
 		return c.Copy(ctx, op.key(src), op.key(dst))
