@@ -13,6 +13,15 @@ import (
 	"strings"
 
 	"github.com/disintegration/imaging"
+
+	// bmp/webp 解码器（core#139）：SupportedTypes 声明支持 .bmp/.webp。webp 此前
+	// 无任何解码器注册 ⇒ image.Decode 必失败——声明的能力是假的（core#131 疑虑 2）；
+	// bmp 此前经 disintegration/imaging 的传递 import（golang.org/x/image/bmp）
+	// 侥幸可用，此处显式化：能力声明不得依赖第三方库的传递注册。
+	// x/image 的 bmp/webp 均注册 image.RegisterFormat，blank-import 即接入
+	// Decode/DecodeConfig 全链路。
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/webp"
 )
 
 // 解压炸弹守卫（2026-10-08 加固）：恶意 PNG/JPEG 可用极小压缩体积声明超大

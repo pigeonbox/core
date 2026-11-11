@@ -96,10 +96,19 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 		return nil, err
 	}
 
-	// 取预览；不存在则生成
+	// 取预览；不存在（或存量坏行，core#139）则生成
+	var stale *model.FilePreview
 	preview, err := s.previewRepo.GetByFileCodeID(ctx, fileCode.ID)
 	if err == nil {
-		return s.renderThumbURL(preview, req.Code), nil
+		if !previewThumbMissing(preview) {
+			return s.renderThumbURL(preview, req.Code), nil
+		}
+		// core#139：修「缩略图从未落盘」缺陷之前生成的 image 行 thumbnail 恒空，
+		// 旧行为以「行存在」当缓存命中 ⇒ 这些行**永不补图**。空 Thumbnail 的
+		// image 行按未缓存处理，重新生成并**原地更新**既有行（保留行 ID ⇒ 与
+		// core#117 janitor 行级映射对账兼容；并发重复补图收敛到同一行，行上的
+		// file_code_id 唯一索引兜底不裂行）。
+		stale = preview
 	}
 	// 并发闸：只在真实生成路径占用（缓存命中零开销）
 	release, ok := previewGenGate.TryAcquire()
@@ -107,11 +116,21 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 		return nil, ErrPreviewBusy
 	}
 	defer release()
-	preview, err = s.generatePreview(ctx, fileCode)
+	preview, err = s.generatePreviewInto(ctx, fileCode, stale)
 	if err != nil {
 		return nil, ErrPreviewUnavailable
 	}
 	return s.renderThumbURL(preview, req.Code), nil
+}
+
+// previewThumbMissing 判定「行存在但缓存不可信」的存量坏行：image 行的
+// thumbnail 空 = 修 core#131 缩略图落盘缺陷之前生成的行（当时恒空），必须
+// 补图。仅限 image：
+//   - video/audio 的空 thumbnail 可能源于环境无 ffmpeg（重生成也不会有，
+//     每次请求重跑整条生成链 = 重量级空转），保持缓存命中口径；
+//   - text/code 等类型本就无缩略图，空串是设计态，不是坏行。
+func previewThumbMissing(p *model.FilePreview) bool {
+	return p != nil && p.PreviewType == string(previewService.PreviewTypeImage) && p.Thumbnail == ""
 }
 
 // authorizePickup 取件闸门（登录/解析/未就绪/次数/过期/管控/密码/防爆破），
@@ -217,9 +236,15 @@ func (s *Service) GetThumb(ctx context.Context, req GetReq) (path string, err er
 	return full, nil
 }
 
-// generatePreview 生成预览。经统一存储实例读取文件（回归：此前硬编码
-// data/uploads 路径基且未拼 UUIDFileName，与存储布局不符）。
+// generatePreview 生成预览（新建预览行）。
 func (s *Service) generatePreview(ctx context.Context, fileCode *model.FileCode) (*model.FilePreview, error) {
+	return s.generatePreviewInto(ctx, fileCode, nil)
+}
+
+// generatePreviewInto 生成预览。经统一存储实例读取文件（回归：此前硬编码
+// data/uploads 路径基且未拼 UUIDFileName，与存储布局不符）。existing 非空时
+// 原地更新该行（core#139 存量空 Thumbnail 行补图），不新建行。
+func (s *Service) generatePreviewInto(ctx context.Context, fileCode *model.FileCode, existing *model.FilePreview) (*model.FilePreview, error) {
 	filePath := fileCode.GetFilePath()
 	if filePath == "" {
 		return nil, fmt.Errorf("file path is empty")
@@ -270,7 +295,7 @@ func (s *Service) generatePreview(ctx context.Context, fileCode *model.FileCode)
 	if maxSize > 0 && written > maxSize {
 		return nil, fmt.Errorf("file too large for preview: %d > %d", written, maxSize)
 	}
-	return s.generatePreviewFromPath(ctx, fileCode, tmpPath)
+	return s.generatePreviewFromPath(ctx, fileCode, tmpPath, existing)
 }
 
 // storedFileName 存储文件名（file_path 末段；无路径时回退 uuid_file_name）。
@@ -284,8 +309,9 @@ func storedFileName(fileCode *model.FileCode) string {
 	return fileCode.UUIDFileName
 }
 
-// generatePreviewFromPath 生成预览产物。
-func (s *Service) generatePreviewFromPath(ctx context.Context, fileCode *model.FileCode, filePath string) (*model.FilePreview, error) {
+// generatePreviewFromPath 生成预览产物。existing 非空 ⇒ 字段原地回写该行
+// （core#139 补图：保留行 ID），否则新建。
+func (s *Service) generatePreviewFromPath(ctx context.Context, fileCode *model.FileCode, filePath string, existing *model.FilePreview) (*model.FilePreview, error) {
 	// 判断文件类型（扩展名）
 	// 口径统一（2026-10-26）：suffix 死列退役 ⇒ 扩展名取自「存储文件名（file_path
 	// 末段）」，再回退「原始文件名（Text）」。
@@ -327,6 +353,14 @@ func (s *Service) generatePreviewFromPath(ctx context.Context, fileCode *model.F
 		FileSize:    previewData.FileSize,
 	}
 
+	if existing != nil {
+		preview.ID = existing.ID
+		preview.CreatedAt = existing.CreatedAt
+		if err := s.previewRepo.Update(ctx, preview); err != nil {
+			return nil, fmt.Errorf("failed to update preview: %w", err)
+		}
+		return preview, nil
+	}
 	if err := s.previewRepo.Create(ctx, preview); err != nil {
 		return nil, fmt.Errorf("failed to save preview: %w", err)
 	}
