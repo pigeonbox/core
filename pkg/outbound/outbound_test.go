@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -9,8 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/security"
 )
 
 // TestNew_Reuse 同 target 两次 New 返回同一实例（连接池复用）；不同 target 必须
@@ -220,9 +225,20 @@ func TestFederationDeliveryPolicy(t *testing.T) {
 	}
 }
 
-// TestFederationFollowsRedirect federation registry 目标保留 Go 默认重定向策略
-// （跟随，最多 10 跳）——与原构造现场（未设 CheckRedirect）一致。
+// TestFederationFollowsRedirect registry 目标在守卫放行时仍跟随重定向。
+//
+// ⚠️ core#140 语义变更（有意）：原「Go 默认盲跟 10 跳」收紧为「逐跳过
+// ssrfRedirectGuard 才跟随」——跳转目标过校验则照常跟随（本用例），指向
+// 私网/环回则拒绝（TestFederationRegistryRedirectGuard）。测试环境两跳都是
+// 环回 ⇒ 显式放行全局 security.ssrf.allow_private_networks，验证守卫不误伤
+// 合法跳转。
 func TestFederationFollowsRedirect(t *testing.T) {
+	old := conf.GetGlobalConfig()
+	cfg := &conf.AppConfiguration{}
+	cfg.Security.SSRF.AllowPrivateNetworks = true
+	conf.SetGlobalConfig(cfg)
+	defer conf.SetGlobalConfig(old)
+
 	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -235,7 +251,7 @@ func TestFederationFollowsRedirect(t *testing.T) {
 	client := newObservedClient(TargetFederation, func(Target, Outcome, time.Duration) {})
 	resp, err := client.Get(redirector.URL)
 	if err != nil {
-		t.Fatalf("默认重定向策略应跟随: %v", err)
+		t.Fatalf("守卫放行的重定向应跟随: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -345,4 +361,39 @@ func equalCalls(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// TestFederationRegistryRedirectGuard（core#140 正判据）：registry 出站
+// （TargetFederation）的重定向同挂逐跳 SSRF 复验——302 到环回地址必须被拒，
+// 且被拒后第二跳零出站。此前 checkRedirect = nil（Go 默认盲跟 10 跳）＝ core#116
+// 两处 http.DefaultClient 的同族 302 绕过面。
+//
+// 判据为结构性 errors.Is(err, security.ErrEndpointURL)（错误链可判，不匹配文案）。
+//
+// 负对照（改错转红）：把 policies[TargetFederation].checkRedirect 置回 nil
+// ⇒ 本用例转红（客户端盲跟 302：err==nil 且靶子命中 1）。
+func TestFederationRegistryRedirectGuard(t *testing.T) {
+	var innerHits atomic.Int64
+	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		innerHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer inner.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, inner.URL+"/steal", http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	client := newObservedClient(TargetFederation, func(Target, Outcome, time.Duration) {})
+	resp, err := client.Get(redirector.URL)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("registry 302 到环回地址必须被 SSRF 逐跳复验拒绝")
+	}
+	if !errors.Is(err, security.ErrEndpointURL) {
+		t.Fatalf("错误链应可判 security.ErrEndpointURL（结构性判据）: %v", err)
+	}
+	if got := innerHits.Load(); got != 0 {
+		t.Fatalf("被拒后第二跳不得出站: hits=%d，期望 0", got)
+	}
 }
