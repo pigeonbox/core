@@ -7,10 +7,8 @@ import (
 	"time"
 
 	"github.com/oekit/pkg/timex"
-	"go.uber.org/zap"
 
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -129,29 +127,73 @@ type EnhancedStats struct {
 	StorageQuota int64 `json:"storage_quota"`
 }
 
-// EnhancedStats 汇总富指标。单项统计失败按 0 降级（与历史 handler 行为一致）。
+// EnhancedStats 汇总富指标。
+//
+// core#139：任一查询失败**显式返回错误**，不再单项静默降级 0——坏库下 200
+// 全 0（或部分 0）是假数据且无错误态，与 core#102「失败必须可见」相悖。
+// TAIL2（core#137）已把 GetStats/GetConfig 同口径收口，本项是同族最后一处；
+// 错误原文随返回值进 handler 的 resp.NewInternalError（日志留全文、出网
+// 脱敏 + trace_id）。
 func (s *Service) EnhancedStats(ctx context.Context) (*EnhancedStats, error) {
 	now := time.Now()
 	todayStart := timex.BeginningOfDay(now)
 	yesterdayStart := todayStart.Add(-24 * time.Hour)
 
 	stats := &EnhancedStats{}
-	stats.TodayUploads, _ = s.fileCodeRepo.CountCreatedBetween(ctx, todayStart, now.Add(time.Minute))
-	stats.YesterdayUploads, _ = s.fileCodeRepo.CountCreatedBetween(ctx, yesterdayStart, todayStart)
-	stats.TotalDownloads, _ = s.fileCodeRepo.SumUsedCount(ctx)
-	stats.ExpiredFiles, _ = s.fileCodeRepo.CountExpired(ctx)
-	stats.AnonymousFiles, _ = s.fileCodeRepo.CountByUploadType(ctx, "anonymous")
-	presignFiles, _ := s.fileCodeRepo.CountByUploadType(ctx, "presign_anonymous")
-	presignAuthFiles, _ := s.fileCodeRepo.CountByUploadType(ctx, "presign_authenticated")
+	todayUploads, err := s.fileCodeRepo.CountCreatedBetween(ctx, todayStart, now.Add(time.Minute))
+	if err != nil {
+		return nil, fmt.Errorf("统计 today_uploads: %w", err)
+	}
+	stats.TodayUploads = todayUploads
+
+	yesterdayUploads, err := s.fileCodeRepo.CountCreatedBetween(ctx, yesterdayStart, todayStart)
+	if err != nil {
+		return nil, fmt.Errorf("统计 yesterday_uploads: %w", err)
+	}
+	stats.YesterdayUploads = yesterdayUploads
+
+	totalDownloads, err := s.fileCodeRepo.SumUsedCount(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("统计 total_downloads: %w", err)
+	}
+	stats.TotalDownloads = totalDownloads
+
+	expiredFiles, err := s.fileCodeRepo.CountExpired(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("统计 expired_files: %w", err)
+	}
+	stats.ExpiredFiles = expiredFiles
+
+	anonymousFiles, err := s.fileCodeRepo.CountByUploadType(ctx, "anonymous")
+	if err != nil {
+		return nil, fmt.Errorf("统计 anonymous_files: %w", err)
+	}
+	stats.AnonymousFiles = anonymousFiles
+
+	presignFiles, err := s.fileCodeRepo.CountByUploadType(ctx, "presign_anonymous")
+	if err != nil {
+		return nil, fmt.Errorf("统计 presign_files: %w", err)
+	}
+	presignAuthFiles, err := s.fileCodeRepo.CountByUploadType(ctx, "presign_authenticated")
+	if err != nil {
+		return nil, fmt.Errorf("统计 presign_files: %w", err)
+	}
 	stats.PresignFiles = presignFiles + presignAuthFiles
+
 	// ⚠️ 2026-10-26：此处曾把错误吞掉（`_`）⇒ 「文件类型分布」恒为空且**零日志**
-	// （退役 suffix 列后 SQL 直接报错，没人知道）。⇒ 失败要记日志。
+	// （退役 suffix 列后 SQL 直接报错，没人知道）。core#139 起失败显式返回
+	// （此前只记 warn 仍降级空列表 = 单项假数据）。
 	topSuffixes, err := s.fileCodeRepo.TopSuffixes(ctx, 10)
 	if err != nil {
-		logger.CtxWarn(ctx, "top suffixes stat failed", zap.Error(err))
+		return nil, fmt.Errorf("统计 top_suffixes: %w", err)
 	}
 	stats.TopSuffixes = topSuffixes
-	stats.StorageUsed, _ = s.fileCodeRepo.GetTotalSize(ctx)
+
+	storageUsed, err := s.fileCodeRepo.GetTotalSize(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("统计 storage_used: %w", err)
+	}
+	stats.StorageUsed = storageUsed
 	if cfg := conf.GetGlobalConfig(); cfg != nil {
 		stats.StorageQuota = cfg.Storage.Quota
 	}
