@@ -55,6 +55,19 @@ func ValidateChunkPlan(fileSize, chunkSize int64, totalChunks int) error {
 	return nil
 }
 
+// ValidateChunkBytes 单分片字节硬上限校验（core#140 补界）。分片实际字节数此前
+// 从不与申报计划对账、无任何上限（唯一偶然是 Hertz 全局请求体上限，随
+// upload.max_file_size 配置漂移）。上限取 storage.MaxChunkBytes（50MiB，与
+// core#118 整读硬顶同锚点）；handler 在把分片读进内存**之前**调用（拒绝发生
+// 在 make([]byte, file.Size) 的第二次整拷贝之前），storage.SaveChunk 另有同尺
+// 入库闸兜底。超限返回 typed error（CodeTooLarge ⇒ 413）。
+func ValidateChunkBytes(size int64) error {
+	if size > storage.MaxChunkBytes {
+		return utils.NewFileTooLargeError(storage.MaxChunkBytes)
+	}
+	return nil
+}
+
 type UploadChunkReq struct {
 	UploadID   string
 	ChunkIndex int

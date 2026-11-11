@@ -351,6 +351,14 @@ func ChunkUpload(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
+	// 单分片字节硬上限（core#140）：在读进内存**之前**拒——否则
+	// make([]byte, file.Size) 的整读拷贝先发生（无界整读面，core#118 同族）。
+	// storage.SaveChunk 有同尺入库闸兜底，这里给出 413 + CodeTooLarge 的正确失败点。
+	if err := chunkService.ValidateChunkBytes(file.Size); err != nil {
+		resp.NewTypedError(c, err)
+		return
+	}
+
 	// 读取文件内容
 	src, err := file.Open()
 	if err != nil {
