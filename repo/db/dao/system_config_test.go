@@ -154,7 +154,10 @@ func TestIsUniqueViolation(t *testing.T) {
 		{"mysql 小写不命中（精确大小写）", errors.New(
 			"duplicate entry '1' for key 'PRIMARY'"), false},
 		{"裸 constraint failed 不命中（窄判据）", errors.New("some constraint failed"), false},
-		{"pg 23505 单独出现（无文案）", errors.New("ERROR: (23505)"), true},
+		// gormx v0.11.13（#163）删除裸 "23505" 子串匹配：错误文本里的列号/端口/
+		// 字节数含 23505 即误判唯一冲突（「窄判据」与实现相反）⇒ 无文案的裸码
+		// 不再命中；真 pg 错误走类型化 SQLState 或 (SQLSTATE 23505) 邻接形态。
+		{"pg 23505 单独出现（无文案）不命中（v0.11.13 起）", errors.New("ERROR: (23505)"), false},
 		{"io 错误不命中", errors.New("disk I/O error"), false},
 		{"ctx 超时不命中", context.DeadlineExceeded, false},
 	}
