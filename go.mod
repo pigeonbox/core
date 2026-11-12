@@ -31,7 +31,7 @@ require (
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/oekit/concurrency v0.34.0
+	github.com/oekit/concurrency v0.34.1
 	github.com/oekit/core v0.14.2
 	github.com/oekit/gormx v0.11.14
 	github.com/oekit/kitx v0.9.0
