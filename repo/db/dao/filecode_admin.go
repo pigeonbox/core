@@ -314,8 +314,39 @@ func applyHealthFilter(query *gorm.DB, health string) *gorm.DB {
 	case "forever":
 		return query.Where("expired_at IS NULL AND expired_count < 0")
 	default:
+		// 未知取值在**dao 层**保持「不过滤」（既有契约：见 filecode_health_test
+		// 的「未知 health 值 = 不过滤（防御：不 panic 不误杀）」）。
+		//
+		// ⚠️ 但**HTTP 入口必须先校验**（core#147）：这里的「不过滤」落到接口上
+		// 就是「筛选失败返回全量」——与 core#102 同族的「多给数据」。
+		// 两个入口（app/admin.ParseFilesFilter、gen/handler/admin.AdminListFiles）
+		// 已用 ValidHealthFilter 把未知值挡成 400 + 10001；新调用点请同样先校验。
 		return query
 	}
+}
+
+// ValidHealthFilter 判定 health 维度取值是否被 applyHealthFilter 认识
+// （空串 = 不过滤）。core#147：applyHealthFilter 的 default 分支此前**静默丢条件**
+// ⇒ 未知取值让组合过滤退化成全量 ⇒ 调用方必须先用本函数把关，未知值一律 400。
+//
+// ⚠️ 与 applyHealthFilter 的 switch **必须同步**（本函数就是那份清单的真相源）。
+func ValidHealthFilter(s string) bool {
+	switch s {
+	case "", "active", "expired", "expiring_soon", "never_picked", "forever":
+		return true
+	}
+	return false
+}
+
+// ValidDeletedFilter 判定 deleted 维度取值是否被 ListWithFilter 认识
+// （空串 = 默认口径：只看未软删）。core#147：未知取值此前被当成空串处理
+// ⇒ 想看回收站的人拿到的是**未删除**的行，且没有任何信号。
+func ValidDeletedFilter(s string) bool {
+	switch s {
+	case "", "all", "only":
+		return true
+	}
+	return false
 }
 
 // CountByHealth 按健康维度计数（admin 仪表盘洞察卡；单次扫描全维度，口径见 applyHealthFilter）。

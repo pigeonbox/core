@@ -120,6 +120,20 @@ func (r *FileCodeRepository) GetUserSharesWithFilter(ctx context.Context, userID
 	return paginate[model.FileCode](query.Order("created_at DESC"), page, pageSize)
 }
 
+// ValidUserShareStatus 判定 status 取值是否被 userShareQuerySpec 认识
+// （空串 / "all" = 不筛）。core#149：该 switch 没有 default ⇒ 未知取值会**静默
+// 丢条件**返回未筛选全量（「筛选失败比筛选为空危险：多给数据」，core#102 同族）
+// ⇒ 调用方必须先用本函数把关，未知值一律 400。
+//
+// ⚠️ 与 userShareQuerySpec 的 switch **必须同步**（本函数是那份清单的真相源）。
+func ValidUserShareStatus(s string) bool {
+	switch s {
+	case "", "all", "active", "expired", "text", "file", "deleted", "viewed":
+		return true
+	}
+	return false
+}
+
 // userShareQuerySpec 构建用户分享列表的 WHERE 条件（core#88）。
 // user_id 恒为首个条件（租户基线约束，空筛选也在场）；状态分支与搜索
 // 条件按手拼时代同词序追加。

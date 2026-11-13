@@ -107,6 +107,43 @@ func authorIDFromCtx(ctx context.Context) uint {
 	return 0
 }
 
+// parseNotifyWindow 解析 Create/Update 共用的公告窗口字段（core#146）。
+//
+// 返回 (startAt, endAt, ok)：ok=false 时**已写出 400 响应**，调用方直接 return。
+//
+// 口径：
+//   - 字段未传 / 传空串 ⇒ nil（= 不设置该边界；空串同「未传」，与
+//     internal/paging 的分页参数口径一致，前端提交前也会删掉空值）；
+//   - 传了非空值但不是 RFC3339（含紧凑偏移 +0800）⇒ 400 + 10001 + 点名参数，
+//     **不再**「解析失败当没传」——那会把窗口语义静默改写（见 app/notify/window.go）。
+func parseNotifyWindow(c *app.RequestContext, startSet bool, startVal string,
+	endSet bool, endVal string) (*time.Time, *time.Time, bool) {
+	// 逐个字段解析；任一失败即 400 并中止（start_at 先于 end_at，报错顺序稳定）。
+	var startAt, endAt *time.Time
+	for _, f := range []struct {
+		set  bool
+		name string
+		val  string
+		dst  **time.Time
+	}{
+		{startSet, "start_at", startVal, &startAt},
+		{endSet, "end_at", endVal, &endAt},
+	} {
+		if !f.set || f.val == "" {
+			continue // 未传 / 空串 = 不设置该边界（空串同「未传」，见函数注释）
+		}
+		t, err := notifyapp.ParseWindowTime(f.val)
+		if err != nil {
+			perr := &paging.ParamError{Param: f.name, Value: f.val,
+				Expect: "RFC3339 时间（如 2030-01-01T00:00:00Z 或 2030-01-01T00:00:00+08:00）"}
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+			return nil, nil, false
+		}
+		*f.dst = &t
+	}
+	return startAt, endAt, true
+}
+
 // Create .
 // @router /admin/notifies [POST]
 func Create(ctx context.Context, c *app.RequestContext) {
@@ -115,18 +152,13 @@ func Create(ctx context.Context, c *app.RequestContext) {
 		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
-	var startAt, endAt *time.Time
-	if req.IsSetStartAt() {
-		t, err := time.Parse(time.RFC3339, *req.StartAt)
-		if err == nil {
-			startAt = &t
-		}
-	}
-	if req.IsSetEndAt() {
-		t, err := time.Parse(time.RFC3339, *req.EndAt)
-		if err == nil {
-			endAt = &t
-		}
+	// 窗口时间**严格解析**（core#146）：非法值 ⇒ 400 + 10001 + 点名参数，
+	// 不再「解析失败当没传」——那会让本该定时生效/到期的公告落成**无窗口**
+	// （立刻全站可见且永不过期，见 app/notify/window.go 的缺陷实录）。
+	startAt, endAt, ok := parseNotifyWindow(c, req.IsSetStartAt(), strDeref(req.StartAt),
+		req.IsSetEndAt(), strDeref(req.EndAt))
+	if !ok {
+		return
 	}
 	item, err := getService().Create(ctx, notifyapp.CreateReq{
 		Title:    req.Title,
@@ -168,18 +200,11 @@ func Update(ctx context.Context, c *app.RequestContext) {
 		v := int(*req.Status)
 		statusPtr = &v
 	}
-	var startAt, endAt *time.Time
-	if req.IsSetStartAt() {
-		t, err := time.Parse(time.RFC3339, *req.StartAt)
-		if err == nil {
-			startAt = &t
-		}
-	}
-	if req.IsSetEndAt() {
-		t, err := time.Parse(time.RFC3339, *req.EndAt)
-		if err == nil {
-			endAt = &t
-		}
+	// 同 Create（core#146）：非法窗口时间 ⇒ 400，不再静默 no-op。
+	startAt, endAt, ok := parseNotifyWindow(c, req.IsSetStartAt(), strDeref(req.StartAt),
+		req.IsSetEndAt(), strDeref(req.EndAt))
+	if !ok {
+		return
 	}
 	if err := getService().Update(ctx, notifyapp.UpdateReq{
 		ID:      id,

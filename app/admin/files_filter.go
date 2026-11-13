@@ -24,6 +24,9 @@
 //	· 数值（min_size/max_size/user_id）：必须是合法整数；
 //	  user_id 还必须 > 0（0 不是合法用户 id）；尺寸不得为负。
 //	· 布尔（expired）：只接受 "true"/"false"。
+//	· 枚举（health / deleted）：只接受该维度的合法取值（清单真相源在 dao）；
+//	  **未知取值不再被当成「不过滤」**——那正是 #102 的「多给数据」形态
+//	  （core#147：dashboard 直达链接 ?health=expiringSoon 打错大小写即中招）。
 //	· 分页（page/page_size）：**严格解析**（core#104）——
 //	  非数字 ⇒ 400 + 业务码 10001（点名参数与期望格式）；
 //	  零 / 负数 / 超上限 ⇒ 仍按各域 Policy 归一化（**口径不变**）。
@@ -35,6 +38,7 @@ import (
 	"time"
 
 	"github.com/pigeonbox/core/internal/paging"
+	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -50,6 +54,19 @@ import (
 //
 //	（实测：created_after 传哪种偏移形式才合法，文档里没写）。
 type FilterParamError = paging.ParamError
+
+// ValidateHealthFilter 单维度校验（core#147）：给**只带 health 一个过滤参数**的
+// 端点（如 GET /admin/files 的健康洞察直达链接）复用同一口径，避免两处各写一份
+// 合法取值清单。
+//
+// 合法取值清单的真相源在 dao.ValidHealthFilter（与 applyHealthFilter 的 switch 同处）。
+func ValidateHealthFilter(s string) error {
+	if !dao.ValidHealthFilter(s) {
+		return &FilterParamError{Param: "health", Value: s,
+			Expect: "active / expired / expiring_soon / never_picked / forever（留空 = 不过滤）"}
+	}
+	return nil
+}
 
 // ParseFilesFilter 解析管理端文件列表的过滤参数（core#102）。
 //
@@ -74,6 +91,19 @@ func ParseFilesFilter(get func(string) string) (model.FileCodeQuery, error) {
 	q.Status = get("status")
 	q.Health = get("health")
 	q.Deleted = get("deleted")
+
+	// 枚举型维度**严格校验**（core#147，core#102 的漏网同族）：
+	// health / deleted 在 dao 侧是 switch 分支，未知取值会**静默丢条件**
+	// ⇒ 组合过滤退化成全量（dashboard 直达链接 ?health=expiringSoon 打错大小写
+	// 就会看到「全部分享」）⇒ 与 #102 同口径：非法值 400 + 10001 + 点名参数。
+	// 合法取值清单的真相源在 dao（ValidHealthFilter / ValidDeletedFilter）。
+	if err := ValidateHealthFilter(q.Health); err != nil {
+		return q, err
+	}
+	if !dao.ValidDeletedFilter(q.Deleted) {
+		return q, &FilterParamError{Param: "deleted", Value: q.Deleted,
+			Expect: "all / only（留空 = 只看未删除）"}
+	}
 
 	if s := get("user_id"); s != "" {
 		id, err := strconv.ParseUint(s, 10, 64)

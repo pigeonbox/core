@@ -853,11 +853,21 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 
 	// 多文件分享下载入口（P0 多文件）：
 	//   ?file=<子文件ID> → 单文件流；未指定且文件数 >1 → 直接流式 zip 打包
+	//
+	// `file` **严格解析**（core#148，#102/#104/#113 同族）：非正整数 ⇒ 400 +
+	// 10001 + 点名参数，**不再静默当「未指定」**——旧行为会退化成「整包 zip」
+	// 并**吃掉一次取件次数**（调用方以为下载的是某一个子文件）。
+	// 空串（`file=`）同「未传」，与 internal/paging 的分页参数口径一致。
 	var fileID uint
 	if raw := c.Query("file"); raw != "" {
-		if v, perr := strconv.ParseUint(raw, 10, 64); perr == nil {
-			fileID = uint(v)
+		v, perr := strconv.ParseUint(raw, 10, 64)
+		if perr != nil || v == 0 {
+			perr := &paging.ParamError{Param: "file", Value: raw,
+				Expect: "正整数（子文件 id；不传 = 多文件打包下载）"}
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+			return
 		}
+		fileID = uint(v)
 	}
 	if fileID > 0 {
 		// 子文件归属校验**在扣次之前**：此前扣次在鉴权段末尾 ⇒ `file=` 不属于
@@ -1034,6 +1044,13 @@ func UserSharesList(ctx context.Context, c *app.RequestContext) {
 	items, total, err := getShareService().ListUserShares(ctx, uid,
 		string(c.Query("status")), string(c.Query("search")), page, pageSize)
 	if err != nil {
+		// 参数类错误（status 枚举非法，core#149）⇒ 400 + 10001 + 点名参数；
+		// 其余才是内部错误（500 脱敏）。与 core#102/#104 的出口同口径。
+		var perr *paging.ParamError
+		if errors.As(err, &perr) {
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+			return
+		}
 		resp.NewInternalError(c, errcode.CodeInternal, "获取分享列表", err)
 		return
 	}
