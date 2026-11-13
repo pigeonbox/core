@@ -144,6 +144,13 @@ func AdminListFiles(ctx context.Context, c *app.RequestContext) {
 	if req.Health != nil {
 		health = *req.Health
 	}
+	// 健康维度**严格校验**（core#147，与 /admin/files/filter 同口径）：
+	// 未知取值此前直接进 dao 的 switch default ⇒ **静默丢条件返回全量**
+	// （仪表盘洞察卡直达链接 ?health=expiringSoon 打错大小写即中招）⇒ 400 + 10001。
+	if verr := adminsvc.ValidateHealthFilter(health); verr != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, verr.Error())
+		return
+	}
 
 	var files []*model.FileCode
 	var total int64
