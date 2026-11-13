@@ -79,8 +79,14 @@ func RateLimitConfigFromConf() RateLimitConfig {
 	if rl.Burst > 0 {
 		cfg.Burst = rl.Burst
 	}
-	if rl.BlockSeconds > 0 {
-		cfg.BlockSeconds = rl.BlockSeconds
+	// core#152：指针三态区分「未配置」（nil ⇒ 默认 60）与「显式 0」——0=不封禁是
+	// 契约口径，旧 `>0` 守卫把两者混为一谈 ⇒ 配置文件/环境变量写 0 被静默吞掉回落
+	// 60（与 admin API 直通路径行为分裂）。负数仍非法归默认（保持旧守卫防负数语义）。
+	if rl.BlockSeconds != nil && *rl.BlockSeconds >= 0 {
+		cfg.BlockSeconds = *rl.BlockSeconds
+		if *rl.BlockSeconds == 0 {
+			logger.Info("[ratelimit] block_seconds=0：限流命中后不封禁（契约 0=不封禁）")
+		}
 	}
 	if rl.Enabled != nil {
 		cfg.Enabled = *rl.Enabled

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -78,10 +79,21 @@ func currentEpoch(userID uint) int {
 	return fn(userID)
 }
 
-// sessionExpiry 会话时长，默认 7 天。
+// defaultSessionExpiry 会话时长默认值：7 天。
+const defaultSessionExpiry = 7 * 24 * time.Hour
+
+// sessionExpiryNanos 当前会话时长（纳秒原子存储），默认 defaultSessionExpiry。
 // 管理后台"用户配置→会话过期时间"通过 SetSessionExpiry 在线调整
 // （此前硬编码 168h，配置项形同虚设）。
-var sessionExpiry = 7 * 24 * time.Hour
+//
+// core#153：热更写（SetSessionExpiry）与签发读（GenerateTokenWithSession）此前
+// 作用于**裸包级 time.Duration 变量** ⇒ -race 实锤 DATA RACE（无同步边，最坏
+// 签发出混合口径 ExpiresAt）。改 atomic.Int64 存纳秒：无锁 ⇒ 不存在锁序/死锁面，
+// 写 1 处 + 读 2 处全部经 Store/Load 收口（对照同文件 epochLoader 的 RWMutex 模式，
+// 单值热更用原子量更轻）。
+var sessionExpiryNanos atomic.Int64
+
+func init() { sessionExpiryNanos.Store(int64(defaultSessionExpiry)) }
 
 // SetSessionExpiry 设置会话时长；<=0 视为非法，保留原值。
 // 仅影响新签发的 token，已签发会话到自然过期。
@@ -89,11 +101,11 @@ func SetSessionExpiry(d time.Duration) {
 	if d <= 0 {
 		return
 	}
-	sessionExpiry = d
+	sessionExpiryNanos.Store(int64(d))
 }
 
 // SessionExpiry 当前会话时长（测试/诊断用）。
-func SessionExpiry() time.Duration { return sessionExpiry }
+func SessionExpiry() time.Duration { return time.Duration(sessionExpiryNanos.Load()) }
 
 // GenerateToken 生成 JWT token（不带会话标识：兼容既有调用点）。
 func GenerateToken(userID uint, username, role string) (string, error) {
@@ -110,7 +122,7 @@ func GenerateTokenWithSession(userID uint, username, role, sessionID string) (st
 		SessionID: sessionID,
 		Epoch:     currentEpoch(userID),
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(sessionExpiry)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(SessionExpiry())),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "PigeonBox",
 		},
