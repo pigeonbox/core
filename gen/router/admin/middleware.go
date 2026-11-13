@@ -242,3 +242,13 @@ func _admintestoidcMw() []app.HandlerFunc {
 	// your code...
 	return nil
 }
+
+func _channelsMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}
+
+func _admintestnotifychannelMw() []app.HandlerFunc {
+	// your code...
+	return nil
+}

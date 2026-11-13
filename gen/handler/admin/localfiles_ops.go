@@ -196,6 +196,16 @@ func AdminTestOIDC(ctx context.Context, c *app.RequestContext) {
 	})
 }
 
+// AdminTestNotifyChannel 向指定推送渠道真实发送一条固定测试消息
+// （webhook/telegram/bark；core#122，2026-11-13 IDL 收编：注册改由 gen/router
+// 从 admin.thrift 生成，路径/方法/wire 与 A8 手写注册逐字一致）。
+// 实现桥接留在 customHandler（A8 落点 transport/http/handler/notify_channel_admin.go：
+// 发送链在 app/notify、摘要脱敏）——契约在此，实现在外，与 GuestUpload 同款委托。
+// @router /admin/notify/channels/test [POST]
+func AdminTestNotifyChannel(ctx context.Context, c *app.RequestContext) {
+	customHandler.AdminTestNotifyChannel(ctx, c)
+}
+
 // normalizeActivitiesPage 管理操作审计分页参数归一化（默认 20、上限 200、超限截断）。
 // 口径表见 internal/paging。
 func normalizeActivitiesPage(page, pageSize int) (int, int) {
