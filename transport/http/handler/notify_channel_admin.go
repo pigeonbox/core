@@ -3,7 +3,9 @@
 //
 // 与 settings_admin.go 的 SMTP/OIDC 测试端点同族（「配完先试一条」反馈回路），
 // 但发送链在 app/notify（webhook/telegram/bark 真实 sender 复用 + 摘要脱敏）。
-// 鉴权 = AdminOrAdminKey（routes_custom.go 注册时挂载，与 /admin/diagnostics 同款）。
+// 鉴权 = 管理面强制鉴权（2026-11-13 IDL 化：路由由 gen/router/admin 生成，
+// 组级 AdminMiddleware——与同族 /admin/notify/smtp/test、/admin/oidc/test 同款；
+// 手写时代的 AdminOrAdminKey 注册已摘除，收编注记见 bootstrap/routes_custom.go）。
 //
 // 响应约定（D2 管理台按钮消费）：
 //   - 渠道发送成功/失败都是 HTTP 200 + 全站信封，data = {ok, latency_ms,

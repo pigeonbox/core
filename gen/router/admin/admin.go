@@ -62,6 +62,10 @@ func Register(r *server.Hertz) {
 		{
 			_notify := _admin.Group("/notify", _notifyMw()...)
 			{
+				_channels := _notify.Group("/channels", _channelsMw()...)
+				_channels.POST("/test", append(_admintestnotifychannelMw(), admin.AdminTestNotifyChannel)...)
+			}
+			{
 				_smtp := _notify.Group("/smtp", _smtpMw()...)
 				_smtp.POST("/test", append(_admintestsmtpMw(), admin.AdminTestSMTP)...)
 			}

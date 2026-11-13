@@ -181,11 +181,11 @@ func customizedRegister(r *server.Hertz) {
 		r.GET("/admin/backups/:name", middleware.AdminOrAdminKey(), downloadBackupHandler)
 		r.POST("/admin/backups/run", middleware.AdminOrAdminKey(), runBackupHandler)
 
-		// ===== 通知渠道测试发送（core#122，2026-11-11；管理面）=====
-		// webhook/telegram/bark 三渠道「配完先试一条」反馈回路：固定测试文案
-		// 真实发一条，回 {ok, latency_ms, error_summary}（摘要脱敏，不回凭据片段）。
-		// 与 /admin/notify/smtp/test、/admin/oidc/test 同族；鉴权同款 AdminOrAdminKey。
-		r.POST("/admin/notify/channels/test", middleware.AdminOrAdminKey(), customHandler.AdminTestNotifyChannel)
+		// ===== 通知渠道测试发送（core#122）：2026-11-13 IDL 化收编 =====
+		// 路由改由 contracts IDL 生成（idl/admin.thrift ⇒ gen/router/admin 注册，
+		// AdminMiddleware 组内，与 /admin/notify/smtp/test、/admin/oidc/test 同族）；
+		// 手写注册摘除，实现在 customHandler（transport/http/handler/
+		// notify_channel_admin.go）保留，gen/handler/admin 薄委托。
 	}
 
 	// ===== 前端构建产物静态资源 =====

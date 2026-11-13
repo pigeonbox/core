@@ -1,8 +1,9 @@
 package bootstrap
 
 // core#122 负对照：POST /admin/notify/channels/test 未带凭据 ⇒ 401/403。
-// 该端点真实发送外发消息（外发面）⇒ 必须挂 AdminOrAdminKey；
-// 若注册时漏挂鉴权中间件，本用例转红。
+// 该端点真实发送外发消息（外发面）⇒ 必须有管理面强制鉴权；
+// 2026-11-13 IDL 化后由 gen/router/admin 的组级 AdminMiddleware 提供
+// （与 /admin/notify/smtp/test 同族）；若生成路由漏接线，本用例转红。
 
 import (
 	"net/http"
