@@ -16,6 +16,7 @@ import (
 	sharemodel "github.com/pigeonbox/contracts/gen/share"
 	"github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
@@ -1163,6 +1164,14 @@ func deletedAtToPtr(d gorm.DeletedAt) *time.Time {
 // 筛选条件收散参由本域转换，transport 无需感知 dao.UserShareFilter。
 // 返回契约生成模型（wire 形态由 idl/share.thrift 定义，handler 只组信封）。
 func (s *Service) ListUserShares(ctx context.Context, userID uint, status, search string, page, pageSize int) ([]*sharemodel.UserShareItemData, int64, error) {
+	// status **枚举严格校验**（core#149，core#102 同族）：未知取值此前静默丢条件
+	// ⇒ 返回**未筛选**的全量（活跃/过期/文本/文件混在一起），而调用方以为筛过了。
+	// 合法取值清单的真相源在 dao.ValidUserShareStatus（与查询侧 switch 同处）。
+	// 非法值 ⇒ *paging.ParamError ⇒ handler 统一 400 + 10001 + 点名参数。
+	if !dao.ValidUserShareStatus(status) {
+		return nil, 0, &paging.ParamError{Param: "status", Value: status,
+			Expect: "all / active / expired / text / file / deleted / viewed（留空 = 不筛）"}
+	}
 	files, total, err := s.fileCodeRepo.GetUserSharesWithFilter(ctx, userID, dao.UserShareFilter{
 		Status:   status,
 		Search:   search,

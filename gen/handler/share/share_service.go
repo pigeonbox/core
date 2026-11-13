@@ -1044,6 +1044,13 @@ func UserSharesList(ctx context.Context, c *app.RequestContext) {
 	items, total, err := getShareService().ListUserShares(ctx, uid,
 		string(c.Query("status")), string(c.Query("search")), page, pageSize)
 	if err != nil {
+		// 参数类错误（status 枚举非法，core#149）⇒ 400 + 10001 + 点名参数；
+		// 其余才是内部错误（500 脱敏）。与 core#102/#104 的出口同口径。
+		var perr *paging.ParamError
+		if errors.As(err, &perr) {
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, perr.Error())
+			return
+		}
 		resp.NewInternalError(c, errcode.CodeInternal, "获取分享列表", err)
 		return
 	}
