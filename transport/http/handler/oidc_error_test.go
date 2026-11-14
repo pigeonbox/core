@@ -130,3 +130,18 @@ func TestOIDCPublicError_Mapping(t *testing.T) {
 	assert.NotContains(t, msg, "abc123")
 	assert.False(t, strings.Contains(msg, secret.Error()))
 }
+
+// TestOIDCPublicError_AdminMFARequired（wave1 A1 负向测试 4）：签发拦截的
+// sentinel 必须映射到专用短码 + 含「使用账号密码登录」指引的公开文案
+// （回调走 redirectOIDCError 呈现；不得落到通用 login_failed 吞掉指引，
+// 也不得透传原始 err 文本）。
+//
+// 负对照（改错转红）：删掉 oidcPublicError 的 ErrAdminMFARequired 分支 ⇒
+// 落 default ⇒ code 转 login_failed、msg 转通用文案，两条断言同时转红。
+func TestOIDCPublicError_AdminMFARequired(t *testing.T) {
+	code, msg := oidcPublicError(oidcApp.ErrAdminMFARequired)
+	assert.Equal(t, "admin_mfa_required", code,
+		"已启用 MFA 的管理员被拦必须有专用短码（前端/运维可区分）")
+	assert.Contains(t, msg, "使用账号密码登录",
+		"文案必须给出「使用账号密码登录」指引（否则用户无路可走）")
+}
