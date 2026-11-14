@@ -24,6 +24,7 @@ import (
 	chunkService "github.com/pigeonbox/core/app/chunk"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/internal/uploadlock"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -609,6 +610,18 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		resp.NewErrorWithMessage(c, errcode.CodeForbidden, "无权操作该上传会话")
 		return
 	}
+
+	// 同一 upload_id 的完成面排队互斥（core#151，与 presign Complete 同族）：
+	// 下面「回读 → 合并 → 建分享」是 read-then-create，无锁时并发双击/重放
+	// 各自读到「未建过」⇒ 建 2 条分享（取件额度翻倍），MergeUpload 还各自
+	// 生成新 UUID 路径 ⇒ 磁盘留两份。
+	// 锁覆盖合并全程：后到者进入时回读必命中 ⇒ 复用同一条（幂等语义不变）。
+	release, lockErr := uploadlock.Lock(ctx, uploadID)
+	if lockErr != nil {
+		resp.NewInternalError(c, errcode.CodeInternal, "获取上传会话互斥权", lockErr)
+		return
+	}
+	defer release()
 
 	// 幂等：同一 upload_id 已建过分享 ⇒ **复用**（不新建行、不重复扣次、
 	// 不重复计配额，**也不再合并出第二份物理文件**）。

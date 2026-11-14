@@ -909,9 +909,22 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 			resp.NewInternalError(c, errcode.CodeInternal, "打包下载", zerr)
 			return
 		}
+		// core#154：拿到 rc 即立**清理守卫**——rc 背后是 io.Pipe + async.GoSafe
+		// 组装协程 + 已打开的存储句柄；writeShareZip 接管（读至 EOF 自动关）之前
+		// 的任何早退若不 Close ⇒ 组装协程阻塞在写管道直至 zipStreamTimeout=30min
+		// ⇒ 配额拦截反成资源放大器（次数耗尽者每次重试都滞留一个协程 + 存储句柄）。
+		// 读端 Close 经管道背压立即终止组装（zip.go「读端关闭即停写」）。
+		// 扣次失败正是这条早退：return 时由守卫兜底关流，后续再插早退分支同样被兜住。
+		zipStreamTakenOver := false
+		defer func() {
+			if !zipStreamTakenOver {
+				_ = rc.Close()
+			}
+		}()
 		if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download") {
 			return
 		}
+		zipStreamTakenOver = true
 		writeShareZip(ctx, c, fileCode, rc, viewerIP)
 		return
 	}
