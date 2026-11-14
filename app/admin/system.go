@@ -61,14 +61,16 @@ type StorageStatus struct {
 //   - 容量：仅本地后端有磁盘容量语义（Statfs 实测总/可用）；对象存储等远端
 //     后端容量弹性无上限，Total/Free 如实置 0，不虚构数字（此前恒报
 //     local+100GB 假容量，管理面板展示的是虚构信息）。
-//   - UsedSpace/FileCount：DB 存活分享的尺寸合计/条数（应用层口径，与
-//     站点配额闸同源），本地模式下不等于磁盘已用（磁盘还含分片临时区等）。
+//   - UsedSpace：物理口径尺寸合计（含回收站软删——purge 前仍占盘，评审
+//     D01，与站点配额闸同源）；FileCount：存活分享条数。本地模式下不等于
+//     磁盘已用（磁盘还含分片临时区等）。
 func (s *Service) GetStorageStatus(ctx context.Context) (*StorageStatus, error) {
 	totalFiles, err := s.fileCodeRepo.Count(ctx)
 	if err != nil {
 		return nil, err
 	}
-	totalSize, err := s.fileCodeRepo.GetTotalSize(ctx)
+	// 物理口径含回收站（评审 D01）。
+	totalSize, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx)
 	if err != nil {
 		return nil, err
 	}
