@@ -1269,14 +1269,27 @@ func (s *Service) RestoreUserShare(ctx context.Context, userID uint, code string
 // 修复、restore 侧 2026-10-08 修复：均改为调用方显式 400。
 var ErrNotInRecycleBin = errors.New("分享不在回收站中（不存在或未处于软删除状态）")
 
-// HardDeleteUserShare 永久删除软删除的分享
+// HardDeleteUserShare 永久删除软删除的分享。
+//
+// 评审 D03：与 admin 删除（admin/files.go）同编排——删前抓对象路径 → 删 DB 行
+// → 引用计数保护下清物理对象。此前只删 DB 行、对象永不删 ⇒ 孤儿只能等 janitor。
 func (s *Service) HardDeleteUserShare(ctx context.Context, userID uint, code string) error {
+	// 删前抓路径（行删后查不到）；失败不阻断 DB 删除——泄漏由 janitor 兜底
+	paths, perr := s.fileCodeRepo.PathsByCodeForUser(ctx, userID, code)
+	if perr != nil {
+		logger.CtxWarn(ctx, "hard delete: path capture failed (janitor will reconcile)", "code", code, "err", perr)
+	}
 	n, err := s.fileCodeRepo.HardDeleteByCode(ctx, userID, code)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
 		return ErrNotInRecycleBin
+	}
+	// 对象清理：引用计数保护（含软删行、查不清不删），与 admin 删除同编排。
+	// 失败仅告警——远端孤儿由 janitor 扫描兜底。
+	for _, p := range paths {
+		s.deletePhysicalIfUnreferenced(ctx, p, 0)
 	}
 	s.federationDeleted(code)
 	return nil
