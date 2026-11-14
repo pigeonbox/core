@@ -953,14 +953,17 @@ type SSRFConfig struct {
 // RateLimitSettings 限流配置（代码内默认值见 middleware.DefaultRateLimitConfig）。
 // Enabled 用指针区分"未配置"（默认开）与"显式 false"。
 type RateLimitSettings struct {
-	Enabled      *bool `mapstructure:"enabled"`
-	GlobalQPS    int   `mapstructure:"global_qps"`
-	UploadQPS    int   `mapstructure:"upload_qps"`
-	DownloadQPS  int   `mapstructure:"download_qps"`
-	LoginQPS     int   `mapstructure:"login_qps"`
-	Burst        int   `mapstructure:"burst"`
-	BlockSeconds int   `mapstructure:"block_seconds"`
-	UseRedis     bool  `mapstructure:"use_redis"` // true=Redis 分布式计数（多实例共享），Redis 不可用自动回退内存
+	Enabled     *bool `mapstructure:"enabled"`
+	GlobalQPS   int   `mapstructure:"global_qps"`
+	UploadQPS   int   `mapstructure:"upload_qps"`
+	DownloadQPS int   `mapstructure:"download_qps"`
+	LoginQPS    int   `mapstructure:"login_qps"`
+	Burst       int   `mapstructure:"burst"`
+	// BlockSeconds 三态（core#152）：nil=未配置（归默认 60）、显式 0=不封禁（契约
+	// 口径）、负数=非法（归默认）。裸 int 分不清「未配置」与「显式 0」⇒ 旧合并
+	// 守卫 `>0` 把显式 0 静默吞掉回落 60。对齐同结构 Enabled 的指针三态做法。
+	BlockSeconds *int `mapstructure:"block_seconds"`
+	UseRedis     bool `mapstructure:"use_redis"` // true=Redis 分布式计数（多实例共享），Redis 不可用自动回退内存
 }
 
 // CORSConfig 跨域配置。

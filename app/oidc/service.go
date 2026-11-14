@@ -23,12 +23,14 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/oekit/gormx"
 	"github.com/oekit/kitx/uidgen"
 	"github.com/oekit/pkg/cache"
 	"github.com/oekit/pkg/httpjson"
 	"github.com/oekit/pkg/secretx"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/outbound"
+	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -163,6 +165,25 @@ func (s *Service) fetchDiscovery(ctx context.Context) (discovery, error) {
 	}
 	if d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" {
 		return d, errors.New("OIDC discovery 缺少必要端点")
+	}
+	// core#164：discovery 派生端点逐个过保存期同款 SSRF 校验——此前只查
+	// 非空即用：token POST 携带 client_secret、userinfo 携带 access_token，
+	// 文档被指向链路本地/内网即凭据外带面。ValidateEndpointURL 与 issuer
+	// 保存期校验**同一函数**（DNS + 单 IP 复判，尊重
+	// security.ssrf.allow_private_networks——内网 IdP 本就需开该开关才能保存
+	// issuer，口径一致；实际连接的二次解析窗口另有拨号复判兜底，core#164）。
+	// 非空语义保持原样：userinfo 等非必需端点缺失不报错。
+	for _, ep := range []struct{ name, url string }{
+		{"authorization_endpoint", d.AuthorizationEndpoint},
+		{"token_endpoint", d.TokenEndpoint},
+		{"userinfo_endpoint", d.UserinfoEndpoint},
+	} {
+		if ep.url == "" {
+			continue
+		}
+		if err := security.ValidateEndpointURL(ep.url); err != nil {
+			return d, fmt.Errorf("OIDC discovery %s 被拒绝: %w", ep.name, err)
+		}
 	}
 	return d, nil
 }
@@ -377,35 +398,90 @@ func (s *Service) matchOrCreate(ctx context.Context, claims idClaims) (*model.Us
 		username = "oidc-" + oidcSubFingerprint(claims.Sub)
 	}
 	base := username
-	for i := 1; ; i++ {
-		if _, err := s.userRepo.GetByUsername(ctx, username); err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				break
+	// JIT 建号查-建竞态收敛（core#155）：并发首次回调（多标签页同时完成授权、
+	// 回调网络重试、IdP 侧重发）会双双 GetByUsername → RecordNotFound，然后构造
+	// 同一 username 同时 Create —— 唯一索引让后到者拿到 duplicate，旧实现在此
+	// 直接上抛 ⇒ 同账号并发首登随机 500。收敛：撞唯一冲突先按身份键重查复用
+	// （sub → 已验证邮箱，与本函数开头两段匹配同口径），把竞态收敛为幂等；冲突
+	// 来自「不同身份撞用户名」时重查落空 ⇒ 换名重试（有界，防病态循环）。
+	const maxCreateAttempts = 5
+	for attempt := 1; ; attempt++ {
+		username = base
+		for i := 1; ; i++ {
+			if _, err := s.userRepo.GetByUsername(ctx, username); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					break
+				}
+				return nil, err
 			}
+			username = fmt.Sprintf("%s-%d", base, i)
+		}
+		// （core#86）原此处有一段「随机密码」死代码：手搓生成 24 字节随机数填充
+		// pw 后从未消费（user 不落 PasswordHash，密码登录由同位检查拒绝 OIDC
+		// 用户），且吞错；整体删除，行为零变化。
+		user := &model.User{
+			Username: username,
+			Email:    claims.Email,
+			Nickname: claims.Name,
+			Role:     "user",
+			Status:   "active",
+			OidcSub:  claims.Sub,
+		}
+		if claims.Email == "" || !claims.EmailVerified {
+			// 未验证邮箱不落库（与邮箱匹配同门槛，防占位邮箱后续被用于接管）：
+			// email 唯一索引不接受空串重复，以 sub 生成占位
+			user.Email = fmt.Sprintf("oidc-%s@oidc.local", oidcSubFingerprint(claims.Sub))
+		}
+		err := s.userRepo.Create(ctx, user)
+		if err == nil {
+			return user, nil
+		}
+		if !gormx.IsUniqueViolation(err) || attempt >= maxCreateAttempts {
+			return nil, fmt.Errorf("OIDC 用户创建失败: %w", err)
+		}
+		reused, rerr := s.recoverConcurrentUser(ctx, claims)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if reused != nil {
+			return reused, nil
+		}
+	}
+}
+
+// recoverConcurrentUser core#155：JIT 建号撞唯一冲突后的重查复用（并发首登收敛）。
+//
+// 只按**身份键**复用：先 sub，后已验证邮箱——与 matchOrCreate 开头两段匹配同口径
+// （含 active 闸与邮箱路径的 sub 绑定）。**不按 username 复用**：撞用户名的可能是
+// 另一个身份（同名不同 sub），按用户名直接复用会把本次回调登进并发赢家刚建的
+// 他人账号（账号接管面）；那种冲突由调用方换名重试收敛。
+// 返回 (nil, nil) 表示未复用到（调用方继续重试）。
+func (s *Service) recoverConcurrentUser(ctx context.Context, claims idClaims) (*model.User, error) {
+	u, err := s.userRepo.GetByOIDCSub(ctx, claims.Sub)
+	if err == nil && u != nil {
+		if u.Status != "active" {
+			return nil, ErrAccountDisabled
+		}
+		return u, nil
+	}
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if claims.Email != "" && claims.EmailVerified {
+		u, err := s.userRepo.GetByEmail(ctx, claims.Email)
+		if err == nil && u != nil {
+			if u.Status != "active" {
+				return nil, ErrAccountDisabled
+			}
+			// 绑定 sub（与邮箱匹配段同口径），后续走精确匹配
+			_ = s.userRepo.UpdateColumns(ctx, u.ID, map[string]interface{}{"oidc_sub": claims.Sub})
+			return u, nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
-		username = fmt.Sprintf("%s-%d", base, i)
 	}
-	// （core#86）原此处有一段「随机密码」死代码：手搓生成 24 字节随机数填充
-	// pw 后从未消费（user 不落 PasswordHash，密码登录由同位检查拒绝 OIDC
-	// 用户），且吞错；整体删除，行为零变化。
-	user := &model.User{
-		Username: username,
-		Email:    claims.Email,
-		Nickname: claims.Name,
-		Role:     "user",
-		Status:   "active",
-		OidcSub:  claims.Sub,
-	}
-	if claims.Email == "" || !claims.EmailVerified {
-		// 未验证邮箱不落库（与邮箱匹配同门槛，防占位邮箱后续被用于接管）：
-		// email 唯一索引不接受空串重复，以 sub 生成占位
-		user.Email = fmt.Sprintf("oidc-%s@oidc.local", oidcSubFingerprint(claims.Sub))
-	}
-	if err := s.userRepo.Create(ctx, user); err != nil {
-		return nil, fmt.Errorf("OIDC 用户创建失败: %w", err)
-	}
-	return user, nil
+	return nil, nil
 }
 
 // oidcSubFingerprint 取 sub 的稳定短指纹（16 个 hex 字符），用作自动建号时的

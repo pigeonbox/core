@@ -277,6 +277,42 @@ func TestRestore_RejectsPathTraversal(t *testing.T) {
 	assert.Contains(t, err.Error(), "非法条目名")
 }
 
+// TestRestore_RejectsManifestPathTraversal core#166：tar 条目名安全 ≠ manifest 对象路径安全。
+// manifest.objects[].path 指向解包目录之外时，恢复必须在 os.Open 之前拒绝。
+func TestRestore_RejectsManifestPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	db := newTestDB(t, dir)
+	store := newFakeStore()
+	store.data["uploads/x.txt"] = []byte("abc")
+	svc := NewService(db, fakeLister{paths: []string{"uploads/x.txt"}}, store)
+
+	var buf bytes.Buffer
+	_, err := svc.Export(context.Background(), &buf)
+	require.NoError(t, err)
+
+	// 合法 tar（条目名全部合规），但 manifest 里 path 逃逸。
+	evil := replaceManifest(t, buf.Bytes(), func(m *Manifest) {
+		if len(m.Objects) == 0 {
+			t.Fatal("manifest 应含至少一个对象")
+		}
+		m.Objects[0].Path = "../outside/secret.txt"
+	})
+
+	dst := newFakeStore()
+	dstSvc := NewService(db, fakeLister{}, dst)
+
+	// 非 DryRun：必须在校验阶段拒绝，且一个字节都不落盘。
+	_, err = dstSvc.Restore(context.Background(), bytes.NewReader(evil), RestoreOptions{Confirm: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "路径穿越", "错误须点名路径穿越")
+	assert.Empty(t, dst.data, "校验失败时不得写任何对象")
+
+	// DryRun 同样在校验阶段拒绝（verify 在 DryRun 返回之前）。
+	_, err = dstSvc.Restore(context.Background(), bytes.NewReader(evil), RestoreOptions{Confirm: true, DryRun: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "路径穿越", "DryRun 也不得放行穿越路径")
+}
+
 // TestRestore_RejectsUnknownFormat 不认识的格式版本 ⇒ 拒绝。
 func TestRestore_RejectsUnknownFormat(t *testing.T) {
 	dir := t.TempDir()

@@ -21,6 +21,7 @@ package outbound
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -81,6 +82,17 @@ type policy struct {
 	timeout time.Duration
 	// checkRedirect 重定向策略；nil = Go 默认（最多跟随 10 跳）。
 	checkRedirect func(req *http.Request, via []*http.Request) error
+	// dialGuard 拨号时刻 SSRF 复判（core#164）：true 时 DialContext 走
+	// ssrfDialContext（解析 → BlockedIP → 直连已判定 IP，封保存/解析期与
+	// 实际连接各解析一次 DNS 的 TOCTOU / rebinding）。
+	//
+	// **只对 TargetOIDC 开**（范围取舍，core#164）：delivery / invite 的私网
+	// 对端按**对端粒度** allow_private 放行（ValidateEndpointURLAllowPrivate，
+	// 保存期与发送期已授权的内网对端），而拨号层没有对端上下文、只认全局
+	// security.ssrf.allow_private_networks ⇒ 全 target 开会把已放行的内网对端
+	// 在拨号时误杀（回归面大于收益）。notify / federation registry 保存期是
+	// 严格公网口径（与拨号复判同开关），要开只需翻这一位——留待同族跟进。
+	dialGuard bool
 }
 
 // policies 出站策略表——出站策略唯一真源。
@@ -106,7 +118,11 @@ var policies = map[Target]policy{
 		},
 	},
 	// 15s = 原 app/oidc 构造现场值，即统一基准本尊。
-	TargetOIDC: {timeout: DefaultTimeout},
+	// core#164：原为策略表唯一无 checkRedirect 的出站点（Go 默认盲跟 10 跳）
+	// ——挂逐跳 SSRF 复验（同 a5/#116 族 ssrfRedirectGuard）+ 拨号时刻复判
+	// （dialGuard：discovery 派生端点与 issuer 均已过保存期校验，实际连接
+	// 重新解析 DNS 的窗口由拨号复判封死）。
+	TargetOIDC: {timeout: DefaultTimeout, checkRedirect: ssrfRedirectGuard, dialGuard: true},
 	// 5s = 原 app/federation/client.go 构造现场值（注册 / 心跳 / 公告短平快调用）。
 	// core#140：挂 ssrfRedirectGuard（此前 checkRedirect = nil = Go 默认盲跟 10 跳）
 	// ——registry 回 302 到内网即 302 绕过面（core#116 同族）。逐跳复验与
@@ -170,6 +186,15 @@ func buildClient(t Target, p policy, obs observer) *http.Client {
 	// clone 默认 Transport：注册表持有独立副本，不影响全局 DefaultTransport
 	//（与原 DeliveryClient 构造现场同款做法）。
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if p.dialGuard {
+		// core#164 拨号时刻复判：把克隆体默认 DialContext（DefaultTransport
+		// 的 30s Timeout / 30s KeepAlive dialer——参数同值迁移，wire 行为不变）
+		// 换成 ssrfDialContext 包装：解析 → BlockedIP → 直连已判定 IP。
+		transport.DialContext = ssrfDialContext(&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		})
+	}
 	return &http.Client{
 		Timeout:       p.timeout,
 		Transport:     &observingTransport{base: transport, target: t, obs: obs},

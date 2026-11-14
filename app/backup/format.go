@@ -164,3 +164,12 @@ func safeEntryName(name string) (string, error) {
 	}
 	return clean, nil
 }
+
+// safeObjectPath 校验 manifest 的 objects[].path（存储相对路径，slash 形态）。
+//
+// tar 条目名有 safeEntryName，manifest 路径此前没有 ⇒ filepath.Join 可被
+// "../" 逃出解包目录（core#166：sha256 口 oracle / FIFO 挂死）。
+// 规则与 safeEntryName 同源：非空、非绝对路径、无反斜杠、无 ".." 段。
+func safeObjectPath(p string) (string, error) {
+	return safeEntryName(p) // 同一套规则；manifest 用 slash 路径，Clean 语义一致
+}

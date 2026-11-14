@@ -331,6 +331,15 @@ func Download(ctx context.Context, c *app.RequestContext) {
 		resp.NewTypedError(c, err)
 		return
 	}
+	// 失败锁定预检（core#163：与 Retrieve 同口径——本面此前无预检无记账，
+	// 枚举只剩 QPS 桶；预检含按 IP 的枚举维度，见 gate.PickupLockedRemain）
+	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), code); locked {
+		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
+			"code":    errcode.CodeTooManyAttempts,
+			"message": "尝试过于频繁，已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
+		})
+		return
+	}
 	// 安全修复（P0，2026-10-03）：此前的实现是对任意 code 无条件签发下载令牌
 	// 后 302——而 /share/download 对持有效令牌的请求跳过密码校验，等于密码保护
 	// 形同虚设（令牌签发 oracle）。现在仅对"存在/未过期/未管控/无密码"的分享
@@ -344,6 +353,10 @@ func Download(ctx context.Context, c *app.RequestContext) {
 			return
 		}
 		if errors.Is(err, anonapp.ErrCodeNotFound) {
+			// 枚举防护记账（core#163）：码不存在到不了域内闸门，在统一键上记
+			// 失败（(IP,码) + 按 IP 枚举双维度）——与 Retrieve 同名分支同口径；
+			// 过期/耗尽/密码错/基建故障不记。
+			gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
 			resp.NewErrorByCode(c, errcode.CodePickupCodeNotFound)
 			return
 		}
@@ -399,6 +412,15 @@ func SearchByCode(ctx context.Context, c *app.RequestContext) {
 		resp.NewTypedError(c, err)
 		return
 	}
+	// 失败锁定预检（core#163：与 Retrieve 同口径——本面此前无预检无记账，
+	// 枚举只剩 QPS 桶；预检含按 IP 的枚举维度，见 gate.PickupLockedRemain）
+	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), code); locked {
+		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
+			"code":    errcode.CodeTooManyAttempts,
+			"message": "尝试过于频繁，已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
+		})
+		return
+	}
 	meta, fc, err := getService().Peek(ctx, code)
 	if err != nil {
 		var blocked *anonapp.BlockedError
@@ -407,6 +429,10 @@ func SearchByCode(ctx context.Context, c *app.RequestContext) {
 			return
 		}
 		if errors.Is(err, anonapp.ErrCodeNotFound) {
+			// 枚举防护记账（core#163）：码不存在到不了域内闸门，在统一键上记
+			// 失败（(IP,码) + 按 IP 枚举双维度）——与 Retrieve 同名分支同口径；
+			// 过期/耗尽/密码错/基建故障不记。
+			gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
 			resp.NewErrorByCode(c, errcode.CodePickupCodeNotFound)
 			return
 		}

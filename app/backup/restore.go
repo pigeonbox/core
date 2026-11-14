@@ -101,7 +101,13 @@ func (s *Service) Restore(ctx context.Context, r io.Reader, opts RestoreOptions)
 
 	// 落盘：对象写回当前后端。
 	for _, entry := range manifest.Objects {
-		src := filepath.Join(dir, filepath.FromSlash(ObjectDirName+entry.Path))
+		// 双点消费（core#166）：落盘前再过一次路径校验——verify 与落盘各自独立
+		// 防御，任何一点被绕过都不至于打开解包目录之外的文件。
+		clean, err := safeObjectPath(entry.Path)
+		if err != nil {
+			return nil, fmt.Errorf("manifest 对象路径非法 %q: %w", entry.Path, err)
+		}
+		src := filepath.Join(dir, filepath.FromSlash(ObjectDirName+clean))
 		f, err := os.Open(src)
 		if err != nil {
 			return nil, fmt.Errorf("打开包内对象失败 %q: %w", entry.Path, err)
@@ -190,15 +196,31 @@ func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
 }
 
 // verifyObjects 逐对象校验 sha256（包损坏/被截断 ⇒ 立刻拒绝，不落盘）。
+//
+// 路径校验先于 os.Open（core#166）：manifest 对象路径逃出解包目录 ⇒ 拒绝，
+// 不能拿宿主机上的任意文件当「摘要比对源」（sha256 口 oracle）或让 FIFO 挂死。
+// verify 在 DryRun 返回之前执行 ⇒ DryRun 同样中招不了。
 func (s *Service) verifyObjects(dir string, manifest *Manifest) error {
 	for _, entry := range manifest.Objects {
-		src := filepath.Join(dir, filepath.FromSlash(ObjectDirName+entry.Path))
+		clean, err := safeObjectPath(entry.Path)
+		if err != nil {
+			return fmt.Errorf("manifest 对象路径非法 %q: %w", entry.Path, err)
+		}
+		src := filepath.Join(dir, filepath.FromSlash(ObjectDirName+clean))
 		f, err := os.Open(src)
 		if err != nil {
 			return fmt.Errorf("备份包缺少对象 %q: %w", entry.Path, err)
 		}
 		h := sha256Hasher()
-		_, err = io.Copy(h, f)
+		// LimitReader 兜底：Size>0 时不在声明字节之外读（超大/FIFO 内容不挂死）。
+		// Size==0 是**合法空对象**（写方 Size=实际字节数，见 export.writeObject）
+		// ⇒ 此时须全量读：空读的摘要恒为 sha256("")，会给「Size=0 但实际非空」
+		// 的包放行；路径已校验在解包目录内、且 unpack 只落常规文件 ⇒ 全量读安全。
+		var r io.Reader = f
+		if entry.Size > 0 {
+			r = io.LimitReader(f, entry.Size)
+		}
+		_, err = io.Copy(h, r)
 		_ = f.Close()
 		if err != nil {
 			return fmt.Errorf("读取包内对象失败 %q: %w", entry.Path, err)
