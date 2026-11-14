@@ -1,12 +1,15 @@
 package security
 
 import (
+	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pigeonbox/core/conf"
 )
 
 // 令牌 = **一次取件的凭证**（2026-10-24）：
@@ -106,4 +109,31 @@ func TestValidateEndpointURL(t *testing.T) {
 	assert.ErrorIs(t, ValidateEndpointURL("http://192.168.1.10:9000"), ErrEndpointURL)
 	assert.ErrorIs(t, ValidateEndpointURL("http://127.0.0.1:9000"), ErrEndpointURL)
 	assert.ErrorIs(t, ValidateEndpointURL("http://10.0.0.5:5006"), ErrEndpointURL)
+}
+
+// TestBlockedIP（core#164）：导出的单 IP 判定是 validateEndpointURL 内联判定
+// 的同一份（抽出复用、不写第二份）——私网/环回/链路本地拒、公网放行；
+// security.ssrf.allow_private_networks=true 全放行（出站拨号复核同开关）。
+//
+// 负对照：把 BlockedIP 的全局开关读数删掉/恒放行 ⇒ 拒绝分支转红。
+func TestBlockedIP(t *testing.T) {
+	// 显式钉死严格口径（判据不随全局状态漂移）
+	old := conf.GetGlobalConfig()
+	conf.SetGlobalConfig(&conf.AppConfiguration{})
+	defer conf.SetGlobalConfig(old)
+
+	// 默认拒绝面（与 TestValidateEndpointURL 的私网直写同口径）
+	assert.ErrorIs(t, BlockedIP(net.ParseIP("127.0.0.1")), ErrEndpointURL)
+	assert.ErrorIs(t, BlockedIP(net.ParseIP("169.254.169.254")), ErrEndpointURL)
+	assert.ErrorIs(t, BlockedIP(net.ParseIP("10.0.0.5")), ErrEndpointURL)
+	assert.ErrorIs(t, BlockedIP(net.ParseIP("192.168.1.10")), ErrEndpointURL)
+	// 公网放行
+	assert.NoError(t, BlockedIP(net.ParseIP("8.8.8.8")))
+
+	// allow_private_networks=true：全放行（企业内网 IdP / 局域网存储同开关）
+	allowed := &conf.AppConfiguration{}
+	allowed.Security.SSRF.AllowPrivateNetworks = true
+	conf.SetGlobalConfig(allowed)
+	assert.NoError(t, BlockedIP(net.ParseIP("127.0.0.1")))
+	assert.NoError(t, BlockedIP(net.ParseIP("169.254.169.254")))
 }

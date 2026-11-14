@@ -240,7 +240,13 @@ var globalConfigBaseline = map[string]int{
 	"pkg/middleware/apikey.go":                               2,
 	"pkg/middleware/lockout.go":                              1,
 	"pkg/middleware/ratelimit.go":                            1,
-	"pkg/security/ssrf.go":                                   2,
+	// pkg/security/ssrf.go 2→3（2026-11-14，core#164）：BlockedIP 抽出为
+	// 导出的单 IP 判定入口（validateEndpointURL 与出站拨号复核 ssrfDialContext
+	// 共用同一判据）——拨号层拿到的是已解析 IP、没有 URL 可喂，开关语义必须
+	// 与保存期校验同源，故直读随判定函数走。与同文件既有两处同属「security
+	// 工具层读全局 SSRF 开关」范式；构造注入需把 conf 穿遍 dial 层调用链，
+	// 无行为收益。
+	"pkg/security/ssrf.go": 3,
 	// pkg/utils/expire.go 2→3（2026-11-02，transfer 段接线）：站点默认生效值
 	// （transfer.max_count/expire_default）与既有两处同属「utils 工具层读全局
 	// 配置」范式——CalculateExpireTime/CalculateExpireCount 本就直读，生效值

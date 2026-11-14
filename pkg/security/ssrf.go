@@ -104,9 +104,25 @@ func validateEndpointURL(rawURL string, allowPrivatePeer bool) error {
 		return nil
 	}
 	for _, ip := range ips {
-		if endpointGuard.CheckIP(ip) != nil {
-			return fmt.Errorf("%w: 端点解析到私网/保留地址 %s；如为局域网存储请在配置中开启 security.ssrf.allow_private_networks", ErrEndpointURL, ip)
+		if err := BlockedIP(ip); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// BlockedIP 单 IP 私网/保留地址判定（私网/回环/链路本地/组播/保留段等；
+// 尊重全局 security.ssrf.allow_private_networks——开启即全放行）。
+//
+// validateEndpointURL / ValidateEndpointHost 与出站拨号时刻复核（core#164，
+// pkg/outbound 的 ssrfDialContext）**共用同一判据**——不写第二份（抽出即
+// 复用：拨号层拿到的是已解析 IP，没有 URL 可喂，故按单 IP 粒度导出）。
+func BlockedIP(ip net.IP) error {
+	if cfg := conf.GetGlobalConfig(); cfg != nil && cfg.Security.SSRF.AllowPrivateNetworks {
+		return nil
+	}
+	if endpointGuard.CheckIP(ip) != nil {
+		return fmt.Errorf("%w: 端点解析到私网/保留地址 %s；如为局域网存储请在配置中开启 security.ssrf.allow_private_networks", ErrEndpointURL, ip)
 	}
 	return nil
 }
@@ -132,8 +148,8 @@ func ValidateEndpointHost(hostPort string) error {
 	}
 	ips := resolveHost(host)
 	for _, ip := range ips {
-		if endpointGuard.CheckIP(ip) != nil {
-			return fmt.Errorf("%w: 端点解析到私网/保留地址 %s；如为局域网存储请在配置中开启 security.ssrf.allow_private_networks", ErrEndpointURL, ip)
+		if err := BlockedIP(ip); err != nil {
+			return err
 		}
 	}
 	return nil

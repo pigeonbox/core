@@ -30,6 +30,7 @@ import (
 	"github.com/oekit/pkg/secretx"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/outbound"
+	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -164,6 +165,25 @@ func (s *Service) fetchDiscovery(ctx context.Context) (discovery, error) {
 	}
 	if d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" {
 		return d, errors.New("OIDC discovery 缺少必要端点")
+	}
+	// core#164：discovery 派生端点逐个过保存期同款 SSRF 校验——此前只查
+	// 非空即用：token POST 携带 client_secret、userinfo 携带 access_token，
+	// 文档被指向链路本地/内网即凭据外带面。ValidateEndpointURL 与 issuer
+	// 保存期校验**同一函数**（DNS + 单 IP 复判，尊重
+	// security.ssrf.allow_private_networks——内网 IdP 本就需开该开关才能保存
+	// issuer，口径一致；实际连接的二次解析窗口另有拨号复判兜底，core#164）。
+	// 非空语义保持原样：userinfo 等非必需端点缺失不报错。
+	for _, ep := range []struct{ name, url string }{
+		{"authorization_endpoint", d.AuthorizationEndpoint},
+		{"token_endpoint", d.TokenEndpoint},
+		{"userinfo_endpoint", d.UserinfoEndpoint},
+	} {
+		if ep.url == "" {
+			continue
+		}
+		if err := security.ValidateEndpointURL(ep.url); err != nil {
+			return d, fmt.Errorf("OIDC discovery %s 被拒绝: %w", ep.name, err)
+		}
 	}
 	return d, nil
 }
