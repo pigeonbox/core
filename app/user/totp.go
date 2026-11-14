@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/pigeonbox/contracts/errcode"
+	"github.com/pigeonbox/core/app/authn"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -142,7 +143,7 @@ func (s *Service) TotpDisable(ctx context.Context, userID uint, password, code s
 	}
 	// 关闭时接受 TOTP 码或任一未用过的恢复码：手机丢了还得能关掉二验。
 	if !totp.Validate(u.TotpSecret, code, time.Now()) {
-		rest, ok := consumeRecoveryCode(u.TotpRecoveryCodes, code)
+		rest, ok := authn.ConsumeRecoveryCode(u.TotpRecoveryCodes, code)
 		if !ok {
 			return &TotpInvalidError{}
 		}
@@ -154,31 +155,12 @@ func (s *Service) TotpDisable(ctx context.Context, userID uint, password, code s
 	return s.repo.Update(ctx, u)
 }
 
-// verifySecondFactor 校验二验码（TOTP 优先，其次恢复码）。
+// verifySecondFactor 校验二验码（TOTP 优先，其次恢复码）——薄委托。
 //
-// 恢复码命中即作废（一次性）：把用过的恢复码留着等于把「第二个口令」永久留在
-// 一份可能已泄漏的纸上。
+// 判据本体在 app/authn（2026-11-14 评审 S01 抽出，admin 登录同用）；
+// 保留本方法仅为既有调用点（finishLogin）与测试零改动。
 func (s *Service) verifySecondFactor(ctx context.Context, userID uint, code string) (bool, error) {
-	u, err := s.repo.GetByID(ctx, userID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	if totp.Validate(u.TotpSecret, code, time.Now()) {
-		return true, nil
-	}
-	rest, ok := consumeRecoveryCode(u.TotpRecoveryCodes, code)
-	if !ok {
-		return false, nil
-	}
-	u.TotpRecoveryCodes = rest
-	if err := s.repo.Update(ctx, u); err != nil {
-		return false, err
-	}
-	logger.CtxWarn(ctx, "totp recovery code consumed", "user_id", userID)
-	return true, nil
+	return authn.VerifySecondFactor(ctx, s.repo, userID, code)
 }
 
 // TotpEnabled 该用户是否已开启二次验证（/user/info 显隐安全设置入口用）。
@@ -215,35 +197,6 @@ func generateRecoveryHashes() ([]string, string, error) {
 		return nil, "", err
 	}
 	return codes, string(raw), nil
-}
-
-// consumeRecoveryCode 在哈希清单里找匹配项；返回剩余清单与是否命中。
-//
-// 归一化后再比：用户抄下来的是 ABCD-EFGH，输入时可能带空格、小写、
-// 或者把连字符丢了 —— 这些都不该算「码不对」。
-func consumeRecoveryCode(stored, input string) (string, bool) {
-	if strings.TrimSpace(stored) == "" {
-		return stored, false
-	}
-	var hashes []string
-	if err := json.Unmarshal([]byte(stored), &hashes); err != nil {
-		return stored, false
-	}
-	norm := totp.NormalizeRecoveryCode(input)
-	if norm == "" {
-		return stored, false
-	}
-	for i, h := range hashes {
-		if bcrypt.CompareHashAndPassword([]byte(h), []byte(norm)) == nil {
-			rest := append(append([]string{}, hashes[:i]...), hashes[i+1:]...)
-			raw, err := json.Marshal(rest)
-			if err != nil {
-				return stored, false
-			}
-			return string(raw), true
-		}
-	}
-	return stored, false
 }
 
 // LoginWithTOTP 口令 + （可选的）二次验证码登录，并登记一条登录会话。
