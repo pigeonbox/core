@@ -94,6 +94,36 @@ func (r *FileCodeRepository) GetByIDUnscoped(ctx context.Context, id uint) (*mod
 	return &fc, nil
 }
 
+// PathsByCodeForUser 硬删前抓取该分享的全部对象路径（主表+子表）。
+// 目标行已在回收站 ⇒ Unscoped；只取本 code+user 的行，不涉他分享。
+//
+// 评审 D03：HardDeleteUserShare 此前只删 DB 行、对象永不删 ⇒ 物理对象变
+// 孤儿（远端后端只能等 janitor，而远端扫描曾被 up_ 前缀卡死）。行删后查不到
+// 路径 ⇒ 必须**删前**抓取；抓取失败由调用方记 warn 后继续删 DB（泄漏由
+// janitor 兜底，不阻断删除）。
+func (r *FileCodeRepository) PathsByCodeForUser(ctx context.Context, userID uint, code string) ([]string, error) {
+	var fc model.FileCode
+	if err := r.db().WithContext(ctx).Unscoped().
+		Where("code = ? AND user_id = ?", code, userID).First(&fc).Error; err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	if p := fc.GetFilePath(); p != "" {
+		paths = append(paths, p)
+	}
+	var children []model.FileCodeFile
+	if err := r.db().WithContext(ctx).Unscoped().
+		Where("file_code_id = ?", fc.ID).Find(&children).Error; err != nil {
+		return nil, err
+	}
+	for _, c := range children {
+		if c.FilePath != "" {
+			paths = append(paths, c.FilePath)
+		}
+	}
+	return paths, nil
+}
+
 // HardDeleteByIDs 物理删除 DB 行（回收站「彻底删除」用；对象删除由调用方负责）。
 // 子文件行一并硬删（彻底删除不留软删残留）。
 //

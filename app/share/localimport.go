@@ -100,8 +100,9 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 	if serr != nil {
 		// ⚠️ 2026-10-26 审计修复：建分享失败（配额满/审核 reject/自定义码冲突）时
 		// **已落盘的副本没有 DB 引用** ⇒ 本地后端 24h 后被对账清掉，但**远端后端
-		// 永不被回收**（ReconcileOrphans 跳过远端，presign 孤儿扫描只认 up_ 前缀
-		// ⇒ 本地导入用的是 UUID 名）⇒ 永久占空间。⇒ 失败即删副本。
+		// 曾永不被回收**（ReconcileOrphans 跳过远端；评审 D03 前 presign 孤儿扫描
+		// 只认 up_ 前缀 ⇒ 本地导入的 UUID 名漏扫）⇒ 永久占空间。⇒ 失败即删副本。
+		// （D03 后远端扫描已扩到 uploads/ 全量可兜底，但即时删除仍是最短泄漏窗口。）
 		if derr := s.storage.DeleteFile(ctx, rel); derr != nil {
 			logger.CtxWarn(ctx, "delete orphaned local-import copy failed",
 				"rel", rel, "err", derr)

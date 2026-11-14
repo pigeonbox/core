@@ -4,8 +4,10 @@
 //
 // 清理判据（app/admin/janitor.go ScanRemotePresignOrphans）：
 //
-//	① 只看 `uploads/` 下、basename 以 `up_` 前缀的对象（presign 直传命名空间）；
-//	② **有 DB 引用**（file_codes.file_path，含软删行）⇒ 不是孤儿；
+//	① 看 `uploads/` 前缀全量对象（评审 D03 起不再限定 basename `up_`——
+//	   uuid 命名的分片/直传对象在远端无 ReconcileOrphans 兜底，漏扫=永久泄漏）；
+//	② **有 DB 引用**（file_codes.file_path + file_code_files.file_path，含软删行）
+//	   ⇒ 不是孤儿；
 //	③ 在宽限期内 ⇒ 不是孤儿（可能正在直传）。
 //
 // 其余 ⇒ 孤儿 ⇒ 被 DeleteFile 删掉。
@@ -105,17 +107,42 @@ func TestCleanRemotePresignOrphans_GracePeriodKeepsInFlight(t *testing.T) {
 	assert.Empty(t, stub.deleted, "宽限期内不得删（可能正在直传）")
 }
 
-// TestCleanRemotePresignOrphans_NeverTouchesNonPresignObjects 非 `up_` 前缀的
-// 对象（正常分享文件）**永不**视为孤儿 —— 即使无引用、超宽限期。
-func TestCleanRemotePresignOrphans_NeverTouchesNonPresignObjects(t *testing.T) {
-	const normal = "uploads/2026/10/25/regular-file.bin"
+// 评审 D03③：uploads/ 下 uuid 命名的孤儿（分片/直传对象）也必须被扫出——
+// 原 `up_` basename 过滤把它们漏成永久泄漏（远端后端无 ReconcileOrphans 兜底，
+// 本地才有磁盘对账兜底）。宽限期 + 含软删引用集两道闸不变 ⇒ 误删风险与 up_ 同级。
+//
+// 取代原 NeverTouchesNonPresignObjects（其前提「非 up_ 永不扫」已被评审 D03
+// 显式推翻——那正是永久泄漏的成因）。
+func TestScanRemoteUploadOrphans_CoversUUIDObjects(t *testing.T) {
+	const upOrphan = "uploads/2026/11/14/up_1111.ext"          // presign 残留（既有覆盖）
+	const uuidOrphan = "uploads/2026/11/14/2222-3333-4444.ext" // 分片/直传对象（原漏）
+	const fresh = "uploads/2026/11/14/aaaa-bbbb-cccc.ext"      // 宽限期内（不扫）
+	const softRef = "uploads/2026/11/14/dddd-eeee-ffff.ext"    // 被软删分享引用（不扫）
 
-	j, stub := newJanitorEnv(t, []storage.RemoteObjectInfo{obj(normal, 72*time.Hour)})
+	j, _ := newJanitorEnv(t, []storage.RemoteObjectInfo{
+		obj(upOrphan, 48*time.Hour),
+		obj(uuidOrphan, 48*time.Hour),
+		obj(fresh, time.Minute),
+		obj(softRef, 48*time.Hour),
+	})
+	ctx := context.Background()
 
-	removed, err := j.CleanRemotePresignOrphans(context.Background(), 24*time.Hour)
+	// 软删分享仍引用 softRef——引用集必须含软删行（回收站对象不算孤儿）
+	uid := uint(5)
+	require.NoError(t, j.fileCodeRepo.Create(ctx, &model.FileCode{
+		Code: "SOFTREF01", UserID: &uid, FilePath: softRef, UUIDFileName: "ffff.ext",
+	}))
+	n, err := j.fileCodeRepo.BatchSoftDeleteByCodes(ctx, uid, []string{"SOFTREF01"})
 	require.NoError(t, err)
-	assert.Equal(t, 0, removed)
-	assert.Empty(t, stub.deleted, "非 presign 命名空间的对象不得被孤儿清理删掉")
+	require.Equal(t, 1, n)
+
+	keys, err := j.ScanRemotePresignOrphans(ctx, 24*time.Hour)
+	require.NoError(t, err)
+	assert.Contains(t, keys, upOrphan, "presign 残留仍须扫出（既有覆盖不回归）")
+	assert.Contains(t, keys, uuidOrphan, "uuid 命名的分片/直传孤儿必须扫出（评审 D03③）")
+	assert.NotContains(t, keys, fresh, "宽限期内对象不得扫（可能正在直传）")
+	assert.NotContains(t, keys, softRef, "软删行仍引用的对象不得扫（引用集含软删口径）")
+	assert.Len(t, keys, 2, "只应有 2 个真孤儿")
 }
 
 // TestCleanRemotePresignOrphans_LocalBackendSkips 本地后端无 presign 孤儿语义

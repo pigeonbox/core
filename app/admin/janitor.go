@@ -275,12 +275,13 @@ func (j *Janitor) CleanupStaleUploads(ctx context.Context, maxAge time.Duration)
 	return dirsRemoved, nil
 }
 
-// CleanRemotePresignOrphans 清理远端后端的 presign 孤儿对象：
-// Init 后未 Complete 的直传残留（对象 key 形如 uploads/日期/up_<uuid>.ext，
-// basename up_ 前缀与普通上传的 uuid 名可区分），无 DB 引用且超过宽限期的删除。
+// CleanRemotePresignOrphans 清理远端后端的 uploads/ 孤儿对象：
+// Init 后未 Complete 的直传残留（uploads/日期/up_<uuid>.ext）与 uuid 命名的
+// 分片/直传对象（uploads/日期/<uuid>.<ext>），无 DB 引用且超过宽限期的删除。
 // 远端后端此前完全不对账（ReconcileOrphans 对远端只报告），孤儿只增不减——
 // 且匿名 presign Init 可被滥用为免费网盘（2026-10-06 审计确认），此方法为其兜底。
 // 本地后端不适用（ReconcileOrphans 磁盘对账已覆盖）。
+// 评审 D03 起扫描面从 basename up_ 前缀扩到 uploads/ 前缀全量（方法名保留）。
 func (j *Janitor) CleanRemotePresignOrphans(ctx context.Context, olderThan time.Duration) (int, error) {
 	keys, err := j.ScanRemotePresignOrphans(ctx, olderThan)
 	if err != nil {
@@ -300,7 +301,7 @@ func (j *Janitor) CleanRemotePresignOrphans(ctx context.Context, olderThan time.
 	return removed, nil
 }
 
-// CountRemotePresignOrphans 只读统计：当前满足清理判定的 presign 孤儿数
+// CountRemotePresignOrphans 只读统计：当前满足清理判定的 uploads/ 孤儿数
 // （存储洞察 /admin/storage/insights 用，不删除任何对象）。
 func (j *Janitor) CountRemotePresignOrphans(ctx context.Context, olderThan time.Duration) (int, error) {
 	keys, err := j.ScanRemotePresignOrphans(ctx, olderThan)
@@ -310,9 +311,12 @@ func (j *Janitor) CountRemotePresignOrphans(ctx context.Context, olderThan time.
 	return len(keys), nil
 }
 
-// ScanRemotePresignOrphans 列举满足清理判定的远端 presign 孤儿对象 key（只读）：
-// up_ 前缀 + 无 DB 引用 + 超过 olderThan 宽限期。本地后端返回空集
-// （磁盘对账 ReconcileOrphans 已覆盖，无 presign 孤儿语义）。
+// ScanRemotePresignOrphans 列举满足清理判定的远端孤儿对象 key（只读）：
+// uploads/ 前缀全量（评审 D03 起不再限定 basename up_——uuid 命名的分片/直传
+// 对象在远端无 ReconcileOrphans 兜底，漏扫=永久泄漏）+ 无 DB 引用（含软删行）
+// + 超过 olderThan 宽限期。本地后端返回空集（磁盘对账 ReconcileOrphans 已覆盖）。
+// 方法名保留：bootstrap/tasks.go 与 admin storage insights 调用方依赖，且在途
+// a3 分支同名冲突面最小化。
 func (j *Janitor) ScanRemotePresignOrphans(ctx context.Context, olderThan time.Duration) ([]string, error) {
 	if j.svc == nil {
 		return nil, fmt.Errorf("存储实例未就绪")
@@ -336,8 +340,8 @@ func (j *Janitor) ScanRemotePresignOrphans(ctx context.Context, olderThan time.D
 	// ——与 ReconcileOrphans 同口径）。
 	// ⚠️ 2026-10-26 审计修复：原实现**只**收主表 ⇒ 多文件分享中「非首个文件」
 	// （只存在于子表）被当孤儿**删掉** ⇒ 仍在被引用的活对象数据丢失。
-	// presign 孤儿 key 的 basename 恒为 up_<uuid>.<ext>，不可能出现在合法引用里
-	//（uuid v4 字符集不含 u/p），故 up_ 前缀+无引用 即可判定孤儿。
+	// 评审 D03 起扫描面放开到 uploads/ 全量 ⇒ 判定孤儿的唯一口径就是本引用集
+	//（含软删行）+ 宽限期两道闸，误删风险与原 up_ 过滤同级。
 	referenced := make(map[string]bool)
 	rows, err := j.fileCodeRepo.ListAllIncludingDeleted(ctx)
 	if err != nil {
@@ -362,8 +366,10 @@ func (j *Janitor) ScanRemotePresignOrphans(ctx context.Context, olderThan time.D
 	cutoff := time.Now().Add(-olderThan)
 	var orphanKeys []string
 	for _, o := range objs {
-		base := path.Base(o.Key)
-		if !strings.HasPrefix(base, "up_") {
+		// 原仅 up_ 前缀（presign 残留）——uploads/ 下 uuid 命名的分片/直传对象
+		// 在远端后端无 ReconcileOrphans 兜底，漏扫=永久泄漏（评审 D03）。
+		// 宽限期 + 引用集（含软删）双闸不变，误删风险与 up_ 同级。
+		if path.Base(o.Key) == "" {
 			continue
 		}
 		if referenced[strings.TrimSuffix(o.Key, "/")] {
