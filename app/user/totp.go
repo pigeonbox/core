@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/pigeonbox/contracts/errcode"
-	"github.com/pigeonbox/core/app/authn"
+	"github.com/pigeonbox/core/internal/authn"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -157,7 +157,7 @@ func (s *Service) TotpDisable(ctx context.Context, userID uint, password, code s
 
 // verifySecondFactor 校验二验码（TOTP 优先，其次恢复码）——薄委托。
 //
-// 判据本体在 app/authn（2026-11-14 评审 S01 抽出，admin 登录同用）；
+// 判据本体在 internal/authn（2026-11-14 评审 S01 抽出，admin 登录同用）；
 // 保留本方法仅为既有调用点（finishLogin）与测试零改动。
 func (s *Service) verifySecondFactor(ctx context.Context, userID uint, code string) (bool, error) {
 	return authn.VerifySecondFactor(ctx, s.repo, userID, code)

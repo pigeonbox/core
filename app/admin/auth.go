@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pigeonbox/core/app/authn"
+	"github.com/pigeonbox/core/internal/authn"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"golang.org/x/crypto/bcrypt"

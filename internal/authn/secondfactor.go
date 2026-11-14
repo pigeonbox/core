@@ -3,6 +3,11 @@
 // 为什么单独成包（2026-11-14 评审 S01）：TOTP 判据此前只活在 app/user，
 // admin 登录若复制一份实现必然漂移——而漂移的后果是某个登录入口绕过 MFA
 // （S01 漏洞本体：POST /admin/login 完全不查 TotpEnabled）。判据只许有一份。
+//
+// 为什么住在 internal/ 而不是 app/：app 域间禁止互 import（internal/arch
+// 守卫规则 2，白名单只许删不许加）——共享判据放 app/authn 会同时新增
+// app/admin→app/authn 与 app/user→app/authn 两条违例。internal/ 无此约束，
+// 且 app → internal 本就是既有合法方向（app/presign → internal/uploadlock 先例）。
 package authn
 
 import (
