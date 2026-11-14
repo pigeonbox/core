@@ -59,3 +59,28 @@ func TestGetTotalSizesByUserIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
+
+// 评审 D01：物理口径必须含回收站软删行（purge 前仍占盘），
+// 与 InsightStats 的 Unscoped 口径一致（core#107 同族）。
+func TestGetTotalSizeIncludingDeleted_CountsSoftDeleted(t *testing.T) {
+	g := newGovernanceTestDB(t)
+	repo := NewFileCodeRepository(g)
+	ctx := context.Background()
+
+	alive := &model.FileCode{Code: "PHYSAAA1", Size: 1000}
+	soft := &model.FileCode{Code: "PHYSAAA2", Size: 2000}
+	require.NoError(t, repo.Create(ctx, alive))
+	require.NoError(t, repo.Create(ctx, soft))
+	require.NoError(t, repo.Delete(ctx, soft.ID)) // 进回收站
+
+	if got, err := repo.GetTotalSize(ctx); err != nil || got != 1000 {
+		t.Fatalf("存活口径应=1000（断言不改）, got %d err=%v", got, err)
+	}
+	phys, err := repo.GetTotalSizeIncludingDeleted(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if phys != 3000 {
+		t.Fatalf("物理口径应=3000（含软删）, got %d", phys)
+	}
+}
