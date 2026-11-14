@@ -28,6 +28,7 @@ import (
 	"github.com/oekit/kitx/uidgen"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/pigeonbox/core/internal/uploadlock"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
@@ -403,6 +404,19 @@ type CompleteResult struct {
 
 // Complete 完成通知（调 share service 写分享表）
 func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string) (*CompleteResult, error) {
+	// 同一 upload_id 的完成面排队互斥（core#151）：下面「读 meta → 建分享 →
+	// 标记完成」是 read-then-create，无锁时并发两次 Complete（超时重试/双击/
+	// HTTP 重放）各自读到 Complete=false ⇒ 同一 upload_id 建出 2 条分享、
+	// 回 2 个取件码 ⇒ 幂等形同虚设。
+	// 拿锁**之后**才读 meta ⇒ 后到者读到的必是前一个完成后的状态 ⇒ 走下方
+	// 既有的幂等回读分支 ⇒ 返回同一条分享（同属主幂等语义不变）。
+	// ctx 取消/超时 ⇒ 未做任何事直接返回，客户端可重试。
+	release, lockErr := uploadlock.Lock(ctx, uploadID)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer release()
+
 	// 1. 读 meta
 	metaJSON, err := s.rdb.Get(ctx, fmt.Sprintf(keyUploadMeta, uploadID)).Result()
 	if errors.Is(err, redis.Nil) {
