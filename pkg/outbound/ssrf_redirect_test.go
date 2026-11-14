@@ -60,6 +60,18 @@ func TestSSRFRedirectGuard(t *testing.T) {
 	}
 }
 
+// TestOIDCOutboundPolicy（core#164 正判据）：TargetOIDC 曾是策略表唯一无
+// checkRedirect 的出站点（Go 默认盲跟 10 跳）——必须挂逐跳 SSRF 复验守卫
+// （与 federation 各目标同族，见 ssrf_redirect.go 口径说明）。
+//
+// 负对照（改错转红）：把 policies[TargetOIDC].checkRedirect 置回 nil
+// ⇒ 本用例转红（回到盲跟重定向）。
+func TestOIDCOutboundPolicy(t *testing.T) {
+	if policies[TargetOIDC].checkRedirect == nil {
+		t.Fatal("TargetOIDC 必须挂重定向守卫（core#164）")
+	}
+}
+
 // TestFederationOutboundPolicies（core#116 正判据）：联邦两处出站的客户端必须
 // 带超时（原 http.DefaultClient 零超时 ⇒ goroutine 泄漏面）且挂重定向守卫。
 //

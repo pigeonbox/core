@@ -16,7 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -28,6 +30,16 @@ func fakeIdP(t *testing.T) (*httptest.Server, *int) {
 // fakeIdPFull 可指定 email claim 与 email_verified 的假 IdP（core#119 同族用例用）。
 func fakeIdPFull(t *testing.T, email string, emailVerified bool) (*httptest.Server, *int) {
 	t.Helper()
+	// core#164：假 IdP 监听在环回 = **内网 IdP 形态**——拨号时刻复判
+	//（ssrfDialContext）与 issuer 保存期校验是同一开关，显式放行
+	// security.ssrf.allow_private_networks 才能出站（与生产「内网 IdP 必须开
+	// 该开关才能保存 issuer」口径一致）。严格口径的用例不走本 helper。
+	old := conf.GetGlobalConfig()
+	allowed := &conf.AppConfiguration{}
+	allowed.Security.SSRF.AllowPrivateNetworks = true
+	conf.SetGlobalConfig(allowed)
+	t.Cleanup(func() { conf.SetGlobalConfig(old) })
+
 	tokHits := 0
 	mux := http.NewServeMux()
 	// baseURL 在 NewServer 后回填（discovery 端点动态引用真实监听地址）
@@ -138,6 +150,47 @@ func TestOIDC_FullFlow(t *testing.T) {
 	var cnt int64
 	oidcDB.Model(&model.User{}).Count(&cnt)
 	assert.Equal(t, int64(1), cnt)
+}
+
+// TestDiscovery_RejectsPrivateEndpoints（core#164）：discovery 文档把
+// token_endpoint 指到链路本地/云元数据地址 ⇒ 解析期即拒绝，client_secret
+// 绝不发出（token POST 是唯一携带 secret 的出站点）。
+//
+// 负对照（改错转红）：删掉 fetchDiscovery 的逐端点校验 ⇒ 本用例转红
+// （fetchDiscovery 返回 nil 错误）。
+func TestDiscovery_RejectsPrivateEndpoints(t *testing.T) {
+	// 严格口径：解析期私网判定必须生效（allow_private 关；与 issuer 保存期
+	// 校验默认口径一致）
+	old := conf.GetGlobalConfig()
+	conf.SetGlobalConfig(&conf.AppConfiguration{})
+	defer conf.SetGlobalConfig(old)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			// 公网 IP 字面量：过校验（discovery 解析只查 URL 形态+私网，不实际请求）
+			"authorization_endpoint": "https://8.8.8.8/auth",
+			"token_endpoint":         "http://169.254.169.254/token", // 云元数据：必须拒
+			"userinfo_endpoint":      "https://1.1.1.1/userinfo",
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := NewService(newOIDCDB(t), Config{
+		Enabled: true, Issuer: srv.URL, ClientID: "c",
+		ClientSecret: secretx.NewSecureString("s"),
+	})
+	// 拨号时刻复判另由 pkg/outbound/ssrf_dial_test 覆盖；本用例只测**解析期**
+	// 端点校验——假 IdP 在环回是测试环境产物（生产 issuer 保存期已校验为可达
+	// 公网或已放行内网），换成 test server 自带的无守卫客户端交付恶意文档。
+	svc.client = srv.Client()
+
+	_, err := svc.fetchDiscovery(context.Background())
+	require.Error(t, err, "token_endpoint 指向元数据地址必须在 discovery 解析期拒绝")
+	assert.Contains(t, err.Error(), "token_endpoint", "错误必须点名被拒端点")
+	assert.Contains(t, err.Error(), "被拒绝")
+	assert.ErrorIs(t, err, security.ErrEndpointURL)
 }
 
 func TestOIDC_EmailMatchBindsSub(t *testing.T) {
