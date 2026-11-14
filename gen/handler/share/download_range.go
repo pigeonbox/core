@@ -85,6 +85,40 @@ func parseByteRange(header string, size int64) (start, length int64, result rang
 	return a, b - a + 1, rangeOK
 }
 
+// rejectUnsatisfiableRange 在**扣次之前**判定 Range 可满足性（core#171）。
+//
+// 为什么必须在 chargePickup 之前：设计稿不变量 4「失败不消耗次数」
+// （docs/specs/2026-10-24-pickup-count-semantics-design.md §3）。416 是一次
+// **零字节交付**——若在扣次之后才判，owner 的 N 次额度会在「什么都没拿到」的
+// 情况下被烧光，配合每次 /share/select 换新令牌即可逐次消耗。
+//
+// 判据与 streamFileDownload 内的 Range 分支**同源**（parseByteRange），
+// 只有 rangeNotSatisfiable 才落 416 ⇒ 前置判定不会把「回退全量 200」的
+// 多区间/不识别形态误判成失败。
+//
+// 返回 true = 已写 416 响应，调用方应立即 return（不扣次）；
+// 返回 false = 无 Range 头 / 区间可满足 / Stat 失败（交由后续开流路径按
+// 既有口径报错，不在本函数越权改写响应）。
+func rejectUnsatisfiableRange(ctx context.Context, c *app.RequestContext, filePath string) bool {
+	rh := string(c.GetHeader("Range"))
+	if rh == "" {
+		return false
+	}
+	total, err := getShareService().StatShareFile(ctx, filePath)
+	if err != nil {
+		return false
+	}
+	if _, _, res := parseByteRange(rh, total); res != rangeNotSatisfiable {
+		return false
+	}
+	c.Header("Content-Range", fmt.Sprintf("bytes */%d", total))
+	c.JSON(consts.StatusRequestedRangeNotSatisfiable, map[string]interface{}{
+		"code":    errcode.CodeInvalidParam,
+		"message": "请求区间不满足",
+	})
+	return true
+}
+
 // streamFileDownload 单文件下载统一收口（本地/远端后端，支持 Range 206）。
 // 惰性开流：Range 请求只做 1 次 Stat + 1 次区间 GET，不会预开全量读器；
 // filePath 为存储相对路径；fileName 为下载呈现名；logTransfer 在确认开始

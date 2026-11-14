@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	mapstructure "github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
@@ -352,12 +353,74 @@ var insecureDefaultSecrets = map[string]string{
 	"REPLACE_WITH_STRONG_RANDOM_SECRET": "k8s base manifest placeholder",
 }
 
+// jwtSecretMinLen 与错误文案承诺的 (>=32 chars) 一致（core#165）。
+//
+// 此前只判「空 + 黑名单」，文案里的 (>=32 chars) **从未被实现** ⇒
+// PB_JWT_SECRET=short 等任意非黑名单弱值可启动：HS256 配弱密钥，低权限用户
+// 拿到自己一枚 JWT 即可离线爆破出密钥 ⇒ 伪造任意 admin JWT。
+const jwtSecretMinLen = 32
+
+// jwtSecretWeakReason 返回弱 jwt_secret 的原因（空串 = 通过）。
+//
+// 判据刻意保持**简单且可解释**（issue 修复方向）：长度 ≥32 + 两类零熵形态
+// （全数字 / 单字符重复）。只判长度挡不住 32 位全 0。
+// 长度按 **rune** 计（= 文案的 "chars"）：rune ≥32 ⇒ 字节数 ≥32 ⇒ 满足
+// HS256 ≥256 位密钥材料的下限。
+func jwtSecretWeakReason(sec string) string {
+	if n := utf8.RuneCountInString(sec); n < jwtSecretMinLen {
+		return fmt.Sprintf("too short (%d chars, need >= %d)", n, jwtSecretMinLen)
+	}
+	if isAllDigits(sec) {
+		return "all digits (no entropy)"
+	}
+	if isSingleRepeatedRune(sec) {
+		return "single repeated character (no entropy)"
+	}
+	return ""
+}
+
+// isAllDigits 全数字判据（空串返回 false，由调用方的长度闸兜住）。
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isSingleRepeatedRune 单一字符重复判据（"aaaa…" / "0000…" 的 0000 由全数字先拦）。
+func isSingleRepeatedRune(s string) bool {
+	runes := []rune(s)
+	for _, r := range runes[1:] {
+		if r != runes[0] {
+			return false
+		}
+	}
+	return len(runes) > 0
+}
+
 // validateSecrets 全环境校验敏感配置，避免使用默认/弱密钥启动（fail-fast）。
 // 所有环境（含开发）都必须设置强随机的 user.jwt_secret。
+//
+// 三道闸**分开报错**（core#165）：空 / 已知默认黑名单 / 长度与熵——
+// 此前合并在一句 "empty or a known default" 里，短值排障会被误导。
+// 黑名单先判：黑名单值多为短串（如 PigeonBox2025JWT 16 字符），
+// 先判长度会把「已知默认」误报成「太短」。
 func validateSecrets(cfg *Config) error {
-	// jwt_secret：空或命中黑名单一律拒绝
-	if sec := cfg.User.JWTSecret; sec == "" || insecureDefaultSecrets[sec] != "" {
-		return fmt.Errorf("a secure user.jwt_secret is required in ALL environments: current value is empty or a known default; set PB_JWT_SECRET env to a strong random string (>=32 chars)")
+	const hint = "set PB_JWT_SECRET env to a strong random string (>=32 chars)"
+	sec := cfg.User.JWTSecret
+	if sec == "" {
+		return fmt.Errorf("a secure user.jwt_secret is required in ALL environments: current value is empty; %s", hint)
+	}
+	if reason := insecureDefaultSecrets[sec]; reason != "" {
+		return fmt.Errorf("a secure user.jwt_secret is required in ALL environments: current value is a known default (%s); %s", reason, hint)
+	}
+	if weak := jwtSecretWeakReason(sec); weak != "" {
+		return fmt.Errorf("a secure user.jwt_secret is required in ALL environments: current value is too weak (%s); %s", weak, hint)
 	}
 	return nil
 }
