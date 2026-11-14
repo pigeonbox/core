@@ -243,6 +243,17 @@ func (r *FileCodeRepository) GetTotalSize(ctx context.Context) (int64, error) {
 	return totalSize, err
 }
 
+// GetTotalSizeIncludingDeleted 物理口径合计（评审 D01）：含回收站软删行——
+// purge 前对象仍占盘，站点配额/「已用存储」展示必须按此口径；
+// 与 InsightStats（filecode_runtime.go，core#107）的 Unscoped 口径一致。
+// 用户配额（GetTotalSizeByUserID）是逻辑口径，不走此方法。
+func (r *FileCodeRepository) GetTotalSizeIncludingDeleted(ctx context.Context) (int64, error) {
+	var totalSize int64
+	err := r.db().WithContext(ctx).Unscoped().Model(&model.FileCode{}).
+		Select("COALESCE(SUM(size), 0)").Scan(&totalSize).Error
+	return totalSize, err
+}
+
 func (r *FileCodeRepository) CountTodayUploads(ctx context.Context) (int64, error) {
 	var count int64
 	today := time.Now().Format("2006-01-02")

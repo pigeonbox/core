@@ -45,7 +45,8 @@ func (s *Service) GetStats(ctx context.Context) (*AdminStats, error) {
 	}
 	stats.TotalFiles = totalFiles
 
-	totalSize, err := s.fileCodeRepo.GetTotalSize(ctx)
+	// 物理口径含回收站（评审 D01）：与站点配额闸同源，purge 前软删仍占盘。
+	totalSize, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("统计 total_size: %w", err)
 	}
@@ -122,7 +123,7 @@ type EnhancedStats struct {
 	AnonymousFiles   int64             `json:"anonymous_files"`
 	PresignFiles     int64             `json:"presign_files"`
 	TopSuffixes      []*dao.SuffixStat `json:"top_suffixes"`
-	// 站点级存储配额（storage.quota，0=不限）与当前用量（存活 file_codes 合计）
+	// 站点级存储配额（storage.quota，0=不限）与当前用量（物理口径，含回收站软删）
 	StorageUsed  int64 `json:"storage_used"`
 	StorageQuota int64 `json:"storage_quota"`
 }
@@ -189,7 +190,8 @@ func (s *Service) EnhancedStats(ctx context.Context) (*EnhancedStats, error) {
 	}
 	stats.TopSuffixes = topSuffixes
 
-	storageUsed, err := s.fileCodeRepo.GetTotalSize(ctx)
+	// 物理口径含回收站（评审 D01）：StorageUsed 与站点配额闸同源。
+	storageUsed, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("统计 storage_used: %w", err)
 	}

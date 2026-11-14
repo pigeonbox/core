@@ -525,12 +525,14 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 // 约束）+ 站点级全局存储配额 + 存储配额强制执行。超限返回带具体上限文案的错误。
 func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize int64) error {
 	// 站点级全局存储配额（storage.quota，0=不限）：全通道统一闸口
-	// （直传/分片完成/预签名完成/本地导入/多文件均经此处）。统计口径=存活
-	// file_codes 尺寸合计（软删除不计；未完成分片会话暂不计入）。统计故障时
-	// fail-open（配额是治理项而非安全项，不因统计异常拒绝所有上传）。
+	// （直传/分片完成/预签名完成/本地导入/多文件均经此处）。统计口径=
+	// **物理占用**（含回收站软删——purge 前仍占盘；评审 D01）。原存活口径
+	// 漏计软删 ⇒ 站点配额虚低。未完成分片会话暂不计入。用户配额仍为逻辑
+	// 口径（存活制）。统计故障时 fail-open（配额是治理项而非安全项，不因
+	// 统计异常拒绝所有上传）。
 	if cfg := conf.GetGlobalConfig(); cfg != nil && cfg.Storage.Quota > 0 {
 		quota := cfg.Storage.Quota
-		if used, err := s.fileCodeRepo.GetTotalSize(ctx); err == nil {
+		if used, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx); err == nil {
 			if used+totalSize > quota {
 				metrics.RecordRejected(metrics.RejectQuota)
 				return &GlobalQuotaExceededError{Used: used, Quota: quota}
