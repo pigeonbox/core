@@ -141,11 +141,26 @@ func (s *Service) authorizePickup(ctx context.Context, req GetReq) (*model.FileC
 		return nil, err
 	}
 
+	// 入口预检（core#163，与 /anonymous/retrieve 同口径）：按 IP 的枚举维度
+	// 已锁 ⇒ 直接返回锁定态（HTTP 适配层映射 429），不再白跑解析查询。
+	// 此前本面只有域内 CheckPickup 的枚举判定——它在**解析成功之后**才执行，
+	// 不存在的码永远到不了 ⇒ 枚举本面只剩 QPS 桶。
+	//（clientIP 经 GetReq.ClientIP 从 middleware.ClientIP 透传，签名无需改。）
+	if remain, locked := gate.PickupLockedRemain(ctx, req.ClientIP, req.Code); locked {
+		return nil, &LockedError{Remain: remain}
+	}
+
 	// 获取文件信息（**分享码或 6 位取件码**）：走统一解析器（dao.ResolveByCode），
 	// 与 select/metadata 口径一致（此前本域只查 code 列 ⇒ 取件码在此 404，
 	// 而分享页能打开 ⇒ 同一输入两端点结论相反）。
 	fileCode, err := s.fileCodeRepo.ResolveByCode(ctx, req.Code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
+		// 枚举防护记账（core#163）：码不存在到不了下方 CheckPickup，在统一键上
+		// 记失败（(IP,码) + 按 IP 枚举双维度）。只记「记录查不到」——基建故障
+		//（DB 不可达等）不记，避免故障期把全网记成锁定。
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			gate.RecordPickupFailure(ctx, req.ClientIP, req.Code)
+		}
 		return nil, ErrShareNotFound
 	}
 	// 统一取件闸门（pkg/gate.CheckPickup）：过期/管控/密码/防爆破锁定与

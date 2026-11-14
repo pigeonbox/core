@@ -679,6 +679,16 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 		return nil, "", false
 	}
 
+	// 解析前预检（core#163）：解析**之后**的预检对不存在的码永远到不了
+	// ⇒ 枚举不存在的码在本面只剩 QPS 桶。此处用原始入参预检——按 IP 的枚举
+	// 维度（换码也命中）不依赖码本身；(IP, 码) 维度命中原始码入口。解析后的
+	// **规范码**预检保留在下方（2026-10-24 定位：6 位/8 位共享一把钥匙的
+	// 密码爆破面），两道预检语义互补、不互替。
+	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), code); locked {
+		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain))
+		return nil, "", false
+	}
+
 	// 取件内容（按码解析 → 规范分享码）。
 	//
 	// **先解析再预检/验令牌**（2026-10-24）：
@@ -693,6 +703,11 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 			resp.NewTypedError(c, blocked)
 			return nil, "", false
 		}
+		// 枚举防护记账（core#163）：码解析不出来到不了下方的规范码预检，在此按
+		// IP 记一次（(IP,码) + 按 IP 枚举双维度）——与同文件 GetShare 的同名
+		// 段（2026-11-06）同一口径：封禁态不记（持码者被管控不是猜码），其余
+		// 落到「不存在或已过期」的分支记账。
+		gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
 		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return nil, "", false
 	}
