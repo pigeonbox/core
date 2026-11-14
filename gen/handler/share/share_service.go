@@ -892,6 +892,11 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorWithMessage(c, errcode.CodeNotFound, "文件不存在或不属于该分享")
 			return
 		}
+		// Range 可满足性**在扣次之前**判定（core#171：416 是零字节交付，
+		// 扣次后返回即违反设计稿不变量 4「失败不消耗次数」）。
+		if rejectUnsatisfiableRange(ctx, c, child.FilePath) {
+			return
+		}
 		// 计次（按取件会话）：多文件逐个下载 ⇒ 同一令牌只扣 1 次。
 		if !chargePickup(ctx, c, fileCode.Code, fingerprint, viewerIP, "download") {
 			return
@@ -933,6 +938,12 @@ func DownloadFile(ctx context.Context, c *app.RequestContext) {
 	filePath := fileCode.GetFilePath()
 	if filePath == "" {
 		resp.NewErrorWithMessage(c, errcode.CodeInternal, "文件路径为空")
+		return
+	}
+
+	// Range 可满足性**在扣次之前**判定（core#171：越界 Range ⇒ 416 且不扣次；
+	// 判据与下方 streamFileDownload 的 Range 分支同源，不改变 206/回退 200 口径）。
+	if rejectUnsatisfiableRange(ctx, c, filePath) {
 		return
 	}
 
