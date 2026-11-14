@@ -49,6 +49,22 @@ var ErrAccountDisabled = errors.New("OIDC 登录被拒绝：账号已被禁用")
 // 绝不把注入类邮箱写进库/参与匹配（不静默降级占位邮箱——那又是静默改义）。
 var ErrEmailInvalid = errors.New("OIDC 登录被拒绝：身份提供方返回的邮箱格式无效")
 
+// ErrAdminMFARequired 匹配命中的本地账号是**已启用 MFA 的管理员**（wave1 A1
+// 终审 must-fix）：OIDC 回调链路没有二验环节，按 DB 角色直接签发 admin JWT
+// 即绕过已启用的 MFA（authn.VerifySecondFactor 只在本地 admin 登录与 user
+// TOTP 两处调用，OIDC 此前零检查）⇒ **不签发**，回调走 oidcPublicError 呈现
+// 「使用账号密码登录」引导。
+//
+// 拦截条件必须是 admin && TotpEnabled **同时**成立（见 ExchangeCallback）：
+// 未开 MFA 的 admin 走 OIDC 属支持路径（不禁）；user 角色不论是否开 TOTP
+// 走 OIDC 不受影响。
+//
+// 已知残差（拒绝方案的固有边，proper 修法=回调后强制二验半会话，另开
+// follow-up issue）：无口令的 OIDC 原生管理员（JIT 号被提为 admin 后开了
+// TOTP）会被本拦截挡在 OIDC 外且无本地口令可登 ⇒ 锁死；逃生=运维 DB 置
+// totp_enabled=0 或先补口令。
+var ErrAdminMFARequired = errors.New("OIDC 登录被拒绝：管理员已启用两步验证，请使用账号密码登录")
+
 // ErrStateInvalid state 校验失败（过期/伪造/缺少浏览器绑定）。
 //
 // 独立哨兵（2026-10-26 审计 P2）：transport 层要把 OIDC 失败映射成**可公开**
@@ -349,7 +365,16 @@ func (s *Service) ExchangeCallback(ctx context.Context, baseURL, code, state, no
 		return "", err
 	}
 
-	// 4. 签发本站 JWT
+	// 4. MFA 拦截（wave1 A1 终审 must-fix）：已启用二验的管理员不得经 OIDC
+	// 签发会话——OIDC 回调没有二验环节，按 DB 角色直签 admin JWT 即绕过
+	// 已启用的 MFA（本地 admin 登录在同位查 TotpEnabled 并走
+	// authn.VerifySecondFactor，OIDC 此前零检查）。两条件必须同时成立：
+	// 未开 MFA 的 admin 走 OIDC 属支持路径；user 角色不受影响。
+	if user.Role == "admin" && user.TotpEnabled {
+		return "", ErrAdminMFARequired
+	}
+
+	// 5. 签发本站 JWT
 	return auth.GenerateToken(user.ID, user.Username, user.Role)
 }
 

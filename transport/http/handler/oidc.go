@@ -72,6 +72,10 @@ func oidcPublicError(err error) (code, msg string) {
 		// core#119 同族：IdP email claim 格式非法 ⇒ 独立短码（受限映射，
 		// 不透传原始 err——那会把 claim 原值回显进回跳 query）
 		return "email_invalid", "身份提供方返回的邮箱格式无效"
+	case errors.Is(err, oidcApp.ErrAdminMFARequired):
+		// wave1 A1：已启用 MFA 的管理员被 OIDC 拦截 ⇒ 专用短码 + 指路文案
+		//（引导走有二验的本地账号密码登录；文案不含账号/IdP 细节）
+		return "admin_mfa_required", "管理员已启用两步验证，请使用账号密码登录"
 	default:
 		// 其余（IdP discovery 失败 / token 交换失败 / userinfo 失败 / 建号失败…）
 		// 全部归到通用失败：不透传细节，也不区分（区分需要透传细节）。
