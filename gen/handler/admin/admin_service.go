@@ -6,6 +6,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -57,9 +58,28 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// 生成 token
-	token, err := getAdminService().GenerateTokenForAdmin(ctx, req.Username, req.Password)
-	if err != nil {
+	// 生成 token（带二验码；判据与 /user/login 共用，评审 S01）
+	//
+	// 二验分流（**顺序不能反**，与 user 侧 Login 同口径）：
+	//   ① 40012 需要验证码 = 口令已经对了，**不是失败** ⇒ 不计锁定、不回 401；
+	//      前端据此弹第二个输入框。当成失败会让「输一次码」把管理员锁掉。
+	//   ② 40013 验证码无效 = 真失败 ⇒ 计入锁定桶（否则二验码可无限试）。
+	//   ③ 其余（凭据/状态/内部故障）与改造前同口径计一次失败；
+	//      内部故障按 core#114 A6b 脱敏出网，凭据类固定文案直出。
+	token, err := getAdminService().GenerateTokenForAdmin(ctx, req.Username, req.Password, req.GetTotpCode())
+	switch {
+	case errors.Is(err, adminsvc.ErrTotpRequired):
+		resp.NewErrorByCode(c, errcode.CodeTotpRequired) // 40012，不 RecordFailure
+		return
+	case errors.Is(err, adminsvc.ErrTotpInvalid):
+		_, _ = lock.RecordFailure(ctx, lockKey) // 与 user 侧 40013 同口径
+		resp.NewErrorByCode(c, errcode.CodeTotpInvalid)
+		return
+	case errors.Is(err, adminsvc.ErrInternal):
+		_, _ = lock.RecordFailure(ctx, lockKey)
+		resp.NewInternalError(c, errcode.CodeInternal, "登录", err)
+		return
+	case err != nil:
 		_, _ = lock.RecordFailure(ctx, lockKey)
 		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, err.Error())
 		return
