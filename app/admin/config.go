@@ -75,6 +75,13 @@ func (s *Service) UpdateUserSettingsJSON(ctx context.Context, raw []byte) error 
 	return s.cfg.UpdateUserSettingsJSON(ctx, raw)
 }
 
+// ApplyPolicyTemplate 应用策略模板（委派 config 域；hub#368）。
+// 错误口径：未知模板/非法组合 → config.ErrPolicyInvalid（handler 回 400 + 10001）；
+// DB 故障原样上抛（handler 走 500 脱敏出口）。
+func (s *Service) ApplyPolicyTemplate(ctx context.Context, id string) error {
+	return s.cfg.ApplyPolicyTemplate(ctx, id)
+}
+
 // LoadRuntimeStorage 读取持久化的运行时存储配置（storage.RuntimePersister 实现，委派）。
 func (s *Service) LoadRuntimeStorage(ctx context.Context) *conf.StorageConfig {
 	return s.cfg.LoadRuntimeStorage(ctx)
