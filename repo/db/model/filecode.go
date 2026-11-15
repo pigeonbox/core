@@ -59,7 +59,11 @@ type FileCode struct {
 	// 原先 `size:36` 在 SQLite 上从未暴露（SQLite 忽略长度）⇒ 但真机实测有
 	// 64 字符的值 ⇒ **换库到 PG/MySQL 直接失败**（value too long for type
 	// character varying(36)）⇒ 详见 `repo/db/model/chunk.go` 同名字段的说明。
-	UploadID string `gorm:"size:64" json:"upload_id"`
+	//
+	// `index`（**非唯一**，issue #184）：上传完成后的读回按 upload_id 查，
+	// 无索引即全表扫。刻意不加 uniqueIndex——upload_id 可为空/复用语义未定，
+	// 与迁移 000008 同口径（dbmigrate 换库导入按本模型建目标库 schema）。
+	UploadID string `gorm:"size:64;index" json:"upload_id"`
 
 	// 新增：用户认证相关字段
 	UserID *uint `gorm:"index" json:"user_id"` // 上传用户ID，为null表示匿名上传
