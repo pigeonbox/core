@@ -21,8 +21,12 @@ const (
 	RejectRateLimit = "ratelimit"  // QPS 限流
 	RejectDisabled  = "disabled"   // open_upload/require_login
 	RejectBlocked   = "blocked"    // 分享被禁用/待审取件
-	RejectModerated = "moderation" // 审核拒绝
-	RejectAnonQuota = "anon_quota" // 匿名日配额
+	RejectModerated = "moderation" // 审核拒绝（内容命中）
+	// RejectScanUnavailable 扫描不可用拒收（core#161：clamav strict 下扫描器
+	// 不可达/超时/超扫描上限）——与内容命中分开，便于区分「扫描器挂了」与
+	// 「文件真违规」。
+	RejectScanUnavailable = "scan_unavailable"
+	RejectAnonQuota       = "anon_quota" // 匿名日配额
 )
 
 var (

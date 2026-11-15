@@ -213,6 +213,19 @@ func (e *ContentRejectedError) Error() string { return "内容未通过安全审
 
 func (e *ContentRejectedError) ErrCode() int { return errcode.CodeContentRejected }
 
+// ScanUnavailableError 病毒扫描不可用拒收（core#161：moderation.clamav.strict=true
+// 且 clamd 不可达/超时/内容超 max_scan_bytes ⇒ 无法完成扫描 ⇒ 拒收该次上传）。
+//
+// 错误码复用 CodeContentRejected（30013，contracts 冻结不新增码）：语义上同属
+// 「审核层拒收」，且 30013 在前端 DYNAMIC_MESSAGE_CODES 里走**后端原文优先**
+// ⇒ 「病毒扫描暂不可用，请稍后重试」能直达用户（若改用 10006 会被前端 i18n
+// 覆盖成笼统的「服务不可用」，可操作信息丢失）。HTTP 403 与内容拒收同口径。
+type ScanUnavailableError struct{}
+
+func (e *ScanUnavailableError) Error() string { return "病毒扫描暂不可用，请稍后重试" }
+
+func (e *ScanUnavailableError) ErrCode() int { return errcode.CodeContentRejected }
+
 // ShareBlockedError 分享处于管控拒绝态（管理员禁用 / 待审核）。
 // handler 侧按 ErrCode 透传（20012 blocked / 20013 pending_review）。
 // 实现收口 pkg/errors.ShareBlocked——历史上 anonymous.BlockedError 持有一份
@@ -588,6 +601,11 @@ func (s *Service) inspectText(ctx context.Context, text string) (bool, error) {
 // inspectFile 单文件审核判定（语义同 inspectText；meta 由各通道自组）。
 func (s *Service) inspectFile(ctx context.Context, meta moderation.UploadMeta) (bool, error) {
 	switch s.moderator.InspectFile(ctx, meta) {
+	case moderation.VerdictScanUnavailable:
+		// strict 模式扫描不可用（core#161）：拒收且文案可操作；
+		// 计数走独立拒因（非内容命中，不污染 moderationHits）。
+		metrics.RecordRejected(metrics.RejectScanUnavailable)
+		return false, &ScanUnavailableError{}
 	case moderation.VerdictReject:
 		metrics.RecordModerationHit("reject")
 		metrics.RecordRejected(metrics.RejectModerated)

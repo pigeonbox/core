@@ -164,6 +164,9 @@ type DiagnosticsClamAV struct {
 	Enabled bool `json:"enabled"`
 	// Addr clamd 地址（enabled 时）。
 	Addr string `json:"addr,omitempty"`
+	// Strict 失败策略（core#161）：true = 扫描不可用时拒收（此时 DegradedCount
+	// 即拒收次数）；false = fail-open 放行（DegradedCount 即放行次数）。
+	Strict bool `json:"strict"`
 	// LastPing 最近一次探活（诊断端点读取前惰性探测）；未启用时缺省。
 	LastPing *DiagnosticsClamAVPing `json:"last_ping,omitempty"`
 	// Degraded 已启用但扫描器当前不可用（fail-open 放行中）。
@@ -324,7 +327,8 @@ func diagnosticsModeration() DiagnosticsModeration {
 	}
 	mod.ClamAV.Enabled = true
 	mod.ClamAV.Addr = clam.Addr()
-	_ = clam.Ping() // 惰性探活（结果记入 Health；错误不向请求方传播）
+	mod.ClamAV.Strict = clam.Strict() // core#161：让运维一眼分清 degraded 计数是放行还是拒收
+	_ = clam.Ping()                   // 惰性探活（结果记入 Health；错误不向请求方传播）
 	h := clam.Health()
 	if h.LastPing != nil {
 		mod.ClamAV.LastPing = &DiagnosticsClamAVPing{

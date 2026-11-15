@@ -70,7 +70,7 @@ func fakeClamd(t *testing.T) string {
 
 func TestClamAVModerator_ScanReader(t *testing.T) {
 	addr := fakeClamd(t)
-	m := NewClamAVModerator(addr, 5, 0, nil)
+	m := NewClamAVModerator(addr, 5, 0, nil, false)
 
 	// 干净内容
 	sig, err := m.ScanReader(context.Background(), strings.NewReader("hello world"))
@@ -86,7 +86,7 @@ func TestClamAVModerator_ScanReader(t *testing.T) {
 func TestClamAVModerator_InspectFile(t *testing.T) {
 	addr := fakeClamd(t)
 	opener := &fakeOpener{content: "clean content"}
-	m := NewClamAVModerator(addr, 5, 1024, opener)
+	m := NewClamAVModerator(addr, 5, 1024, opener, false)
 
 	// 正常扫描放行
 	assert.Equal(t, VerdictAllow, m.InspectFile(context.Background(), UploadMeta{
@@ -110,7 +110,7 @@ func TestClamAVModerator_InspectFile(t *testing.T) {
 
 func TestClamAVModerator_FailOpen(t *testing.T) {
 	// 不存在的地址 → 连接失败 → fail-open 放行
-	m := NewClamAVModerator("127.0.0.1:1", 1, 0, &fakeOpener{content: "x"})
+	m := NewClamAVModerator("127.0.0.1:1", 1, 0, &fakeOpener{content: "x"}, false)
 	assert.Equal(t, VerdictAllow, m.InspectFile(context.Background(), UploadMeta{
 		StoragePath: "uploads/x.txt", FileName: "x.txt", Size: 1,
 	}))
@@ -120,7 +120,7 @@ func TestCombinedModerator(t *testing.T) {
 	addr := fakeClamd(t)
 	word := NewWordListModerator([]string{"badword"}, "reject")
 	opener := &fakeOpener{content: "EICAR"}
-	clam := NewClamAVModerator(addr, 5, 0, opener)
+	clam := NewClamAVModerator(addr, 5, 0, opener, false)
 	comb := NewCombinedModerator(word, clam)
 
 	// 文本走词表
