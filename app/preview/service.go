@@ -101,7 +101,7 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 	preview, err := s.previewRepo.GetByFileCodeID(ctx, fileCode.ID)
 	if err == nil {
 		if !previewThumbMissing(preview) {
-			return s.renderThumbURL(preview, req.Code), nil
+			return applyCountBodyPolicy(fileCode, s.renderThumbURL(preview, req.Code)), nil
 		}
 		// core#139：修「缩略图从未落盘」缺陷之前生成的 image 行 thumbnail 恒空，
 		// 旧行为以「行存在」当缓存命中 ⇒ 这些行**永不补图**。空 Thumbnail 的
@@ -120,7 +120,33 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 	if err != nil {
 		return nil, ErrPreviewUnavailable
 	}
-	return s.renderThumbURL(preview, req.Code), nil
+	return applyCountBodyPolicy(fileCode, s.renderThumbURL(preview, req.Code)), nil
+}
+
+// countBodyNotice count 型分享的预览引导文案（core#170）。
+const countBodyNotice = "该分享按取件次数限制，预览不提供正文；完整内容请取件后查看。"
+
+// applyCountBodyPolicy 正文交付策略（core#170）：count 型分享的预览**不交付正文**
+// —— text_content（CodeGenerator 读满 1MB 原文，对文本/代码类基本等于全文）替换为
+// 固定引导文案；无限次分享（ExpiredCount=-1）无次数语义可破，全文预览保持不变。
+//
+// 为什么选「不交付」而不是「预览也扣次」（与取件计次设计稿 17 条不变量对齐）：
+//   - 不变量 1「扣次点 = 内容交付前」：本策略让预览不再是正文交付面 ⇒ 正文只在
+//     已扣次的交付面（文本 select / 文件 download）交付，无未扣次交付 ⇒ 自动成立；
+//   - 「预览也扣次」做不到：预览请求不携带下载令牌 ⇒ 计次键无法与下载会话共享；
+//     若按 TextViewKey(code,IP) 扣，文件分享的同一取件人会被扣两次（预览一次 +
+//     下载令牌一次），count=1 的收件人「先预览后下载」被 20004 挡死——预览烧掉
+//     唯一一次取件，违反不变量 2/3 的取件会话语义；
+//   - 图片/缩略图预览不受影响（派生缩略图不是交付物本体，行业惯例不扣次）。
+//
+// 只改响应面：传入的行是本请求新扫描（或刚持久化完）的对象，本函数不回写 DB
+// （缓存行保留全文，分享转为无限次时预览立即恢复全文）。
+func applyCountBodyPolicy(fc *model.FileCode, p *model.FilePreview) *model.FilePreview {
+	if p == nil || fc == nil || fc.ExpiredCount < 0 || p.TextContent == "" {
+		return p
+	}
+	p.TextContent = countBodyNotice
+	return p
 }
 
 // previewThumbMissing 判定「行存在但缓存不可信」的存量坏行：image 行的
