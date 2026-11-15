@@ -14,6 +14,7 @@ import (
 	"github.com/pigeonbox/contracts/errcode"
 	admin "github.com/pigeonbox/contracts/gen/admin"
 	adminsvc "github.com/pigeonbox/core/app/admin"
+	appconfig "github.com/pigeonbox/core/app/config"
 	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -339,7 +340,12 @@ func AdminGetConfig(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	c.JSON(consts.StatusOK, map[string]interface{}{"code": 0, "message": "success", "data": cfg})
+	// policy_templates 顶层键（hub#368 策略模板清单）：复用本端点的宽松响应面，
+	// 不新增端点、不动 contracts。data 仍是 SystemConfig 全量 JSON，形状不变。
+	c.JSON(consts.StatusOK, map[string]interface{}{
+		"code": 0, "message": "success", "data": cfg,
+		"policy_templates": appconfig.PolicyTemplates(),
+	})
 }
 
 // AdminUpdateConfig .
@@ -358,6 +364,37 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 	if !json.Valid(body) {
 		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "配置体必须是合法 JSON 对象")
 		return
+	}
+	// 策略模板应用通道（hub#368）：body 含 "policy_template" 键 ⇒ 走模板 apply。
+	// 复用本端点的宽松 body 面，不新增端点/不动 contracts；模板键与配置段互斥
+	// （混提交是调用方错误，400 点名，避免「模板没生效还返回 success」的假成功）。
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(body, &probe); err == nil {
+		if raw, ok := probe["policy_template"]; ok {
+			if len(probe) != 1 {
+				resp.NewErrorWithMessage(c, errcode.CodeInvalidParam,
+					"policy_template 必须单独提交，不得与配置段混用")
+				return
+			}
+			var id string
+			if err := json.Unmarshal(raw, &id); err != nil || id == "" {
+				resp.NewErrorWithMessage(c, errcode.CodeInvalidParam,
+					"policy_template 必须是非空字符串（模板 ID）")
+				return
+			}
+			if err := getAdminService().ApplyPolicyTemplate(ctx, id); err != nil {
+				// 模板类可操作错误（未知 ID/非法组合）⇒ 400 + 具体文案；
+				// DB/基建错误 ⇒ 500 脱敏（既有出口）
+				if errors.Is(err, appconfig.ErrPolicyInvalid) {
+					resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+					return
+				}
+				resp.NewInternalError(c, errcode.CodeInternal, "应用策略模板", err)
+				return
+			}
+			c.JSON(consts.StatusOK, &admin.AdminUpdateConfigResp{Code: 0, Message: "success"})
+			return
+		}
 	}
 	if err := getAdminService().UpdateConfigJSON(ctx, body); err != nil {
 		resp.NewInternalError(c, errcode.CodeInternal, "保存配置", err)
