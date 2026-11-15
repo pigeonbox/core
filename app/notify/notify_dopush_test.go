@@ -20,6 +20,7 @@ import (
 // TestDoPush_2xxEmptyBodyDelivered 2xx+空响应体 ⇒ nil（送达，响应体不关心）。
 // 负对照：非 2xx 必须回 error（TestDoPush_Non2xxFails）。
 func TestDoPush_2xxEmptyBodyDelivered(t *testing.T) {
+	allowPrivatePush(t) // core#181 dialGuard：httptest 在环回，放行私网
 	srv, _ := newRecordingServer(t, 200)
 	req := httpjson.Request{Method: "POST", URL: srv.URL, Body: []byte(`{"event":"t"}`)}
 	require.NoError(t, doPush(context.Background(), req))
@@ -28,6 +29,7 @@ func TestDoPush_2xxEmptyBodyDelivered(t *testing.T) {
 // TestDoPush_Non2xxFails 非 2xx（500 且响应体为空）必须回 error——防止「一律
 // 放行」式过度简化把 StatusError 语义也丢了。
 func TestDoPush_Non2xxFails(t *testing.T) {
+	allowPrivatePush(t) // core#181 dialGuard：httptest 在环回，放行私网
 	srv, _ := newRecordingServer(t, 500)
 	req := httpjson.Request{Method: "POST", URL: srv.URL, Body: []byte(`{"event":"t"}`)}
 	err := doPush(context.Background(), req)

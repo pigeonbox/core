@@ -144,6 +144,10 @@ func newFakeRegistry(t *testing.T) (*fakeRegistry, *httptest.Server) {
 
 func newTestService(t *testing.T, regURL string) *Node {
 	t.Helper()
+	// core#181：TargetFederation/Directory 挂 dialGuard 后环回首跳默认被拨号
+	// 复判拦下——fake registry 在环回是测试环境产物，放行私网（拨号复判本体
+	// 由 pkg/outbound/TestSSRFDial_ExtendedTargetsGuardedAtDialTime 覆盖）。
+	t.Cleanup(allowPrivateNetworks(t, true))
 	cfg := conf.FederationConfig{
 		Enabled:                true,
 		RegistryURL:            regURL,
@@ -397,6 +401,8 @@ func TestTickBackoffFlag(t *testing.T) {
 // TestMultiRegistryFailover 主备双 registry: 主宕机时公告/解析落在备；
 // 主恢复前 resolve 依次查（此处验证"主 500 → 备命中"路径）。
 func TestMultiRegistryFailover(t *testing.T) {
+	// core#181 dialGuard：环回首跳放行（同 newTestService 口径）
+	t.Cleanup(allowPrivateNetworks(t, true))
 	primary, srvP := newFakeRegistry(t)
 	secondary, srvS := newFakeRegistry(t)
 	s, err := NewNode(conf.FederationConfig{
@@ -451,6 +457,8 @@ func TestMultiRegistryFailover(t *testing.T) {
 
 // TestMultiRegistryResolveOrder 主备都健康且只有备有公告时,主 miss 应落到备命中。
 func TestMultiRegistryResolveOrder(t *testing.T) {
+	// core#181 dialGuard：环回首跳放行（同 newTestService 口径）
+	t.Cleanup(allowPrivateNetworks(t, true))
 	_, srvP := newFakeRegistry(t)
 	secondary, srvS := newFakeRegistry(t)
 	s, err := NewNode(conf.FederationConfig{
