@@ -109,6 +109,10 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 	// （core#122 通知渠道测试发送已于 2026-11-13 收敛进 IDL：admin.thrift ⇒
 	// gen/router/admin 生成路由，本表的 Pending 条目随之移除——测试里的 ⑥「IDL
 	// 集与手写集互斥」即它的回归锁：手写注册加回即红。）
+	"GET /api/v1/user/shares/:code/timeline": {
+		Reason:  "取件时间线（frontend-core#93）：contracts 仓在本 PR 冻结、无法给 UserShareItemData/新 Resp 加字段，且无既有 per-share 未锁形扩展面 ⇒ 手写面过渡（与 /api/v1/user/shares 同鉴权 UserOrAPIKey）；下趟 contracts 开闸后收敛进 share.thrift（Pending 债务）",
+		Pending: true,
+	},
 	"POST /api/v1/mcp": {
 		Reason:  "协议面：MCP（Streamable HTTP）JSON-RPC 流，**不是** REST/JSON 包络 ⇒ thrift IDL 模型表达不了",
 		Pending: false,

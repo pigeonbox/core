@@ -487,6 +487,14 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		if errors.Is(err, shareService.ErrShareGone) {
 			gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
 		}
+		// 取件失败事件（frontend-core#93）：过期**可归因**（码已解析到规范分享码）
+		// ⇒ 落一条失败事件供 owner 取件时间线展示；只记录、不扣次，且与上面的
+		// 枚举桶正交（过期不入桶是 core#182 口径，这里只是观测记录）。
+		var expired *shareService.ExpiredShareError
+		if errors.As(err, &expired) {
+			getShareService().RecordPickupFailure(ctx, expired.Code,
+				model.PickupFailExpired, "select", middleware.ClientIP(c))
+		}
 		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return
 	}
@@ -519,6 +527,10 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		already, _ := getShareService().HasPickupCharge(ctx, fileCode.Code,
 			security.TextViewKey(fileCode.Code, middleware.ClientIP(c)))
 		if !already {
+			// 取件失败事件（frontend-core#93）：20004 次数耗尽是寄件者要看见的
+			// 失败面之一（与 404 过期语义分开）；只记录、不扣次。
+			getShareService().RecordPickupFailure(ctx, fileCode.Code,
+				model.PickupFailCountExhausted, "select", middleware.ClientIP(c))
 			resp.NewErrorWithMessage(c, errcode.CodeShareReachLimit, "超过取件次数")
 			return
 		}
@@ -551,7 +563,11 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 			resp.NewErrorWithData(c, errcode.CodeSharePasswordWrong, "需要密码", map[string]interface{}{"has_password": true})
 			return
 		case gate.PickupPasswordWrong:
-			// 失败已由闸门在统一键记账（达到阈值触发锁定）
+			// 失败已由闸门在统一键记账（达到阈值触发锁定）；另落一条失败事件
+			// （frontend-core#93，只记录、不扣次）供 owner 时间线展示。
+			// 缺密码（PickupPasswordMissing）是提示态、闸门也不计数 ⇒ 同口径不落事件。
+			getShareService().RecordPickupFailure(ctx, fileCode.Code,
+				model.PickupFailPasswordWrong, "select", middleware.ClientIP(c))
 			resp.NewErrorWithMessage(c, errcode.CodeSharePasswordWrong, "密码错误")
 			return
 		}
@@ -717,6 +733,12 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 		if errors.Is(err, shareService.ErrShareGone) {
 			gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
 		}
+		// 取件失败事件（frontend-core#93）：过期可归因 ⇒ 落事件（下载面）。
+		var expired *shareService.ExpiredShareError
+		if errors.As(err, &expired) {
+			getShareService().RecordPickupFailure(ctx, expired.Code,
+				model.PickupFailExpired, "download", middleware.ClientIP(c))
+		}
 		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return nil, "", false
 	}
@@ -780,7 +802,10 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 			return nil, "", false
 		}
 		if err.Error() == "密码错误" {
-			// 失败已由域内统一闸门记账（达阈值触发锁定），此处不再重复计数
+			// 失败已由域内统一闸门记账（达阈值触发锁定），此处不再重复计数；
+			// 另落一条失败事件（frontend-core#93，只记录、不扣次）。
+			getShareService().RecordPickupFailure(ctx, fileCode.Code,
+				model.PickupFailPasswordWrong, "download", viewerIP)
 			resp.NewErrorWithData(c, errcode.CodeSharePasswordWrong, "密码错误", map[string]interface{}{"has_password": true})
 			return nil, "", false
 		}
@@ -828,6 +853,10 @@ func chargePickup(ctx context.Context, c *app.RequestContext, code, fingerprint,
 		return false
 	}
 	if exhausted {
+		// 取件失败事件（frontend-core#93）：交付点扣次撞上限——20004 次数耗尽
+		// 落事件（只记录、不扣次；本次失败本来就没扣成）。
+		getShareService().RecordPickupFailure(ctx, code,
+			model.PickupFailCountExhausted, channel, viewerIP)
 		// 20004「超过取件次数」（保留码位，此前未发射；前端 i18n 已备该文案）
 		resp.NewErrorWithMessage(c, errcode.CodeShareReachLimit, "超过取件次数")
 		return false

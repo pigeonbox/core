@@ -55,6 +55,12 @@ func customizedRegister(r *server.Hertz) {
 	// 此前端点缺失导致前端启动报 "获取配置失败: Network Error"。此处补齐。
 	r.GET("/api/config", publicConfigHandler)
 
+	// ===== 取件时间线（frontend-core#93；手写过渡，待收敛进 contracts IDL）=====
+	// 寄件者「谁在何时因何失败」：与 GET /api/v1/user/shares 同口径鉴权
+	// （JWT / 用户级 API Key 二选一；API Key 走 ScopeUser，前缀判定自动覆盖）。
+	// 豁免登记：routes_classification_test 的 handwrittenRouteExemptions（Pending）。
+	r.GET("/api/v1/user/shares/:code/timeline", middleware.UserOrAPIKey(), customHandler.PickupTimeline)
+
 	// ===== 预览缩略图取件（二进制面；同款取件闸门在 app/preview）=====
 	// /preview/:code 的响应里 Thumbnail 即本路由 URL（密码经 X-Share-Password 头）。
 	r.GET("/preview/:code/thumb", customHandler.PreviewThumb)

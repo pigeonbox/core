@@ -182,6 +182,13 @@ func startMaintenanceJanitor() {
 		} else if n > 0 {
 			logger.Info("pickup charges cleaned", zap.Int64("count", n))
 		}
+		// 取件失败事件（frontend-core#93）：固定 7 天留存（janitor 常量），
+		// 不吃 admin.pickup_detail_retention_days（那是成功明细的留存）。
+		if n, err := j.CleanupPickupFailures(ctx); err != nil {
+			logger.Warn("pickup failure cleanup failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("pickup failures cleaned", zap.Int64("count", n))
+		}
 		if dirs, err := j.CleanupStaleUploads(ctx, 24*time.Hour); err != nil {
 			logger.Warn("stale chunk session cleanup failed", zap.Error(err))
 		} else if dirs > 0 {
