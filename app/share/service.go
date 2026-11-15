@@ -111,10 +111,10 @@ type Service struct {
 	fileFileRepo *dao.FileCodeFileRepository // 多文件子表 DAO（构造注入）
 	// blobRepo 文件生命周期账本 DAO（core#172 首片：blobs/file_references 双写与
 	// 硬删释放；nil = 账本面关闭，接入点全部降级为 no-op，见 blobref.go 取舍）。
-	blobRepo *dao.BlobRepository
-	userService  UserServiceInterface
-	storage      storage.StorageInterface
-	baseURL      string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
+	blobRepo    *dao.BlobRepository
+	userService UserServiceInterface
+	storage     storage.StorageInterface
+	baseURL     string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
 	// baseURLProvider 对外 base 地址的**动态**来源（2026-10-22 站点公网地址）。
 	// nil = 只用构造期的 baseURL（env/yaml 的 server.base_url）。
 	// 非 nil 时每次拼链接都问它 —— 管理后台改「站点公网地址」后**立即生效**，

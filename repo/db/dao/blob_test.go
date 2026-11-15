@@ -202,12 +202,12 @@ func TestListReclaimable_GraceAndRetry(t *testing.T) {
 	fresh := time.Now()
 
 	rows := []model.Blob{
-		{ObjectKey: "k-expired", State: model.BlobTrashed, TrashedAt: &old},   // 过宽限 ⇒ 候选
-		{ObjectKey: "k-fresh", State: model.BlobTrashed, TrashedAt: &fresh},   // 未过宽限 ⇒ 不候选
-		{ObjectKey: "k-active", State: model.BlobActive},                      // 有引用 ⇒ 不候选
-		{ObjectKey: "k-purge", State: model.BlobPurge},                        // 上轮删失败重试 ⇒ 候选
-		{ObjectKey: "k-purged", State: model.BlobPurged},                      // 终态 ⇒ 不候选
-		{ObjectKey: "k-notrash", State: model.BlobTrashed},                    // trashed_at 空 ⇒ 不候选（脏数据保守）
+		{ObjectKey: "k-expired", State: model.BlobTrashed, TrashedAt: &old}, // 过宽限 ⇒ 候选
+		{ObjectKey: "k-fresh", State: model.BlobTrashed, TrashedAt: &fresh}, // 未过宽限 ⇒ 不候选
+		{ObjectKey: "k-active", State: model.BlobActive},                    // 有引用 ⇒ 不候选
+		{ObjectKey: "k-purge", State: model.BlobPurge},                      // 上轮删失败重试 ⇒ 候选
+		{ObjectKey: "k-purged", State: model.BlobPurged},                    // 终态 ⇒ 不候选
+		{ObjectKey: "k-notrash", State: model.BlobTrashed},                  // trashed_at 空 ⇒ 不候选（脏数据保守）
 	}
 	for i := range rows {
 		require.NoError(t, g.Create(&rows[i]).Error)
