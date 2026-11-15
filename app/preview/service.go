@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/oekit/concurrency/syncx"
+	"github.com/oekit/pkg/stringx"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/gate"
 	previewService "github.com/pigeonbox/core/preview"
@@ -61,6 +62,20 @@ func (e *LockedError) Error() string { return fmt.Sprintf("locked for %ds", e.Re
 // 重复归还会把名额多还一个）。
 var previewGenGate = syncx.NewGate(2)
 
+// previewBodyRunes count 型分享的预览正文上限（rune 数）。core#170：
+// 预览面回传的 text_content 是文本/代码类文件的前 1MB（≈全文）且**从不扣次**
+// ⇒ count 型「最多取 N 次」对本面形同虚设（反复 GET /preview/<code> 即可
+// 无限读正文）。拍板口径：**仅无限次（ExpiredCount=-1）分享开放正文预览**；
+// count 型只回截断摘要 +「完整内容请取件」引导，全文仍走扣次的
+// select/download 面 ⇒ 计次设计稿 §3 不变量 1 的交付面枚举原样成立（17 条
+// 一条不破）。不选「preview 扣次」：本面没有下载令牌 ⇒ 扣次键只能 (码,IP)，
+// 与 /share/download 的令牌指纹键分叉 ⇒ 预览+下载对同一取件人扣 2 次
+// （D1 家族回归），且 N=1 分享开页自动预览即烧掉唯一一次取件。
+const previewBodyRunes = 500
+
+// previewBodyHint 截断后的引导文案（与 MCP preview_share 同一句）。
+const previewBodyHint = "\n…（预览截断，全文见取件页或下载）"
+
 // Service 预览域服务。存储实例由 bootstrap 注入；nil 时预览生成不可用
 // （回归 2026-10-03：此前硬编码 data/uploads 路径基，与统一存储不一致）。
 type Service struct {
@@ -101,7 +116,7 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 	preview, err := s.previewRepo.GetByFileCodeID(ctx, fileCode.ID)
 	if err == nil {
 		if !previewThumbMissing(preview) {
-			return s.renderThumbURL(preview, req.Code), nil
+			return s.renderOutput(fileCode, preview, req.Code), nil
 		}
 		// core#139：修「缩略图从未落盘」缺陷之前生成的 image 行 thumbnail 恒空，
 		// 旧行为以「行存在」当缓存命中 ⇒ 这些行**永不补图**。空 Thumbnail 的
@@ -120,7 +135,7 @@ func (s *Service) GetOrCreate(ctx context.Context, req GetReq) (*model.FilePrevi
 	if err != nil {
 		return nil, ErrPreviewUnavailable
 	}
-	return s.renderThumbURL(preview, req.Code), nil
+	return s.renderOutput(fileCode, preview, req.Code), nil
 }
 
 // previewThumbMissing 判定「行存在但缓存不可信」的存量坏行：image 行的
@@ -217,6 +232,30 @@ func (s *Service) renderThumbURL(preview *model.FilePreview, code string) *model
 	}
 	preview.Thumbnail = "/preview/" + code + "/thumb"
 	return preview
+}
+
+// renderOutput 出口面渲染：缩略图 URL 改写 + count 型正文截断（core#170）。
+//
+// 截断是**响应侧策略**：DB 缓存行保留全文（缓存不因出口口径失真），只改回传
+// 值；两个出口（缓存命中 / 现场生成）经此单点收口 ⇒ HTTP /preview/:code 与
+// MCP preview_share（同走 GetOrCreate）一次覆盖。缩略图/图片/无限次不受影响。
+func (s *Service) renderOutput(fc *model.FileCode, pv *model.FilePreview, code string) *model.FilePreview {
+	out := s.renderThumbURL(pv, code)
+	if out == nil || out.TextContent == "" || fc == nil {
+		return out
+	}
+	// 无限次（ExpiredCount=-1）：无次数承诺可破 ⇒ 正文预览不受限
+	//（图片/缩略图预览同理不扣次、不受限——行业惯例口径）。
+	if fc.ExpiredCount == -1 {
+		return out
+	}
+	// count 型：本面契约口径是「预览摘要」（share_surface_contract_test），
+	// 回全文=交付物本体泄漏 ⇒ 超长才截 + 引导（stringx.FirstN，与 MCP 同款）。
+	if trimmed := stringx.FirstN(out.TextContent, previewBodyRunes, previewBodyHint); trimmed != out.TextContent {
+		out.TextContent = trimmed
+		out.Truncated = true
+	}
+	return out
 }
 
 // GetThumb 缩略图取件：同款取件闸门后回缓存目录里的缩略图文件。

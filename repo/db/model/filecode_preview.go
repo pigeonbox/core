@@ -14,6 +14,7 @@ type FilePreview struct {
 	Duration    int       `json:"duration"`                                 // 时长（秒）
 	PageCount   int       `json:"page_count"`                               // 页数
 	TextContent string    `gorm:"type:text" json:"text_content"`            // 文本内容
+	Truncated   bool      `gorm:"-" json:"truncated,omitempty"`             // 响应侧标记：count 型正文被截断（非列，见 app/preview.renderOutput）
 	MimeType    string    `gorm:"size:50" json:"mime_type"`                 // MIME类型
 	FileSize    int64     `json:"file_size"`                                // 文件大小
 	CreatedAt   time.Time `json:"created_at"`

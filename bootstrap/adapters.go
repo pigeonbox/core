@@ -181,7 +181,8 @@ func (a mcpPreviewAdapter) Preview(ctx context.Context, req mcpApp.PreviewReq) (
 	}
 	return &mcpApp.PreviewResult{
 		PreviewType: fp.PreviewType, MimeType: fp.MimeType, TextContent: fp.TextContent,
-		FileSize: fp.FileSize, Width: fp.Width, Height: fp.Height,
+		Truncated: fp.Truncated,
+		FileSize:  fp.FileSize, Width: fp.Width, Height: fp.Height,
 		PageCount: fp.PageCount, Duration: fp.Duration,
 	}, nil
 }

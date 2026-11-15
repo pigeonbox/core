@@ -146,6 +146,7 @@ type PreviewResult struct {
 	PreviewType string
 	MimeType    string
 	TextContent string
+	Truncated   bool // core#170：count 型正文已在 preview 域出口截断
 	FileSize    int64
 	Width       int
 	Height      int

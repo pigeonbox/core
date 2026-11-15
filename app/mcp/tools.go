@@ -402,11 +402,14 @@ func (s *Service) previewShare(ctx context.Context, in previewShareIn, caller Ca
 		return previewShareOut{}, fmt.Errorf("预览失败: %w", err)
 	}
 	text := res.TextContent
-	truncated := false
+	// core#170：count 型正文已在 preview 域出口截断（Truncated 随结果带出）；
+	// 本层 8000 上限只兜底无限次分享的超长正文。
+	truncated := res.Truncated
 	const capRunes = 8000
 	// 截断收编 oekit/pkg/stringx.FirstN（超长才截 + 追加提示语，与手搓版逐位一致）
 	trimmed := stringx.FirstN(text, capRunes, "\n…（预览截断，全文见取件页或下载）")
-	if truncated = trimmed != text; truncated {
+	if trimmed != text {
+		truncated = true
 		text = trimmed
 	}
 	return previewShareOut{
