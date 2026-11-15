@@ -378,6 +378,10 @@ func (e *QuotaExceededError) ErrCode() int  { return errcode.CodeStorageQuota }
 // CheckQuota 存储配额强制检查（上传前调用）。
 // 生效优先级：用户级 MaxStorageQuota > 系统默认 user.user_storage_quota；0 = 不限。
 // 已用配额以 file_codes 表实时聚合为准（比 users.total_storage 计数器更抗漂移）。
+//
+// ⚠️ 调用契约（core#169）：本方法是**读-比-放行**原语，单独调用不原子——
+// 生产唯一调用方是 share.reserveUploadCaps 的配额预留临界区（在途预留折进
+// addBytes 后再判定），不得在该账本外直接调用它做放行判定。
 func (s *Service) CheckQuota(ctx context.Context, userID uint, addBytes int64) error {
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {

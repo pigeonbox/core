@@ -96,10 +96,13 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 		seenPath[key] = struct{}{}
 	}
 
-	// 单用户单次上传总大小上限 + 存储配额（合计一次校验/扣检）
-	if err := s.checkUploadCaps(ctx, req.UserID, totalSize); err != nil {
+	// 单用户单次上传总大小上限 + 存储配额（合计一次判定/预留，core#169：
+	// 与单文件通道同款预留账本，defer 覆盖 insert 及其后全部路径）
+	release, err := s.reserveUploadCaps(ctx, req.UserID, totalSize)
+	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	// 内容审核：逐文件判定，任一命中即整单处置（reject 拒绝 / pending 待审）
 	filePending := false

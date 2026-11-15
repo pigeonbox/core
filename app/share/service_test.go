@@ -411,7 +411,7 @@ func TestCreateShare_UserUploadSizeCap(t *testing.T) {
 			FilePath: "a/b", Size: 200, ExpiredCount: -1, UserID: &uid,
 		})
 		assert.Error(t, err)
-		// 单文件/多文件通道统一走 checkUploadCaps，文案单一真相（"总大小"对单文件即文件大小）
+		// 单文件/多文件通道统一走 reserveUploadCaps，文案单一真相（"总大小"对单文件即文件大小）
 		assert.Contains(t, err.Error(), "上传总大小超过限制")
 	})
 	t.Run("未超上限放行", func(t *testing.T) {
