@@ -28,6 +28,7 @@ import (
 	"github.com/oekit/pkg/cache"
 	"github.com/oekit/pkg/httpjson"
 	"github.com/oekit/pkg/secretx"
+	"github.com/pigeonbox/core/internal/authn"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/pkg/security"
@@ -49,21 +50,19 @@ var ErrAccountDisabled = errors.New("OIDC 登录被拒绝：账号已被禁用")
 // 绝不把注入类邮箱写进库/参与匹配（不静默降级占位邮箱——那又是静默改义）。
 var ErrEmailInvalid = errors.New("OIDC 登录被拒绝：身份提供方返回的邮箱格式无效")
 
-// ErrAdminMFARequired 匹配命中的本地账号是**已启用 MFA 的管理员**（wave1 A1
-// 终审 must-fix）：OIDC 回调链路没有二验环节，按 DB 角色直接签发 admin JWT
-// 即绕过已启用的 MFA（authn.VerifySecondFactor 只在本地 admin 登录与 user
-// TOTP 两处调用，OIDC 此前零检查）⇒ **不签发**，回调走 oidcPublicError 呈现
-// 「使用账号密码登录」引导。
+// 半会话换发的两个哨兵（core#180，wave1 A1 拒绝方案的 proper 修法）。
 //
-// 拦截条件必须是 admin && TotpEnabled **同时**成立（见 ExchangeCallback）：
-// 未开 MFA 的 admin 走 OIDC 属支持路径（不禁）；user 角色不论是否开 TOTP
-// 走 OIDC 不受影响。
-//
-// 已知残差（拒绝方案的固有边，proper 修法=回调后强制二验半会话，另开
-// follow-up issue）：无口令的 OIDC 原生管理员（JIT 号被提为 admin 后开了
-// TOTP）会被本拦截挡在 OIDC 外且无本地口令可登 ⇒ 锁死；逃生=运维 DB 置
-// totp_enabled=0 或先补口令。
-var ErrAdminMFARequired = errors.New("OIDC 登录被拒绝：管理员已启用两步验证，请使用账号密码登录")
+// 背景：#187 曾用 ErrAdminMFARequired「拒绝签发」封口——无口令的 OIDC 原生
+// 管理员（JIT 号被提为 admin 后开了 TotpSetup/TotpEnable 不校验口令）会被
+// 挡在 OIDC 外且无本地口令可登 ⇒ 锁死。proper 修法（本 issue）：改发
+// pending-2FA 半会话 → 前端二验页 → 换发正式会话。
+var (
+	// ErrMFASessionInvalid 换发输入的半会话不可用（非 pending / 解析失败 /
+	// 已吊销）——handler 映射 401 并清 Cookie。
+	ErrMFASessionInvalid = errors.New("半会话无效，请重新登录")
+	// ErrMFACodeInvalid 二验码错误——handler 映射 40013。
+	ErrMFACodeInvalid = errors.New("二次验证码错误")
+)
 
 // ErrStateInvalid state 校验失败（过期/伪造/缺少浏览器绑定）。
 //
@@ -161,6 +160,13 @@ func (s *Service) FrontendCallback() string {
 		sep = "&"
 	}
 	return s.cfg.FrontendCallback + sep + "token="
+}
+
+// FrontendMFACallback 半会话回跳地址：FrontendCallback 挂 mfa_pending=1，
+// 前端据此渲染二验输入页（core#180；FrontendCallback 恒带 token= 查询位，
+// 追加 & 恒合法）。
+func (s *Service) FrontendMFACallback() string {
+	return s.FrontendCallback() + "&mfa_pending=1"
 }
 
 // discover 取发现文档（SingleValue 全托管：命中直接返回；过期后并发经内置
@@ -364,17 +370,61 @@ func (s *Service) ExchangeCallback(ctx context.Context, baseURL, code, state, no
 		return "", err
 	}
 
-	// 4. MFA 拦截（wave1 A1 终审 must-fix）：已启用二验的管理员不得经 OIDC
-	// 签发会话——OIDC 回调没有二验环节，按 DB 角色直签 admin JWT 即绕过
-	// 已启用的 MFA（本地 admin 登录在同位查 TotpEnabled 并走
-	// authn.VerifySecondFactor，OIDC 此前零检查）。两条件必须同时成立：
-	// 未开 MFA 的 admin 走 OIDC 属支持路径；user 角色不受影响。
+	// 4. 半会话（core#180，wave1 A1 拒绝方案的 proper 修法）：已启用二验的
+	// 管理员不直接签发正式会话——改发 pending-2FA 半会话（MFAPending 声明），
+	// 回调 302 到前端二验页（mfa_pending=1），经 POST /api/v1/user/oidc/mfa
+	// 过 authn.VerifySecondFactor 后换发正式会话（OIDC 原生无口令管理员不再
+	// 被锁死）。两条件必须同时成立：未开 MFA 的 admin 走 OIDC 属支持路径；
+	// user 角色不受影响。
 	if user.Role == "admin" && user.TotpEnabled {
-		return "", ErrAdminMFARequired
+		return auth.GeneratePendingMFAToken(user.ID, user.Username, user.Role)
 	}
 
 	// 5. 签发本站 JWT
 	return auth.GenerateToken(user.ID, user.Username, user.Role)
+}
+
+// ExchangeMFASession 半会话换发正式会话（core#180 的换发半程）：
+//  1. halfToken 必须是 pending-2FA 且未吊销的半会话；
+//  2. 按 DB 现值复核账号 active（换发瞬间封禁/降权即时生效）；
+//  3. 二验走 authn.VerifySecondFactor——与本地 admin 登录**同一判据**
+//     （TOTP 优先、恢复码单次核销）；
+//  4. 通过后按 DB 现值签发正式 JWT，并吊销半会话（一次性，防重放再换）。
+//
+// TotpEnabled 在半会话签发后被关闭的边：按现值不再要求码（与本地登录
+// 「未开二验不查码」同口径）——换发仍需有效半会话，无绕过面。
+func (s *Service) ExchangeMFASession(ctx context.Context, halfToken, code string) (string, error) {
+	claims, err := auth.ParseToken(halfToken)
+	if err != nil || !claims.MFAPending {
+		return "", ErrMFASessionInvalid
+	}
+	if auth.IsTokenRevoked(ctx, halfToken) {
+		return "", ErrMFASessionInvalid
+	}
+	user, err := s.userRepo.GetByID(ctx, claims.UserID)
+	if err != nil {
+		return "", fmt.Errorf("半会话换发读取用户失败: %w", err)
+	}
+	if user.Status != "active" {
+		return "", ErrAccountDisabled
+	}
+	if user.TotpEnabled {
+		ok, err := authn.VerifySecondFactor(ctx, s.userRepo, user.ID, code)
+		if err != nil {
+			return "", fmt.Errorf("二验校验失败: %w", err)
+		}
+		if !ok {
+			return "", ErrMFACodeInvalid
+		}
+	}
+	full, err := auth.GenerateToken(user.ID, user.Username, user.Role)
+	if err != nil {
+		return "", err
+	}
+	if remaining := time.Until(claims.ExpiresAt.Time); remaining > 0 {
+		auth.RevokeToken(ctx, halfToken, remaining)
+	}
+	return full, nil
 }
 
 // matchOrCreate (issuer,sub) → email → 建号

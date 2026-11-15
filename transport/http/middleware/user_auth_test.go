@@ -147,3 +147,34 @@ func TestUserAuthRejectsMissingAndNonJWT(t *testing.T) {
 		ut.Header{Key: "Cookie", Value: "pb_token=forged"})
 	assert.DeepEqual(t, http.StatusUnauthorized, w.Result().StatusCode())
 }
+
+// 半会话（core#180）在用户面同样拒：pending-2FA 令牌只可走二验换发端点
+// （POST /api/v1/user/oidc/mfa），UserAuth 与 pkg AuthMiddleware/AdminMiddleware
+// 一致拒绝——否则半会话可在 /api/v1/user/* 面自由活动。
+//
+// 负对照（改错转红）：摘掉 UserAuth 的 claims.MFAPending 分支 ⇒ 401 断言
+// 转红（半会话放行业务 handler）。
+func TestUserAuthRejectsMFAPendingSession(t *testing.T) {
+	auth.SetJWTSecret("test-secret-for-userauth-cookie-32chars!")
+	t.Cleanup(func() { auth.SetJWTSecret("") })
+
+	pending, err := auth.GeneratePendingMFAToken(3, "alice", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ran := false
+	h := server.New(server.WithHostPorts("127.0.0.1:0"))
+	h.GET("/t", UserAuth(), func(ctx context.Context, c *app.RequestContext) {
+		ran = true
+		c.JSON(http.StatusOK, map[string]int{"code": 0})
+	})
+
+	w := ut.PerformRequest(h.Engine, http.MethodGet, "/t", nil,
+		ut.Header{Key: "Cookie", Value: "pb_token=" + pending},
+		ut.Header{Key: "X-Requested-With", Value: "XMLHttpRequest"})
+	assert.DeepEqual(t, http.StatusUnauthorized, w.Result().StatusCode())
+	if ran {
+		t.Fatal("半会话不得放行用户面业务 handler")
+	}
+}

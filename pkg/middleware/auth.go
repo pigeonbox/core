@@ -242,6 +242,17 @@ func AuthMiddleware() app.HandlerFunc {
 			return
 		}
 
+		// 半会话（core#180）：pending-2FA 令牌只可走二验换发端点
+		//（POST /api/v1/user/oidc/mfa，不经本中间件），其余认证面一律拒。
+		if claims.MFAPending {
+			c.JSON(http.StatusUnauthorized, map[string]interface{}{
+				"code":    errcode.CodeUnauthorized,
+				"message": "需要完成二次验证",
+			})
+			c.Abort()
+			return
+		}
+
 		// 注销黑名单检查（logout 端点写入；已注销 token 即刻失效）
 		if auth.IsTokenRevoked(ctx, token) {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
@@ -318,6 +329,17 @@ func AdminMiddleware() app.HandlerFunc {
 			c.JSON(http.StatusUnauthorized, map[string]interface{}{
 				"code":    errcode.CodeUnauthorized,
 				"message": "Invalid or expired token",
+			})
+			c.Abort()
+			return
+		}
+
+		// 半会话（core#180）：pending-2FA 令牌只可走二验换发端点
+		//（POST /api/v1/user/oidc/mfa，不经本中间件），其余认证面一律拒。
+		if claims.MFAPending {
+			c.JSON(http.StatusUnauthorized, map[string]interface{}{
+				"code":    errcode.CodeUnauthorized,
+				"message": "需要完成二次验证",
 			})
 			c.Abort()
 			return

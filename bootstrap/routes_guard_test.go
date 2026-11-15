@@ -151,6 +151,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /request/:token", "POST /api/v1/request/:token/upload",
 		// ===== OIDC SSO（P2 手写；security.oidc.enabled 时注册）=====
 		"GET /api/v1/user/oidc/login", "GET /api/v1/user/oidc/callback",
+		// 半会话二验换发（core#180，登录流程端点，同属公开面）
+		"POST /api/v1/user/oidc/mfa",
 		// ===== NAS 本地文件导入（P3，2026-10-26 IDL 化：publicapi 域生成路由）=====
 		"POST /api/v1/user/shares/import-local",
 		// ===== 部署自检快照（2026-10-30 手写；管理面，供官方 CLI pb doctor 消费）=====

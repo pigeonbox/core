@@ -15,6 +15,9 @@ var (
 	ErrInvalidToken = errors.New("invalid token")
 	ErrExpiredToken = errors.New("token has expired")
 	ErrTokenRevoked = errors.New("token has been revoked")
+	// ErrMFAPending 半会话（pending-2FA）令牌不得用于续签（core#180）：
+	// 换发只走二验端点；放行刷新=把 pending 令牌洗成正式会话（绕过二验）。
+	ErrMFAPending = errors.New("二次验证未完成，半会话不可续签")
 
 	// jwtSecret 持有 HS256 签名密钥（secretx.SecureString：XOR 混淆存储，随机
 	// 密钥逐字节异或，Set/Clear 双向零化旧值，自带 RWMutex ⇒ 本包不再需要额外
@@ -52,6 +55,11 @@ type Claims struct {
 	// 空 = 升级前签发的老令牌（或会话表故障时的降级签发）⇒ 认证侧跳过
 	// 会话回查，只走纪元判定 —— 否则升级瞬间全员被踢下线。
 	SessionID string `json:"sid,omitempty"`
+	// MFAPending 半会话声明（core#180，OIDC 管理员二验半会话流）：true =
+	// pending-2FA 令牌——只可被二验换发端点（POST /api/v1/user/oidc/mfa）
+	// 消费，AuthMiddleware / AdminMiddleware / UserAuth / RefreshToken 一律
+	// 拒绝（「半会话只放行换发端点」的单一判据位）。
+	MFAPending bool `json:"mfa_pending,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -131,6 +139,30 @@ func GenerateTokenWithSession(userID uint, username, role, sessionID string) (st
 	return token.SignedString(getSecret())
 }
 
+// GeneratePendingMFAToken 签发**半会话**（pending-2FA 声明，core#180）：
+// OIDC 回调对 admin && TotpEnabled 不直接签发正式会话，改发本令牌——结构与
+// 正式会话同形（同纪元/同过期/同签发者），但 MFAPending=true 使其在一切
+// 常规认证面被拒；唯一出口是二验换发端点（换发即吊销，一次性）。
+//
+// 不带 sid：与 OIDC 既有签发（GenerateToken → 空 sid）同口径，不引入新的
+// 会话表依赖；半会话的生命周期由过期 + 换发吊销治理。
+func GeneratePendingMFAToken(userID uint, username, role string) (string, error) {
+	claims := &Claims{
+		UserID:     userID,
+		Username:   username,
+		Role:       role,
+		Epoch:      currentEpoch(userID),
+		MFAPending: true,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(SessionExpiry())),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "PigeonBox",
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(getSecret())
+}
+
 // ParseToken 解析 JWT token
 func ParseToken(tokenString string) (*Claims, error) {
 	secret := getSecret()
@@ -168,6 +200,11 @@ func RefreshToken(ctx context.Context, tokenString string) (string, error) {
 	}
 	if IsTokenRevoked(ctx, tokenString) {
 		return "", ErrTokenRevoked
+	}
+	// 半会话不得续签（core#180）：换发走二验端点；放行刷新=把 pending
+	// 令牌洗成正式会话（绕过二验）。
+	if claims.MFAPending {
+		return "", ErrMFAPending
 	}
 	newToken, err := GenerateTokenWithSession(claims.UserID, claims.Username, claims.Role, claims.SessionID)
 	if err != nil {

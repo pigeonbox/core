@@ -72,10 +72,6 @@ func oidcPublicError(err error) (code, msg string) {
 		// core#119 同族：IdP email claim 格式非法 ⇒ 独立短码（受限映射，
 		// 不透传原始 err——那会把 claim 原值回显进回跳 query）
 		return "email_invalid", "身份提供方返回的邮箱格式无效"
-	case errors.Is(err, oidcApp.ErrAdminMFARequired):
-		// wave1 A1：已启用 MFA 的管理员被 OIDC 拦截 ⇒ 专用短码 + 指路文案
-		//（引导走有二验的本地账号密码登录；文案不含账号/IdP 细节）
-		return "admin_mfa_required", "管理员已启用两步验证，请使用账号密码登录"
 	default:
 		// 其余（IdP discovery 失败 / token 交换失败 / userinfo 失败 / 建号失败…）
 		// 全部归到通用失败：不透传细节，也不区分（区分需要透传细节）。
@@ -169,5 +165,70 @@ func OIDCCallback(ctx context.Context, c *app.RequestContext) {
 	// 令牌不入浏览器历史/剪贴板同步）
 	middleware.SetSessionCookie(c, token, int(auth.SessionExpiry().Seconds()))
 	c.Header("Cache-Control", "no-store")
-	c.Redirect(consts.StatusFound, []byte(svc.FrontendCallback()))
+	c.Redirect(consts.StatusFound, []byte(oidcFrontendRedirect(svc, token)))
+}
+
+// oidcFrontendRedirect 回跳地址判据（core#180，抽函数供 wire 级单测）：
+// 半会话（MFAPending）⇒ FrontendMFACallback（挂 mfa_pending=1，前端进二验
+// 输入页）；正式会话 ⇒ FrontendCallback。解析失败按正式会话处理（token 刚
+// 由本进程签发，解析失败只可能是 JWT secret 热更等极端边——回正式回跳位，
+// 不把用户甩进二验死循环）。
+func oidcFrontendRedirect(svc *oidcApp.Service, token string) string {
+	if claims, err := auth.ParseToken(token); err == nil && claims.MFAPending {
+		return svc.FrontendMFACallback()
+	}
+	return svc.FrontendCallback()
+}
+
+// OIDCMFAComplete 半会话二验换发（POST /api/v1/user/oidc/mfa，core#180）：
+// 消费 pending-2FA 半会话（会话 Cookie/Bearer）+ totp_code ⇒ 换发正式会话并
+// 下发新 Cookie；半会话随即被吊销（一次性）。
+//
+// 分流与 /admin/login 同口径：缺码 40012（流程信号：半会话必然源于已开二验
+// 的管理员，缺码不是失败、不计锁定）/ 错码 40013。
+//
+// 本端点**不挂认证中间件**——半会话会被 AuthMiddleware/AdminMiddleware/
+// UserAuth 一致拒绝（「只放行换发端点」），这里自行解析半会话，是它唯一
+// 可达的业务端点。
+func OIDCMFAComplete(ctx context.Context, c *app.RequestContext) {
+	svc := getOIDCService()
+	if svc == nil || !svc.Enabled() {
+		c.JSON(consts.StatusNotFound, map[string]interface{}{"code": errcode.CodeNotFound, "message": "OIDC 登录未启用"})
+		return
+	}
+	halfToken, _ := middleware.SessionToken(c)
+	if halfToken == "" {
+		c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "未认证（缺少半会话）"})
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := c.BindAndValidate(&req); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": "请求参数错误"})
+		return
+	}
+	if strings.TrimSpace(req.Code) == "" {
+		// 40012：与 /admin/login 同语义（不 401、前端据此保留码输入框）
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeTotpRequired, "message": "需要二次验证码"})
+		return
+	}
+	full, err := svc.ExchangeMFASession(ctx, halfToken, req.Code)
+	if err != nil {
+		switch {
+		case errors.Is(err, oidcApp.ErrMFASessionInvalid), errors.Is(err, oidcApp.ErrAccountDisabled):
+			// 半会话不可用 ⇒ 清 Cookie，前端回到登录起点重新走 OIDC
+			middleware.ClearSessionCookie(c)
+			c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "半会话无效，请重新登录"})
+		case errors.Is(err, oidcApp.ErrMFACodeInvalid):
+			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeTotpInvalid, "message": "二次验证码错误"})
+		default:
+			// 内部故障：原文进服务端日志，对外固定文案（core#114 A6b 同口径）
+			c.JSON(consts.StatusInternalServerError, map[string]interface{}{"code": errcode.CodeInternal, "message": "二次验证失败，请稍后重试"})
+		}
+		return
+	}
+	middleware.SetSessionCookie(c, full, int(auth.SessionExpiry().Seconds()))
+	c.Header("Cache-Control", "no-store")
+	c.JSON(consts.StatusOK, map[string]interface{}{"code": 0, "message": "ok"})
 }
