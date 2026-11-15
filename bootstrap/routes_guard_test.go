@@ -137,6 +137,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /api/v1/user/shares", "POST /api/v1/user/shares/batch-delete",
 		"POST /api/v1/user/shares/batch-extend", "POST /api/v1/user/shares/:code/restore",
 		"DELETE /api/v1/user/shares/:code/hard",
+		// 取件时间线（frontend-core#93；手写过渡，见 routes_classification 豁免表）
+		"GET /api/v1/user/shares/:code/timeline",
 		"GET /api/v1/notifies/mine", "GET /api/v1/notifies/unread-count",
 		"POST /api/v1/notifies/mark-read",
 		// ===== 多文件分享（P0 多文件，2026-10-26 IDL 化：publicapi 域生成路由；OptionalIdentity 可选身份）=====

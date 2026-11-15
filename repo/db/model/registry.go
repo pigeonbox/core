@@ -65,6 +65,9 @@ var tables = []TableSpec{
 	{Name: "system_configs", Model: &SystemConfigRecord{}, AutoIncrement: true},
 	{Name: "notifies", Model: &Notify{}, AutoIncrement: true},
 	{Name: "pickup_charges", Model: &PickupCharge{}, AutoIncrement: true},
+	// 取件失败事件（frontend-core#93）：owner 侧取件时间线的失败面；
+	// 无外键依赖，排在 pickup_charges 后仅按领域相邻。
+	{Name: "pickup_failures", Model: &PickupFailure{}, AutoIncrement: true},
 	// 5.2.0 账号与信任：登录会话表 + 找回密码一次性令牌表。
 	// 二者都以 users.id 为归属键 ⇒ 必须排在 users 之后（导入顺序）。
 	{Name: "user_sessions", Model: &UserSession{}, AutoIncrement: true},
