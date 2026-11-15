@@ -103,3 +103,26 @@ func TestBindEnvironment_ClamAVStrict(t *testing.T) {
 		assert.False(t, cfg.Moderation.ClamAV.Strict, "未配置必须保持默认 fail-open（strict=false）")
 	})
 }
+
+// TestConfigShareDirectoryPolicies share.directory_policies 的 mapstructure
+// 解析（core#159）：结构体列表不走 env（env 只有标量/CSV），但 yaml 键名/标签
+// 拼错会让整段**静默失效**——用真实 viper 解码路径钉住形状。
+func TestConfigShareDirectoryPolicies(t *testing.T) {
+	v := viper.New()
+	v.Set("share.directory_policies", []map[string]interface{}{
+		{"root": "/data/music", "quota_bytes": 1073741824, "share_mode": "deny"},
+		{"root": "/data/movies", "share_mode": "allow"},
+	})
+	var cfg conf.AppConfiguration
+	require.NoError(t, v.Unmarshal(&cfg))
+	require.Len(t, cfg.Share.DirectoryPolicies, 2)
+	assert.Equal(t, "/data/music", cfg.Share.DirectoryPolicies[0].Root)
+	assert.Equal(t, int64(1073741824), cfg.Share.DirectoryPolicies[0].QuotaBytes)
+	assert.Equal(t, "deny", cfg.Share.DirectoryPolicies[0].ShareMode)
+	assert.Equal(t, "allow", cfg.Share.DirectoryPolicies[1].ShareMode)
+
+	// 未配置 ⇒ 空（现状不变：不启用目录策略）
+	var empty conf.AppConfiguration
+	require.NoError(t, viper.New().Unmarshal(&empty))
+	assert.Empty(t, empty.Share.DirectoryPolicies)
+}
