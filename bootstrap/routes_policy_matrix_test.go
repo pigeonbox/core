@@ -233,8 +233,7 @@ func policyBucket(path string) string {
 // 局部变量（authMW）展开为其全部赋值的中间件名）。
 func policyKinds(names []string, vars map[string][]string) []string {
 	var all []string
-	var expand func(n string)
-	expand = func(n string) {
+	expand := func(n string) {
 		all = appendUnique(all, n)
 		for _, v := range vars[n] {
 			all = appendUnique(all, v)
