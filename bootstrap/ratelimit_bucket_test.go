@@ -46,7 +46,7 @@ func TestRateLimitBucketCoversRoutes(t *testing.T) {
 	// 模糊匹配与精确匹配项，它们单独断言）。
 	prefixes := []string{
 		// login
-		"/admin/login", "/user/login",
+		"/admin/login", "/admin/webauthn/login", "/user/login",
 		"/user/register", "/api/v1/user/oidc/",
 		// upload
 		"/anonymous/generate", "/anonymous/retrieve",

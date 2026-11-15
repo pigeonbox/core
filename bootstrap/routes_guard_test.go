@@ -164,9 +164,13 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"POST /user/totp/setup", "POST /user/totp/enable", "POST /user/totp/disable",
 		"GET /user/sessions", "DELETE /user/sessions/:id", "POST /user/sessions/revoke-all",
 		"POST /user/password/forgot", "POST /user/password/reset",
-		// ===== 定时自动备份（2026-11-06 手写；5.1.0；管理面）=====
+		// ===== 定时自动备份（2026-11-06 手写；5.1.0；管理面）====
 		// 列表+状态 / 下载包（二进制流）/ 立即备份（后台跑，立刻返回）
 		"GET /admin/backups", "GET /admin/backups/:name", "POST /admin/backups/run",
+		// ===== 管理员 Passkey（core#160 手写；contracts 冻结不进 IDL）====
+		// 登记两步挂 AdminMiddleware；登录两步为公开登录入口（login 限流桶）
+		"POST /admin/webauthn/register/options", "POST /admin/webauthn/register/verify",
+		"POST /admin/webauthn/login/options", "POST /admin/webauthn/login/verify",
 	}
 
 	// 1. 契约内路由必须全部已注册

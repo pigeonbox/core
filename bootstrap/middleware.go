@@ -22,6 +22,8 @@ func rateLimitBucket(path string) string {
 	// 凭证类：爆破/灌号目标（注册与初始化向导同属此类，2026-10-05 审计补入；
 	// OIDC login/callback 涉及 IdP 跳转与 code 换票建号，2026-10-06 补入）
 	case strings.HasPrefix(path, "/admin/login"),
+		// 管理员 Passkey 登录两步（core#160）：凭证类公开面，与 /admin/login 同桶
+		strings.HasPrefix(path, "/admin/webauthn/login"),
 		strings.HasPrefix(path, "/user/login"),
 		strings.HasPrefix(path, "/user/register"),
 		strings.HasPrefix(path, "/api/v1/user/oidc/"),

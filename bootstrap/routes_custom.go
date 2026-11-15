@@ -190,6 +190,14 @@ func customizedRegister(r *server.Hertz) {
 		r.GET("/admin/backups/:name", middleware.AdminOrAdminKey(), downloadBackupHandler)
 		r.POST("/admin/backups/run", middleware.AdminOrAdminKey(), runBackupHandler)
 
+		// ===== 管理员 Passkey（core#160；手写路由，contracts 冻结不进 IDL）====
+		// 登记两步需管理员 JWT（AdminMiddleware 内联认证+授权）；登录两步是
+		// 访客登录入口（公开面，无认证中间件），与 /admin/login 同族进 login 限流桶。
+		r.POST("/admin/webauthn/register/options", middleware.AdminMiddleware(), adminWebAuthnRegisterOptions)
+		r.POST("/admin/webauthn/register/verify", middleware.AdminMiddleware(), adminWebAuthnRegisterVerify)
+		r.POST("/admin/webauthn/login/options", adminWebAuthnLoginOptions)
+		r.POST("/admin/webauthn/login/verify", adminWebAuthnLoginVerify)
+
 		// ===== 通知渠道测试发送（core#122）：2026-11-13 IDL 化收编 =====
 		// 路由改由 contracts IDL 生成（idl/admin.thrift ⇒ gen/router/admin 注册，
 		// AdminMiddleware 组内，与 /admin/notify/smtp/test、/admin/oidc/test 同族）；

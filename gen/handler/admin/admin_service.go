@@ -71,6 +71,11 @@ func AdminLogin(ctx context.Context, c *app.RequestContext) {
 	case errors.Is(err, adminsvc.ErrTotpRequired):
 		resp.NewErrorByCode(c, errcode.CodeTotpRequired) // 40012，不 RecordFailure
 		return
+	case errors.Is(err, adminsvc.ErrWebAuthnRequired):
+		// core#160 Passkey 闸：contracts 冻结复用 40012 流程信号（口令已对、
+		// 只缺第二步、不计锁定），文案点名 Passkey 供前端分流（UI 拆分项）。
+		resp.NewErrorWithMessage(c, errcode.CodeTotpRequired, err.Error())
+		return
 	case errors.Is(err, adminsvc.ErrTotpInvalid):
 		_, _ = lock.RecordFailure(ctx, lockKey) // 与 user 侧 40013 同口径
 		resp.NewErrorByCode(c, errcode.CodeTotpInvalid)
