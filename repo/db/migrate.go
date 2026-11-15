@@ -157,12 +157,26 @@ func (m *Migrator) applyOne(f migrationFile) error {
 
 // splitSQLStatements 按 ';' 懒分割 SQL 语句（忽略引号内的分号）。
 // 处理 '...' 与 "..." 字符串字面量，避免误切。
+//
+// 同时跳过 `--` 行注释（引号外）：注释字符不落语句、注释内的 ';' 不切分。
+// 否则「文件头注释 + 语句」会被并成一块，再被 applyOne 的注释前缀守卫
+// **整体静默跳过**（实录：000006/000007 两条迁移从未执行，靠 AutoMigrate 兜底才没炸）。
 func splitSQLStatements(sql string) []string {
 	var stmts []string
 	var cur strings.Builder
 	inSingle, inDouble := false, false
 	for i := 0; i < len(sql); i++ {
 		c := sql[i]
+		// 行注释：引号外遇到 `--` ⇒ 吃到行尾，字符不落 cur。
+		if c == '-' && !inSingle && !inDouble && i+1 < len(sql) && sql[i+1] == '-' {
+			for i < len(sql) && sql[i] != '\n' {
+				i++
+			}
+			if i < len(sql) {
+				cur.WriteByte('\n')
+			}
+			continue
+		}
 		cur.WriteByte(c)
 		switch c {
 		case '\'':

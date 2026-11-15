@@ -11,7 +11,6 @@ import (
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 	"github.com/pigeonbox/contracts/errcode"
-	"gorm.io/gorm"
 
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/pkg/gate"
@@ -56,10 +55,11 @@ func ShareMetadata(ctx context.Context, c *app.RequestContext) {
 		// 枚举防护记账（core#163）：只在「码不存在」记账——与 retrieve 的
 		// ErrCodeNotFound 分支同口径；已过期/被封禁/次数耗尽/基建故障不记，
 		// 避免正常用户刷新失效分享页撞锁（也避免 DB 故障期把全网记成锁定）。
-		// 码不存在 = ResolveByCode 底层 gorm.ErrRecordNotFound；
-		// 过期（"file has expired"）与封禁（ShareBlockedError）是解析成功后的
-		// 另一类错误，不会命中本判定。
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		// core#182：判据统一到域层 typed sentinel ErrShareGone（GetFileByCode
+		// 对底层 gorm.ErrRecordNotFound 的包装，错误链保留原错误）⇒ 与
+		// share/select、share/download 两面共用同一判据；过期
+		// （ErrShareExpired）与基建故障天然不命中。
+		if errors.Is(err, shareService.ErrShareGone) {
 			gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
 		}
 		// 不区分「不存在/已过期/被封禁」，统一 404 降低探测面

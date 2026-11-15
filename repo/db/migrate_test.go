@@ -29,7 +29,7 @@ func TestMigrator_Up_FreshDB(t *testing.T) {
 
 	applied, err := m.Up()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"000001", "000002", "000003", "000004", "000005", "000006", "000007"}, applied)
+	assert.Equal(t, []string{"000001", "000002", "000003", "000004", "000005", "000006", "000007", "000008"}, applied)
 
 	// 版本记录存在
 	var versions []schemaMigrations
@@ -44,6 +44,7 @@ func TestMigrator_Up_FreshDB(t *testing.T) {
 	assert.Equal(t, "000005", versions[4].Version)
 	assert.Equal(t, "000006", versions[5].Version)
 	assert.Equal(t, "000007", versions[6].Version)
+	assert.Equal(t, "000008", versions[7].Version)
 }
 
 // 测试：幂等性——二次 Up 不重复执行
@@ -89,7 +90,23 @@ func TestSplitSQLStatements_Quotes(t *testing.T) {
 
 // 测试：空字符串与纯注释不产生语句
 func TestSplitSQLStatements_EmptyAndComments(t *testing.T) {
-	stmts := splitSQLStatements("-- 这是一条注释;\n")
-	// 注释后无分号，整段作为一个"语句"，但执行时会被注释前缀跳过
-	assert.NotEmpty(t, stmts) // 注释本身作为一个块，applyOne 会跳过
+	// 行注释整体被剥掉（含注释里的分号）⇒ 零语句。
+	// 此前实现会把注释整块当成一条语句返回，靠 applyOne 的注释前缀守卫跳过——
+	// 一旦注释与真语句之间没有分号，真语句也被连坐跳过（issue #184 实录）。
+	assert.Empty(t, splitSQLStatements("-- 这是一条注释;\n"))
+	assert.Empty(t, splitSQLStatements("-- 只有注释，无语句"))
+}
+
+// 测试：文件头注释 + 真语句 ⇒ 语句必须被切出来（不能被注释连坐吞掉）
+func TestSplitSQLStatements_LeadingCommentThenStatement(t *testing.T) {
+	sql := "-- 头注释，含一个分号;\n-- 第二行注释\nALTER TABLE `t` ADD COLUMN `c` text;\n"
+	stmts := splitSQLStatements(sql)
+	require.Len(t, stmts, 1)
+	assert.Contains(t, stmts[0], "ALTER TABLE")
+	assert.NotContains(t, stmts[0], "头注释")
+
+	// 行尾注释不额外产生语句块（语句本身照常切出）
+	tail := splitSQLStatements("ALTER TABLE t ADD COLUMN c text; -- 尾注释")
+	require.Len(t, tail, 1)
+	assert.Contains(t, tail[0], "ALTER TABLE")
 }

@@ -806,16 +806,37 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCode, error) {
 	fileCode, err := s.fileCodeRepo.ResolveByCode(ctx, code, conf.CodeFoldEnabledOrDefault())
 	if err != nil {
+		// core#182：只有**确证码不存在**（gorm.ErrRecordNotFound）才包成
+		// ErrShareGone——枚举防护记账的唯一正判据；基建故障（DB 不可达等）
+		// 原样上抛，绝不伪装成「码不存在」。
+		// 底层 gorm.ErrRecordNotFound 保留在错误链上（%w 双包）⇒ 既有
+		// errors.Is 判据不破。
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: %w", ErrShareGone, err)
+		}
 		return nil, err
 	}
 	return s.validateShareRecord(fileCode)
 }
 
+// ErrShareGone 取件码**确证不存在**（枚举防护记账的唯一正判据）。
+//
+// core#182：share/select 与 share/download 此前对 GetFileByCode 的非封禁错误
+// 全记——过期（ErrShareExpired）与基建故障也进 (IP,码) + 按 IP 双维度枚举锁定桶：
+// 正常用户刷新失效取件页会被记成猜码，DB 故障期会把全网记成锁定。
+// metadata（transport/http/handler）与 preview（app/preview）两面早已按
+// 「记录查不到」精确排除（core#163），本 sentinel 让三面共用同一判据。
+var ErrShareGone = errors.New("share code not found")
+
+// ErrShareExpired 分享已过期（**只管时间维度**，次数耗尽另有 ErrShareCountExhausted）。
+// 不入枚举锁定桶：持码者反复打开失效页是正常行为，不是猜码。
+var ErrShareExpired = errors.New("file has expired")
+
 // validateShareRecord 过期 / 管控判定（各解析路径共用）。
 func (s *Service) validateShareRecord(fileCode *model.FileCode) (*model.FileCode, error) {
 	// 检查文件是否过期
 	if fileCode.IsExpired() {
-		return nil, errors.New("file has expired")
+		return nil, ErrShareExpired
 	}
 
 	// 管控状态：blocked / pending_review 拒绝取件（typed error，handler 按业务码透传）
