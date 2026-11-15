@@ -129,6 +129,10 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 		Reason:  "协议面：OIDC 回调返回 **302 重定向**（或错误页），非 JSON 包络 ⇒ IDL 表达不了",
 		Pending: false,
 	},
+	"POST /api/v1/user/oidc/mfa": {
+		Reason:  "登录面：OIDC 半会话二验换发（core#180）——半会话令牌被 IDL 生成面的认证中间件（UserAuth/AuthMiddleware）一致拒绝，换发端点必须自行解析半会话 ⇒ 与 login/callback 同族手写注册，不进 IDL 生成面",
+		Pending: false,
+	},
 	"PUT /api/v1/presign/upload-direct/:uploadID": {
 		Reason:  "协议面：预签名直传的**写对象**端点，body 是原始对象字节流（非 JSON 包络）⇒ IDL 表达不了",
 		Pending: false,

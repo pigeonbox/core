@@ -80,6 +80,48 @@ func TestAdminMiddlewareRoleGate(t *testing.T) {
 	assert.DeepEqual(t, "admin", string(w.Result().Header.Get("X-Role")))
 }
 
+// 半会话只放行二验换发端点（core#180）：MFAPending 令牌在 AdminMiddleware
+// 与 AuthMiddleware 一律 401、业务 handler 不执行——换发端点
+// （POST /api/v1/user/oidc/mfa）不挂中间件，是半会话唯一可达的业务面。
+//
+// 负对照（改错转红）：摘掉两处 claims.MFAPending 分支 ⇒ 401 断言转红
+// （半会话持 admin role 会直接 200 放行 = 绕过二验拿到管理面）。
+func TestMFAPendingTokenRejectedByAuthMiddlewares(t *testing.T) {
+	auth.SetJWTSecret("test-secret-for-mfa-pending-32chars")
+	t.Cleanup(func() { auth.SetJWTSecret("") })
+
+	pending, err := auth.GeneratePendingMFAToken(1, "root", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		mw   app.HandlerFunc
+		path string
+	}{
+		{"AdminMiddleware", AdminMiddleware(), "/admin/secret"},
+		{"AuthMiddleware", AuthMiddleware(), "/auth/secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ran := false
+			h := server.New(server.WithHostPorts("127.0.0.1:0"))
+			h.GET(tc.path, tc.mw, func(ctx context.Context, c *app.RequestContext) {
+				ran = true
+				c.JSON(http.StatusOK, map[string]string{"ok": "1"})
+			})
+			w := ut.PerformRequest(h.Engine, http.MethodGet, tc.path, nil,
+				ut.Header{Key: "Authorization", Value: "Bearer " + pending})
+			if got := w.Result().StatusCode(); got != http.StatusUnauthorized {
+				t.Fatalf("半会话必须 401, got %d", got)
+			}
+			if ran {
+				t.Fatal("半会话不得放行业务 handler（只可走二验换发端点）")
+			}
+		})
+	}
+}
+
 // OptionalAuthMiddleware 吊销语义回归（2026-10-05 审计 P1）：已注销 token 在
 // 可选身份路由必须降级为匿名，不得继续注入 user_id。
 func TestOptionalAuthMiddlewareRespectsBlacklist(t *testing.T) {

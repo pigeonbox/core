@@ -86,12 +86,16 @@ type policy struct {
 	// ssrfDialContext（解析 → BlockedIP → 直连已判定 IP，封保存/解析期与
 	// 实际连接各解析一次 DNS 的 TOCTOU / rebinding）。
 	//
-	// **只对 TargetOIDC 开**（范围取舍，core#164）：delivery / invite 的私网
-	// 对端按**对端粒度** allow_private 放行（ValidateEndpointURLAllowPrivate，
-	// 保存期与发送期已授权的内网对端），而拨号层没有对端上下文、只认全局
-	// security.ssrf.allow_private_networks ⇒ 全 target 开会把已放行的内网对端
-	// 在拨号时误杀（回归面大于收益）。notify / federation registry 保存期是
-	// 严格公网口径（与拨号复判同开关），要开只需翻这一位——留待同族跟进。
+	// 开着的 target：TargetOIDC（core#164）+ TargetNotify / TargetFederation /
+	// TargetFederationDirectory（core#181，wave1 S03b 同族扩面）——这四类保存期
+	// 均为严格公网口径（ValidateEndpointURL，与拨号复判同一开关
+	// security.ssrf.allow_private_networks），拨号层与保存期判定一致、不误杀。
+	//
+	// **不开**的 target（范围取舍，core#164）：delivery / invite 的私网对端按
+	// **对端粒度** allow_private 放行（ValidateEndpointURLAllowPrivate，保存期
+	// 与发送期已授权的内网对端），而拨号层没有对端上下文、只认全局
+	// security.ssrf.allow_private_networks ⇒ 开了会把已放行的内网对端在拨号时
+	// 误杀（回归面大于收益）。
 	dialGuard bool
 }
 
@@ -116,6 +120,9 @@ var policies = map[Target]policy{
 			}
 			return nil
 		},
+		// core#181：首跳拨号复判（与逐跳 redirect guard 同族第二道闸）——
+		// resolve 后到 dial 前的 rebinding 窗口由拨号复判封死。
+		dialGuard: true,
 	},
 	// 15s = 原 app/oidc 构造现场值，即统一基准本尊。
 	// core#164：原为策略表唯一无 checkRedirect 的出站点（Go 默认盲跟 10 跳）
@@ -128,7 +135,8 @@ var policies = map[Target]policy{
 	// ——registry 回 302 到内网即 302 绕过面（core#116 同族）。逐跳复验与
 	// p2p.federation.registry_url 配置期校验**同一函数**（security.ValidateEndpointURL，
 	// 尊重全局 security.ssrf.allow_private_networks），不另写第二份校验。
-	TargetFederation: {timeout: 5 * time.Second, checkRedirect: ssrfRedirectGuard},
+	// core#181：挂拨号时刻复判（保存期严格公网口径，同开关不误杀）。
+	TargetFederation: {timeout: 5 * time.Second, checkRedirect: ssrfRedirectGuard, dialGuard: true},
 	// **不设客户端级超时**（原 DeliveryClient 语义）：跨站转发是流式上传——
 	// client.Timeout 覆盖整个请求周期**含请求体**，设 15s 会腰斩大文件转发；
 	// 时长由调用方 ctx 截止治理（两处调用点均带 deadline）。禁跟随重定向：
@@ -150,6 +158,8 @@ var policies = map[Target]policy{
 	TargetFederationDirectory: {
 		timeout:       5 * time.Second,
 		checkRedirect: ssrfRedirectGuard,
+		// core#181：挂拨号时刻复判（保存期严格公网口径，同开关不误杀）。
+		dialGuard: true,
 	},
 }
 

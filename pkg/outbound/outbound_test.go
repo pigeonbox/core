@@ -76,6 +76,15 @@ func TestNew_UnknownTarget_Panics(t *testing.T) {
 // （ok=2xx / status_error=非 2xx / transport_error=传输层失败）且 target 正确、
 // 耗时非负。
 func TestObserve(t *testing.T) {
+	// core#181：TargetNotify 挂 dialGuard 后环回首跳默认被拨号复判拦下——
+	// 本用例测观测口径不测 SSRF，显式放行环回；拨号复判本体由
+	// TestSSRFDial_ExtendedTargetsGuardedAtDialTime 覆盖。
+	old := conf.GetGlobalConfig()
+	allowed := &conf.AppConfiguration{}
+	allowed.Security.SSRF.AllowPrivateNetworks = true
+	conf.SetGlobalConfig(allowed)
+	defer conf.SetGlobalConfig(old)
+
 	record := func(t *testing.T) (*[]string, *http.Client) {
 		var (
 			mu    sync.Mutex
@@ -168,12 +177,33 @@ func TestTimeouts(t *testing.T) {
 // 观测口径：守卫在 CheckRedirect（transport 之上）拒绝，302 那一跳本身已过
 // RoundTrip ⇒ 计为 status_error，不是 transport_error。
 func TestNotifyRedirectGuard(t *testing.T) {
-	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer final.Close()
+	// ① 判据层（core#181：TargetNotify 挂 dialGuard 后首跳环回被拨号复判
+	//    先拦 ⇒ 「重定向到私网」的端到端在环回测试环境不可达）：守卫本体
+	//    直接钉私网判据——否则守卫被摘除时端到端因拨号拦截而假绿。
+	preq, perr := http.NewRequest(http.MethodGet, "http://169.254.169.254/steal", nil)
+	if perr != nil {
+		t.Fatalf("构造请求失败: %v", perr)
+	}
+	gerr := policies[TargetNotify].checkRedirect(preq, []*http.Request{preq})
+	if gerr == nil || !strings.Contains(gerr.Error(), "重定向目标被拒绝") {
+		t.Fatalf("私网重定向必须被 webhook 重定向守卫拒绝, got %v", gerr)
+	}
+	if !errors.Is(gerr, security.ErrEndpointURL) {
+		t.Fatalf("守卫错误链应可判 security.ErrEndpointURL, got %v", gerr)
+	}
+
+	// ② 端到端观测口径：守卫在 CheckRedirect（transport 之上）拒绝的那一跳
+	//    计为 status_error，不是 transport_error。首跳环回需放行 dialGuard
+	//    （core#181），重定向目标改用非法 scheme（scheme 判定先于
+	//    allow_private，放行口径下仍被同一守卫拒绝）。
+	old := conf.GetGlobalConfig()
+	allowed := &conf.AppConfiguration{}
+	allowed.Security.SSRF.AllowPrivateNetworks = true
+	conf.SetGlobalConfig(allowed)
+	defer conf.SetGlobalConfig(old)
+
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, final.URL, http.StatusFound)
+		http.Redirect(w, r, "ftp://evil.example/steal", http.StatusFound)
 	}))
 	defer redirector.Close()
 
@@ -184,7 +214,7 @@ func TestNotifyRedirectGuard(t *testing.T) {
 	resp, err := client.Get(redirector.URL)
 	if err == nil {
 		_ = resp.Body.Close()
-		t.Fatal("私网重定向必须被 SSRF 守卫拒绝")
+		t.Fatal("非法 scheme 重定向必须被 SSRF 守卫拒绝")
 	}
 	if !strings.Contains(err.Error(), "重定向目标被拒绝") {
 		t.Fatalf("错误应来自 webhook 重定向守卫, 得到: %v", err)
@@ -373,14 +403,36 @@ func equalCalls(got, want []string) bool {
 // 负对照（改错转红）：把 policies[TargetFederation].checkRedirect 置回 nil
 // ⇒ 本用例转红（客户端盲跟 302：err==nil 且靶子命中 1）。
 func TestFederationRegistryRedirectGuard(t *testing.T) {
+	// ① 判据层（core#181：TargetFederation 挂 dialGuard 后首跳环回被拨号复判
+	//    先拦 ⇒ 私网重定向端到端不可达）：ssrfRedirectGuard 本体直接钉私网
+	//    判据——否则守卫被摘除时端到端因拨号拦截而假绿。
+	preq, perr := http.NewRequest(http.MethodGet, "http://169.254.169.254/steal", nil)
+	if perr != nil {
+		t.Fatalf("构造请求失败: %v", perr)
+	}
+	gerr := policies[TargetFederation].checkRedirect(preq, []*http.Request{preq})
+	if gerr == nil || !errors.Is(gerr, security.ErrEndpointURL) {
+		t.Fatalf("registry 私网重定向必须被 ssrfRedirectGuard 拒绝, got %v", gerr)
+	}
+
+	// ② 端到端：首跳环回放行（allow_private，core#181 dialGuard），重定向到
+	//    非法 scheme 目标 ⇒ 同一守卫拒绝、内层零命中（拨号层不先拦，本段
+	//    回归的是重定向守卫整链 + 观测）。
+	old := conf.GetGlobalConfig()
+	allowed := &conf.AppConfiguration{}
+	allowed.Security.SSRF.AllowPrivateNetworks = true
+	conf.SetGlobalConfig(allowed)
+	defer conf.SetGlobalConfig(old)
+
 	var innerHits atomic.Int64
 	inner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		innerHits.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer inner.Close()
+	_ = inner // 内层仅作「被拒后不得出站」的命中探针
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, inner.URL+"/steal", http.StatusFound)
+		http.Redirect(w, r, "ftp://evil.example/steal", http.StatusFound)
 	}))
 	defer redirector.Close()
 
@@ -388,7 +440,7 @@ func TestFederationRegistryRedirectGuard(t *testing.T) {
 	resp, err := client.Get(redirector.URL)
 	if err == nil {
 		_ = resp.Body.Close()
-		t.Fatal("registry 302 到环回地址必须被 SSRF 逐跳复验拒绝")
+		t.Fatal("registry 302 到非法 scheme 目标必须被 SSRF 逐跳复验拒绝")
 	}
 	if !errors.Is(err, security.ErrEndpointURL) {
 		t.Fatalf("错误链应可判 security.ErrEndpointURL（结构性判据）: %v", err)

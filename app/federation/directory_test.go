@@ -11,6 +11,8 @@ import (
 //
 // 2026-10-22 随目录实现搬入本包（目录属联邦域）。
 func TestDirectoryPeers(t *testing.T) {
+	// core#181 dialGuard：名录查询的环回首跳放行（假 registry 是测试环境产物）
+	t.Cleanup(allowPrivateNetworks(t, true))
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -71,6 +73,8 @@ func TestDirectoryUpstreamError(t *testing.T) {
 // 联邦段的 registry_url 支持逗号分隔主备（写全推、读依次 failover）；名录查询
 // 只打主库——归一语义下沉到 pkg/registry（单源），此处断言联邦侧行为。
 func TestDirectoryPrimaryRegistry(t *testing.T) {
+	// core#181 dialGuard：名录查询的环回首跳放行（假 registry 是测试环境产物）
+	t.Cleanup(allowPrivateNetworks(t, true))
 	var primaryHits, backupHits int
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		primaryHits++

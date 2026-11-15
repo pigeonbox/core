@@ -65,3 +65,37 @@ func TestSSRFDial_BlocksPrivateAtDialTime(t *testing.T) {
 		}
 	})
 }
+
+// TestSSRFDial_ExtendedTargetsGuardedAtDialTime（core#181，wave1 S03b
+// deferred）：notify / federation registry / federation directory 首跳拨号
+// 时刻复判扩面——三 target 此前只有逐跳 redirect guard（第二层），resolve 后
+// 到 dial 前的 rebinding 窗口仍在；拨号复判与保存期校验同一开关
+// （security.ssrf.allow_private_networks），不引入第二策略。
+//
+// 判据双层：① 结构（policies[t].dialGuard）；② 行为（环回拨号在 dial 时刻
+// 被拒，错误含「拒绝」+ 可判 security.ErrEndpointURL）。
+//
+// 负对照（改错转红）：任一 target 的 dialGuard 归零 ⇒ ① 结构断言转红；
+// 只翻结构不挂真守卫 ⇒ ② 行为断言转红（错误退化成 connection refused）。
+func TestSSRFDial_ExtendedTargetsGuardedAtDialTime(t *testing.T) {
+	// 显式钉死严格口径（判据不随全局状态漂移）
+	old := conf.GetGlobalConfig()
+	conf.SetGlobalConfig(&conf.AppConfiguration{})
+	defer conf.SetGlobalConfig(old)
+
+	for _, tg := range []Target{TargetNotify, TargetFederation, TargetFederationDirectory} {
+		t.Run(string(tg), func(t *testing.T) {
+			if !policies[tg].dialGuard {
+				t.Fatalf("%s 必须挂 dialGuard（core#181 拨号复判扩面）", tg)
+			}
+			c := newObservedClient(tg, func(Target, Outcome, time.Duration) {})
+			_, err := c.Get("http://127.0.0.1:9/")
+			if err == nil || !strings.Contains(err.Error(), "拒绝") {
+				t.Fatalf("环回拨号必须在拨号时刻被拒, got %v", err)
+			}
+			if !errors.Is(err, security.ErrEndpointURL) {
+				t.Fatalf("拨号拒绝错误链应可判 security.ErrEndpointURL, got %v", err)
+			}
+		})
+	}
+}
