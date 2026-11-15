@@ -19,6 +19,11 @@ const (
 	VerdictAllow   Verdict = iota // 放行
 	VerdictReject                 // 拒绝（建分享前拦截）
 	VerdictPending                // 待审核（建分享后置 pending_review，取件拒绝）
+	// VerdictScanUnavailable 扫描不可用拒收（core#161）：moderation.clamav.strict=true
+	// 且 clamd 不可达/超时/内容超 max_scan_bytes ⇒ 无法完成扫描 ⇒ 拒收该次上传。
+	// 与 VerdictReject 分开：对外错误文案/码不同（「扫描暂不可用，请稍后重试」
+	// ≠ 「内容未通过安全审核」），把「扫描器挂了」误报成「内容违规」会误导排查。
+	VerdictScanUnavailable
 )
 
 func (v Verdict) String() string {
@@ -27,6 +32,8 @@ func (v Verdict) String() string {
 		return "reject"
 	case VerdictPending:
 		return "pending"
+	case VerdictScanUnavailable:
+		return "scan_unavailable"
 	default:
 		return "allow"
 	}

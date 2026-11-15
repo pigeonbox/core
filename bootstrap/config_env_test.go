@@ -80,3 +80,26 @@ func TestBindEnvironment_CORSAllowOriginsCSV(t *testing.T) {
 	assert.Equal(t, []string{"https://a.example.com", "https://b.example.com"}, cfg.Security.CORS.AllowOrigins,
 		"PB_CORS_ALLOW_ORIGINS 必须按 CSV 拆进配置（middleware 不再自己读 env）")
 }
+
+// TestBindEnvironment_ClamAVStrict clamav strict 的 env 绑定（core#161）：
+// PB_CLAMAV_STRICT 必须经 envBindings 表解到 moderation.clamav.strict，
+// 且默认（未设置）保持 false = 现状 fail-open。
+func TestBindEnvironment_ClamAVStrict(t *testing.T) {
+	t.Run("env_true", func(t *testing.T) {
+		t.Setenv("PB_CLAMAV_STRICT", "true")
+		v := viper.New()
+		v.SetDefault("moderation.clamav.strict", false)
+		bindEnvironment(v)
+		var cfg conf.AppConfiguration
+		require.NoError(t, v.Unmarshal(&cfg))
+		assert.True(t, cfg.Moderation.ClamAV.Strict, "PB_CLAMAV_STRICT=true 必须解到 moderation.clamav.strict")
+	})
+	t.Run("unset_default_false", func(t *testing.T) {
+		v := viper.New()
+		v.SetDefault("moderation.clamav.strict", false)
+		bindEnvironment(v)
+		var cfg conf.AppConfiguration
+		require.NoError(t, v.Unmarshal(&cfg))
+		assert.False(t, cfg.Moderation.ClamAV.Strict, "未配置必须保持默认 fail-open（strict=false）")
+	})
+}

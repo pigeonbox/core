@@ -288,6 +288,10 @@ type ClamAVConfig struct {
 	Addr           string `mapstructure:"addr"`            // 默认 localhost:3310；env: PB_MODERATION_CLAMAV_ADDR
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // 单文件扫描超时，默认 60
 	MaxScanBytes   int64  `mapstructure:"max_scan_bytes"`  // 超过跳过扫描，默认 512MB
+	// Strict 扫描不可用时的失败策略（core#161）：false（默认）= fail-open 放行
+	// （现状语义一字不改）；true = clamd 不可达/超时/内容超 max_scan_bytes 时
+	// **拒收该次上传**并回可操作文案。env: PB_CLAMAV_STRICT
+	Strict bool `mapstructure:"strict"`
 }
 
 // NotifyConfig 通知配置（站内信 + 外部 Webhook + SMTP 邮件渠道）

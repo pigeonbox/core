@@ -86,14 +86,14 @@ func assertBoundedReplyError(t *testing.T, err error) {
 // TestClamAVModerator_Ping_ReplyBounded Ping 的响应读取必须限幅。
 func TestClamAVModerator_Ping_ReplyBounded(t *testing.T) {
 	addr := fakeClamdBlast(t, strings.Repeat("A", 1<<20))
-	m := NewClamAVModerator(addr, 5, 0, nil)
+	m := NewClamAVModerator(addr, 5, 0, nil, false)
 	assertBoundedReplyError(t, m.Ping())
 }
 
 // TestClamAVModerator_ScanReader_ReplyBounded ScanReader 的收尾读同样限幅。
 func TestClamAVModerator_ScanReader_ReplyBounded(t *testing.T) {
 	addr := fakeClamdBlast(t, strings.Repeat("A", 1<<20))
-	m := NewClamAVModerator(addr, 5, 0, nil)
+	m := NewClamAVModerator(addr, 5, 0, nil, false)
 	_, err := m.ScanReader(context.Background(), strings.NewReader("hello"))
 	assertBoundedReplyError(t, err)
 }
@@ -101,6 +101,6 @@ func TestClamAVModerator_ScanReader_ReplyBounded(t *testing.T) {
 // TestClamAVModerator_Ping_OK 正常 PING/PONG 不受限幅影响（防过度收紧）。
 func TestClamAVModerator_Ping_OK(t *testing.T) {
 	addr := fakeClamd(t)
-	m := NewClamAVModerator(addr, 5, 0, nil)
+	m := NewClamAVModerator(addr, 5, 0, nil, false)
 	assert.NoError(t, m.Ping())
 }
