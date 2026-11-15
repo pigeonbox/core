@@ -275,7 +275,11 @@ func (s *Service) SetQuotaChecker(qc QuotaChecker) {
 	s.quotaChecker = qc
 }
 
-// checkQuota 登录用户上传前配额检查（匿名上传无配额语义，跳过）
+// checkQuota 登录用户上传前配额检查（匿名上传无配额语义，跳过）。
+//
+// ⚠️ 调用契约（core#169）：本方法（含 quotaChecker.CheckQuota）是**读-比-放行**
+// 原语，单独调用不原子——生产唯一调用方是 reserveUploadCaps 的配额预留临界区
+// （在途预留折进 addBytes 后再判定），不得在账本外直接调用它做放行判定。
 func (s *Service) checkQuota(ctx context.Context, userID *uint, addBytes int64) error {
 	if s.quotaChecker == nil || userID == nil {
 		return nil
@@ -521,40 +525,14 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 
 // ============ 三通道共用私有逻辑（文本 / 单文件 / 多文件） ============
 
-// checkUploadCaps 单用户单次上传上限（users.max_upload_size，0=不限；匿名无此
-// 约束）+ 站点级全局存储配额 + 存储配额强制执行。超限返回带具体上限文案的错误。
-func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize int64) error {
-	// 站点级全局存储配额（storage.quota，0=不限）：全通道统一闸口
-	// （直传/分片完成/预签名完成/本地导入/多文件均经此处）。统计口径=
-	// **物理占用**（含回收站软删——purge 前仍占盘；评审 D01）。原存活口径
-	// 漏计软删 ⇒ 站点配额虚低。未完成分片会话暂不计入。用户配额仍为逻辑
-	// 口径（存活制）。统计故障时 fail-open（配额是治理项而非安全项，不因
-	// 统计异常拒绝所有上传）。
-	if cfg := conf.GetGlobalConfig(); cfg != nil && cfg.Storage.Quota > 0 {
-		quota := cfg.Storage.Quota
-		if used, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx); err == nil {
-			if used+totalSize > quota {
-				metrics.RecordRejected(metrics.RejectQuota)
-				return &GlobalQuotaExceededError{Used: used, Quota: quota}
-			}
-		} else {
-			logger.CtxWarn(ctx, "全局存储配额统计失败，本次跳过配额检查", "err", err)
-		}
+// storageQuota 生效的站点存储配额（storage.quota，0=不限）。取值经全局配置
+// （yaml/env 运行期可热更；判定在配额预留账本内按次取值，不缓存）。
+// 构造注入面（core#169：预留账本 quota_reserve.go 不直读全局配置，棘轮规则 8）。
+func (s *Service) storageQuota() int64 {
+	if cfg := conf.GetGlobalConfig(); cfg != nil {
+		return cfg.Storage.Quota
 	}
-	if userID != nil && s.userService != nil {
-		if capSize := s.userService.GetUploadSizeCap(ctx, *userID); capSize > 0 {
-			// typed error（CodeTooLarge→413）：此前为普通 error，NewTypedError
-			// 兜底 CodeInternal，前端显示「服务器内部错误」掩盖超限真相（2026-10-19 事故）。
-			if err := gate.CheckUploadSizeCap(userID, totalSize, capSize); err != nil {
-				return err
-			}
-		}
-	}
-	if err := s.checkQuota(ctx, userID, totalSize); err != nil {
-		metrics.RecordRejected(metrics.RejectQuota)
-		return err
-	}
-	return nil
+	return 0
 }
 
 // CheckUploadSizeCap 登录用户单次上传总大小预检（多文件绑定按申报大小 fail-fast，
@@ -654,10 +632,13 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 		return nil, err
 	}
 
-	// 单用户单次上传上限 + 存储配额强制执行
-	if err := s.checkUploadCaps(ctx, req.UserID, req.Size); err != nil {
+	// 单用户单次上传上限 + 存储配额强制执行（core#169：判定与 insert 收进
+	// 预留账本——defer 覆盖此后所有成功/失败/panic 路径，insert 提交后才释放）
+	release, err := s.reserveUploadCaps(ctx, req.UserID, req.Size)
+	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	// 秒传去重（2026-10-12，D1=A 同用户内）：命中自己历史同 hash+size 文件时，
 	// 回收冗余副本、新分享引用源对象（多分享共享物理文件——物理删除前必须查
