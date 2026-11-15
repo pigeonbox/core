@@ -28,6 +28,7 @@ require (
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
+	github.com/go-webauthn/webauthn v0.18.2
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -57,8 +58,11 @@ require (
 	github.com/cloudwego/netpoll v0.7.5 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/glebarez/go-sqlite v1.23.0 // indirect
 	github.com/go-sql-driver/mysql v1.10.1 // indirect
+	github.com/go-webauthn/x v0.3.1 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -96,6 +100,7 @@ require (
 	github.com/tidwall/pretty v1.2.2 // indirect
 	github.com/tinylib/msgp v1.6.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect

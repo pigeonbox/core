@@ -945,6 +945,26 @@ type SecurityConfig struct {
 	SSRF           SSRFConfig          `mapstructure:"ssrf"`
 	APIToken       APITokenConfig      `mapstructure:"api_token"`
 	OIDC           OIDCConfig          `mapstructure:"oidc"`
+	// RequireAdminWebAuthn 管理员 Passkey 强制闸（core#160；env
+	// PB_SECURITY_REQUIRE_ADMIN_WEBAUTHN；**默认 false = 不影响存量登录**）。
+	// 开闸语义见 app/admin/webauthn.go：已登记 passkey 的管理员不再放行纯口令。
+	RequireAdminWebAuthn bool `mapstructure:"require_admin_webauthn"`
+	// WebAuthn 依赖方（RP）参数（core#160）。
+	WebAuthn WebAuthnConfig `mapstructure:"webauthn"`
+}
+
+// WebAuthnConfig WebAuthn/RP 参数（core#160 管理员 Passkey）。
+//
+// 全部可留空：留空时按请求 Host/Origin 现场推导（自托管开箱即用）；
+// 生产建议显式钉死 rp_id/rp_origins，避免反代改写 Host 时推导漂移。
+type WebAuthnConfig struct {
+	// RPID 依赖方 ID（不含 scheme/port，如 "share.example.com"）。空 = 取请求 Host 去端口。
+	RPID string `mapstructure:"rp_id"`
+	// RPOrigins 允许的来源白名单（完整 origin，如 "https://share.example.com"）。
+	// 空 = 推导（配置 ∪ scheme://host ∪ 浏览器 Origin 头）。env 按 CSV 拆。
+	RPOrigins []string `mapstructure:"rp_origins"`
+	// DisplayName 认证器上展示的依赖方名。空 = "PigeonBox"。
+	DisplayName string `mapstructure:"display_name"`
 }
 
 // OIDCConfig OIDC 单点登录配置（P2；默认关闭。启用需 issuer/client_id/client_secret，

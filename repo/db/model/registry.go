@@ -72,6 +72,8 @@ var tables = []TableSpec{
 	// 二者都以 users.id 为归属键 ⇒ 必须排在 users 之后（导入顺序）。
 	{Name: "user_sessions", Model: &UserSession{}, AutoIncrement: true},
 	{Name: "password_reset_tokens", Model: &PasswordResetToken{}, AutoIncrement: true},
+	// 管理员 Passkey（core#160）：以 users.id 为归属键 ⇒ 必须排在 users 之后。
+	{Name: "webauthn_credentials", Model: &WebAuthnCredential{}, AutoIncrement: true},
 }
 
 // Tables 返回全部领域模型的登记清单（**副本**，调用方改不动内部状态）。
