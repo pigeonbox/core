@@ -57,6 +57,7 @@ type AppConfiguration struct {
 	Notify        NotifyConfig        `mapstructure:"notify"`
 	MCP           MCPConfig           `mapstructure:"mcp"`
 	Moderation    ModerationConfig    `mapstructure:"moderation"`
+	Share         ShareConfig         `mapstructure:"share"`
 	Admin         AdminConfig         `mapstructure:"admin"`
 	Federation    FederationConfig    `mapstructure:"federation"`
 	Deployment    DeploymentConfig    `mapstructure:"deployment"`
@@ -288,6 +289,10 @@ type ClamAVConfig struct {
 	Addr           string `mapstructure:"addr"`            // 默认 localhost:3310；env: PB_MODERATION_CLAMAV_ADDR
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // 单文件扫描超时，默认 60
 	MaxScanBytes   int64  `mapstructure:"max_scan_bytes"`  // 超过跳过扫描，默认 512MB
+	// Strict 扫描不可用时的失败策略（core#161）：false（默认）= fail-open 放行
+	// （现状语义一字不改）；true = clamd 不可达/超时/内容超 max_scan_bytes 时
+	// **拒收该次上传**并回可操作文案。env: PB_CLAMAV_STRICT
+	Strict bool `mapstructure:"strict"`
 }
 
 // NotifyConfig 通知配置（站内信 + 外部 Webhook + SMTP 邮件渠道）
@@ -554,6 +559,47 @@ type UploadConfig struct {
 type LocalImportConfig struct {
 	Enabled bool     `mapstructure:"enabled" json:"enabled"` // env: PB_LOCAL_IMPORT_ENABLED
 	Roots   []string `mapstructure:"roots" json:"roots"`     // 允许导入的绝对目录白名单；env: PB_LOCAL_IMPORT_ROOTS（逗号分隔）
+}
+
+// ShareConfig 分享域配置（core#159 目录策略地基）。
+//
+// 为什么是独立顶层段、且只走 yaml/env 直配（不经管理台 SystemConfig overlay）：
+// upload.local_import 段是管理台**整段替换**式 overlay（app/config 的
+// sc.LocalImport 覆盖），把目录策略挂在那里会在管理员保存 enabled/roots 时被
+// 零值冲掉（同 2026-10-05 UploadEx 冲掉 roots 的事故形态）；本段尚无管理台
+// 分区 ⇒ 无此风险，管理台分区与前端能力位见下方 TODO。
+// 结构体列表无法走 envBindings（env 只有标量/CSV 字符串）⇒ 仅 yaml，与
+// transfer.* 等既有 yaml-only 段同口径。
+type ShareConfig struct {
+	// DirectoryPolicies 按目录（路径前缀）的配额与分享策略（issue #159）。
+	// 空 = 不启用（现状不变）。目录层是站点/用户配额**之上的策略层**，
+	// 不触碰 reserveUploadCaps 的原子预留账本（那是 core#196/#169 的地盘）。
+	DirectoryPolicies []DirectoryPolicyConfig `mapstructure:"directory_policies" json:"directory_policies"`
+}
+
+// DirectoryPolicyConfig 单条目录策略。
+//
+// 范围（core#159 地基，issue 正文按「开跟踪」提报、范围需拍板）：
+//   - 已接线：ShareMode=deny ⇒ 本地导入（NAS 免上传导入）时按目录前缀拒收；
+//   - ⚠️ QuotaBytes **尚未接线**（配置骨架先行）：分享行不记录来源目录
+//     （file_codes.file_path 是存储相对路径，与本地绝对目录无关联），用量归因
+//     方案待拍板——候选：①存储相对路径带目录段（imports/<root>/，需评估孤儿
+//     扫描/秒传去重影响）②file_codes 增加来源目录列（迁移）③导入时登记映射表。
+//     接线时还须定义与 core#196 原子预留账本的关系（目录配额在其上做策略层，
+//     不改账本本身）与并发预留语义。当前设置本字段**不生效**，接线后语义为：
+//     该目录下存活分享总字节超限 ⇒ 拒绝（≠过期，文案定位到具体目录）。
+//   - TODO：share_mode 扩展 internal_only（仅站内/强制登录取件，对应 issue 的
+//     「只许站内分享、不许生成公网取件码」）待拍板；管理台配额分区 + 前端能力位。
+type DirectoryPolicyConfig struct {
+	// Root 目录前缀（绝对路径，与 upload.local_import.roots 同形态）。
+	// 分隔符感知的前缀匹配：/data/music 匹配其自身与子路径，不匹配 /data/music2；
+	// 多条重叠时取最长前缀（与配置顺序无关）。
+	Root string `mapstructure:"root" json:"root"`
+	// QuotaBytes 目录配额（字节，0=不限）。⚠️ 尚未接线，见类型注释。
+	QuotaBytes int64 `mapstructure:"quota_bytes" json:"quota_bytes"`
+	// ShareMode 分享策略：""/allow（默认，放行）| deny（该目录禁止生成分享）。
+	// 其余取值 fail-closed（配置拼错不得静默放行）。
+	ShareMode string `mapstructure:"share_mode" json:"share_mode"`
 }
 
 // DownloadConfig 下载配置

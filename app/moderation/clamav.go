@@ -8,9 +8,12 @@ package moderation
 //	stream: OK          干净
 //	stream: <签名> FOUND  命中
 //
-// 失败策略（fail-open）：clamd 不可达/超时/响应异常时放行并记 Warn 日志——
-// 可用性优先；部署方可用 Ping + 告警保障扫描器存活。
-// 超过 MaxScanBytes 的文件跳过扫描（防大文件拖垮 clamd）。
+// 失败策略：默认 **fail-open**——clamd 不可达/超时/响应异常时放行并记 Warn
+// 日志，可用性优先（部署方可用 Ping + 告警保障扫描器存活）；超过 MaxScanBytes
+// 的文件跳过扫描（防大文件拖垮 clamd）。
+// core#161：`moderation.clamav.strict=true` 可选收紧为 fail-closed——上述
+// 「扫描不可用」情形改为**拒收该次上传**（VerdictScanUnavailable）；
+// 默认 false 时本文件语义与 strict 引入前一字不改。
 
 import (
 	"bufio"
@@ -30,6 +33,9 @@ type ClamAVConfig struct {
 	Addr           string `mapstructure:"addr"`            // host:port（默认 localhost:3310）
 	TimeoutSeconds int    `mapstructure:"timeout_seconds"` // 单文件扫描超时，默认 60
 	MaxScanBytes   int64  `mapstructure:"max_scan_bytes"`  // 超过跳过扫描（0=不限，建议 512MB）
+	// Strict 失败策略（core#161）：false（默认）= fail-open 放行；
+	// true = 扫描不可用（clamd 不可达/超时/超 max_scan_bytes）时拒收。
+	Strict bool `mapstructure:"strict"`
 }
 
 // Normalized 补齐默认值
@@ -66,8 +72,9 @@ type ClamAVModerator struct {
 }
 
 // NewClamAVModerator 构建 clamd 扫描审核器（仅文件侧；文本判定请叠加词表审核器）。
-func NewClamAVModerator(addr string, timeoutSeconds int, maxScanBytes int64, opener ContentOpener) *ClamAVModerator {
-	cfg := ClamAVConfig{Addr: addr, TimeoutSeconds: timeoutSeconds, MaxScanBytes: maxScanBytes}
+// strict 见 ClamAVConfig.Strict（core#161；false = 现状 fail-open）。
+func NewClamAVModerator(addr string, timeoutSeconds int, maxScanBytes int64, opener ContentOpener, strict bool) *ClamAVModerator {
+	cfg := ClamAVConfig{Addr: addr, TimeoutSeconds: timeoutSeconds, MaxScanBytes: maxScanBytes, Strict: strict}
 	return &ClamAVModerator{cfg: cfg.Normalized(), opener: opener}
 }
 
@@ -94,6 +101,9 @@ func (m *ClamAVModerator) Health() ClamAVHealth { return m.state.snapshot() }
 
 // Addr clamd 地址（诊断输出用）。
 func (m *ClamAVModerator) Addr() string { return m.cfg.Addr }
+
+// Strict 失败策略（诊断输出用，core#161）：true = 扫描不可用时拒收。
+func (m *ClamAVModerator) Strict() bool { return m.cfg.Strict }
 
 func (m *ClamAVModerator) ping() error {
 	dialTimeout := time.Duration(m.cfg.TimeoutSeconds) * time.Second
@@ -177,15 +187,20 @@ func (m *ClamAVModerator) ScanReader(ctx context.Context, r io.Reader) (string, 
 }
 
 // InspectFile 文件侧判定：扫描 meta.StoragePath 内容。
-// 无路径/无 opener/超过上限 → 放行（记日志）；扫描器故障 → 放行（fail-open）；
-// 命中签名 → 按 BlockAction 语义由调用方决定的 Verdict（此处恒 VerdictReject；
-// pending 策略由 CombinedModerator/配置层转换——与词表审核器同一约定）。
+// 无路径/无 opener → 放行（无内容可扫，文本分享走此口径，strict 亦放行）；
+// 扫描器故障/超上限 → 默认放行（fail-open），strict=true 时改拒收
+// （VerdictScanUnavailable，core#161）；命中签名 → VerdictReject
+// （pending 策略由 CombinedModerator/配置层转换——与词表审核器同一约定）。
 func (m *ClamAVModerator) InspectFile(ctx context.Context, meta UploadMeta) Verdict {
 	if meta.StoragePath == "" || m.opener == nil {
 		m.state.recordOutcome(outcomeSkipped)
 		return VerdictAllow
 	}
 	if m.cfg.MaxScanBytes > 0 && meta.Size > m.cfg.MaxScanBytes {
+		// strict：无法完成扫描（防大文件拖垮 clamd 而跳过）⇒ 与不可达同口径拒收
+		if m.cfg.Strict {
+			return m.strictReject("size %d > max_scan_bytes %d: %s", meta.Size, m.cfg.MaxScanBytes, meta.FileName)
+		}
 		log.Printf("[moderation] clamd skip (size %d > max %d): %s", meta.Size, m.cfg.MaxScanBytes, meta.FileName)
 		m.state.recordOutcome(outcomeSkipped)
 		return VerdictAllow
@@ -193,6 +208,9 @@ func (m *ClamAVModerator) InspectFile(ctx context.Context, meta UploadMeta) Verd
 
 	rc, _, err := m.opener.GetFileReader(ctx, meta.StoragePath)
 	if err != nil {
+		if m.cfg.Strict {
+			return m.strictReject("open failed: %s: %v", meta.FileName, err)
+		}
 		log.Printf("[moderation] clamd open failed (fail-open): %v", err)
 		m.state.recordOutcome(outcomeFailOpen)
 		return VerdictAllow
@@ -201,6 +219,9 @@ func (m *ClamAVModerator) InspectFile(ctx context.Context, meta UploadMeta) Verd
 
 	sig, err := m.ScanReader(ctx, rc)
 	if err != nil {
+		if m.cfg.Strict {
+			return m.strictReject("scan failed: %s: %v", meta.FileName, err)
+		}
 		log.Printf("[moderation] clamd scan failed (fail-open): %s: %v", meta.FileName, err)
 		m.state.recordOutcome(outcomeFailOpen)
 		return VerdictAllow
@@ -212,6 +233,17 @@ func (m *ClamAVModerator) InspectFile(ctx context.Context, meta UploadMeta) Verd
 	}
 	m.state.recordOutcome(outcomeClean)
 	return VerdictAllow
+}
+
+// strictReject strict 模式下「扫描不可用」的统一处置（core#161）。
+//
+// 窗口仍记 outcomeFailOpen：复用 clamav_health.go 既有的 degraded 计数
+// （issue 要求「strict 下 degraded 计数直接映射为拒收计数」，不另造轮子）——
+// open 模式下该计数 = 被放行次数，strict 下 = 被拒收次数，语义由 mode 决定。
+func (m *ClamAVModerator) strictReject(format string, args ...any) Verdict {
+	log.Printf("[moderation] clamav strict reject: "+format, args...)
+	m.state.recordOutcome(outcomeFailOpen)
+	return VerdictScanUnavailable
 }
 
 // CombinedModerator 文本与文件各走独立审核器（词表 + ClamAV 组合）。
