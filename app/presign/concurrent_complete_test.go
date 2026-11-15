@@ -33,6 +33,8 @@ type concurrentShareService struct {
 	existing string
 
 	bothIn chan struct{} // 第二个 CreateShare 到达时关闭
+	// slow 建分享的模拟耗时（排队语义断言用；0=不磨蹭）
+	slow time.Duration
 }
 
 func (m *concurrentShareService) CreateShare(ctx context.Context, req *ShareCreateReq) (*ShareCreateResp, error) {
@@ -49,6 +51,9 @@ func (m *concurrentShareService) CreateShare(ctx context.Context, req *ShareCrea
 	case <-time.After(500 * time.Millisecond):
 	}
 
+	if m.slow > 0 {
+		time.Sleep(m.slow) // 模拟临界段耗时（排队语义断言）
+	}
 	m.mu.Lock()
 	m.existing = "SHARE001"
 	m.mu.Unlock()

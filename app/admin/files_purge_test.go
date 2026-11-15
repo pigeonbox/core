@@ -49,16 +49,34 @@ func TestPurgeFiles_DeletesObjectsOfSoftDeletedChildren(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, children, "前置条件：子行已软删（默认作用域查不到）")
 
-	// 彻底删除：物理对象必须全清（主表路径 + 两个软删子行路径）
+	// 彻底删除：DB 行硬删 + gc_jobs 同事务登记（core#192 outbox）；随后 GC
+	// worker 消费任务完成物理删除（含软删子行路径——负对照不变：子行列举退回
+	// 默认作用域即漏登记 ⇒ 本用例转红）。
 	purged, err := svc.PurgeFiles(ctx, []uint{fc.ID})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), purged)
+
+	// outbox：purge 即任务在表上（进程崩溃也不丢）；尚未消费 ⇒ 对象未删
+	var pending int64
+	require.NoError(t, g.Model(&model.GCJob{}).Where("state = ?", model.GCStatePending).Count(&pending).Error)
+	require.EqualValues(t, 3, pending, "purge 必须为主表+全部软删子行路径登记 GC 任务")
+	require.Empty(t, st.deleted, "outbox 形态下物理删除交给 worker，purge 本身不直删")
+
+	// worker 消费一轮 ⇒ 三个对象全清
+	gc := svc.GC()
+	processed, err := gc.RunOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 3, processed)
 
 	assert.Contains(t, st.deleted, "uploads/2026/11/06/a.txt", "主表对象应被 purge")
 	assert.Contains(t, st.deleted, "uploads/2026/11/06/b.txt",
 		"软删子行的物理对象也必须被 purge（否则远端后端永久残留）")
 	assert.Contains(t, st.deleted, "uploads/2026/11/06/c.txt",
 		"软删子行的物理对象也必须被 purge（否则远端后端永久残留）")
+
+	var done int64
+	require.NoError(t, g.Model(&model.GCJob{}).Where("state = ?", model.GCStateDone).Count(&done).Error)
+	assert.EqualValues(t, 3, done, "删除成功的任务必须落 done 终态")
 }
 
 // 负对照：无存储（storage==nil）时管理端批量软删也必须带走子行——

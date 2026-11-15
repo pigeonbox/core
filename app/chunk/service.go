@@ -8,6 +8,7 @@ import (
 
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/utils"
+	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
@@ -107,6 +108,12 @@ type Service struct {
 
 	// 登录用户单次上传大小上限查询（bootstrap 注入 user 域；nil = 跳过预检）
 	uploadCap UploadSizeCapProvider
+
+	// completionLock 上传完成面的**跨副本**互斥闸（core#191；NewService 自建，
+	// 方言分派见 repo/db/dblock.go）。uploadlock（internal，进程内条纹闸）只是
+	// 性能优化层；多副本部署（public × N）下同一 upload_id 的并发 Complete 由
+	// 本闸串行化——正确性不依赖进程锁（移除进程锁用例仍绿）。
+	completionLock *dblock.DLock
 }
 
 // UploadSizeCapProvider 登录用户单次上传大小上限（字节，0 = 不限）。
@@ -120,9 +127,22 @@ func (s *Service) SetUploadSizeCap(p UploadSizeCapProvider) { s.uploadCap = p }
 
 func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
-		chunkRepo:    dao.NewChunkRepository(gormDB),
-		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
+		chunkRepo:      dao.NewChunkRepository(gormDB),
+		fileCodeRepo:   dao.NewFileCodeRepository(gormDB),
+		completionLock: dblock.NewDLock(gormDB),
 	}
+}
+
+// LockCompletion 取得同一 upload_id 完成面的**跨副本**互斥权（core#191）。
+// 返回幂等 release（调用方 defer）。调用点：gen/handler/chunk 的
+// ChunkUploadComplete——进程内 uploadlock 之内、幂等回读/合并/建分享之前。
+// 取锁失败（等待超时/ctx 取消）返回错误：说明有并发方（同副本或跨副本）正在
+// 完成同一会话，客户端重试后走幂等回读。
+func (s *Service) LockCompletion(ctx context.Context, uploadID string) (func(), error) {
+	if s.completionLock == nil {
+		return nil, fmt.Errorf("completion lock not initialized")
+	}
+	return s.completionLock.Lock(ctx, dblock.UploadCompletionKey(uploadID))
 }
 
 // InitiateUpload 初始化分片上传

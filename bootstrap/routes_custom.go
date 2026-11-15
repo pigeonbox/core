@@ -174,6 +174,12 @@ func customizedRegister(r *server.Hertz) {
 	if config.ServesAdminPlane() {
 		r.GET("/admin/diagnostics", middleware.AdminOrAdminKey(), diagnosticsHandler)
 
+		// ===== 对象 GC 死信重放（core#192；管理面）=====
+		// dead（attempts 耗尽）⇒ pending 立即到期，worker 下一轮重新消费。
+		// 语义=「人工已排障（远端恢复/配额调整），再给一次机会」。诊断段的
+		// gc_jobs.dead > 0 时从这里重放。与 /admin/diagnostics 同鉴权面。
+		r.POST("/admin/storage/gc-jobs/replay", middleware.AdminOrAdminKey(), gcJobsReplayHandler)
+
 		// ===== 定时自动备份（5.1.0；管理面）=====
 		// 列表 + 状态、下载单个包、立即备份。
 		//

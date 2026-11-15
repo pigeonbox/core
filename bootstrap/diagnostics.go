@@ -84,6 +84,9 @@ type DiagnosticsReport struct {
 	// 离线 / 超时 / 上游异常一律退化成 `source=unknown`，**不是故障**
 	// （`pb doctor` 必须把「不知道」和「坏了」分开报）。
 	Update UpdateStatus `json:"update"`
+	// GCJobs 对象 GC 任务积压（core#192）：pending 积压 / dead 死信一屏可见；
+	// dead > 0 需人工排查（可经 /admin/storage/gc-jobs/replay 重放）。
+	GCJobs DiagnosticsGCJobs `json:"gc_jobs"`
 }
 
 // UpdateStatus 更新状态（与 app/updatecheck.Result 同形，单独定义是为了
@@ -288,6 +291,10 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 	// ===== 定时自动备份 =====
 	// **纯本地**（列一次目录 + 读内存状态），不出站、不触发备份 ⇒ 放哪都安全。
 	report.Backup = autoBackupStatus()
+
+	// ===== 对象 GC 任务积压（core#192）=====
+	// 纯本地读表，不出站；统计失败如实落 Error（失败可见，与 core#102 同律）。
+	report.GCJobs = diagnosticsGCJobs(ctx)
 
 	// ===== 更新状态 =====
 	// 放在最后：它可能出站（未命中缓存时最多 5s），前面的检查结论不该被它拖慢

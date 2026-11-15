@@ -378,17 +378,12 @@ func (e *QuotaExceededError) ErrCode() int  { return errcode.CodeStorageQuota }
 // CheckQuota 存储配额强制检查（上传前调用）。
 // 生效优先级：用户级 MaxStorageQuota > 系统默认 user.user_storage_quota；0 = 不限。
 // 已用配额以 file_codes 表实时聚合为准（比 users.total_storage 计数器更抗漂移）。
+//
+// ⚠️ 本方法是**预检**（core#169）：读-比-放行与随后的插入之间无原子性；权威
+// 判定在 share 域插入时收口（GetStorageQuotaLimit 提供闸内复核的上限值 +
+// dao.SumShareSizeByUserTx 的闸内合计）。
 func (s *Service) CheckQuota(ctx context.Context, userID uint, addBytes int64) error {
-	user, err := s.repo.GetByID(ctx, userID)
-	if err != nil {
-		// 用户不存在/查询失败时不阻断上传（统计与配额是运营约束，不是可用性前提）
-		return nil
-	}
-	limit := user.MaxStorageQuota
-	if limit <= 0 {
-		// 系统默认取管理后台"用户配置"持久化值（无记录回退 yaml）
-		limit = s.defaultStorageQuota(ctx)
-	}
+	limit := s.GetStorageQuotaLimit(ctx, userID)
 	if limit <= 0 {
 		return nil
 	}
@@ -401,6 +396,21 @@ func (s *Service) CheckQuota(ctx context.Context, userID uint, addBytes int64) e
 			"存储配额超限（已用 %d / 上限 %d 字节，本次需 %d 字节）", used, limit, addBytes)}
 	}
 	return nil
+}
+
+// GetStorageQuotaLimit 生效的存储配额上限（字节，0 = 不限；core#169 闸内权威
+// 复核消费，share.QuotaLimitResolver 的 user.Service 实现）。
+// 生效优先级与 CheckQuota 一致：用户级 MaxStorageQuota > 系统默认
+// user.user_storage_quota；用户不存在/查询失败返回 0（不阻断——配额是运营约束）。
+func (s *Service) GetStorageQuotaLimit(ctx context.Context, userID uint) int64 {
+	user, err := s.repo.GetByID(ctx, userID)
+	if err != nil {
+		return 0
+	}
+	if user.MaxStorageQuota > 0 {
+		return user.MaxStorageQuota
+	}
+	return s.defaultStorageQuota(ctx)
 }
 
 // SetStorageQuota 管理员设置用户存储配额（0 = 不限，回退系统默认）

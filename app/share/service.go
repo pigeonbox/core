@@ -120,10 +120,13 @@ type Service struct {
 	baseURLProvider func(context.Context) string
 	notifySvc       NotifyServiceInterface
 	quotaChecker    QuotaChecker
-	moderator       moderation.Moderator // 内容审核钩子（nil = 不审核）
-	flagEmitter     FlagEventEmitter     // share.flagged webhook（nil = 不推送）
-	federation      FederationNotifier   // P2P 联邦口令路由钩子（nil = 非联邦模式；读写走 federationMu——P1 后台热切换=运行期写）
-	federationMu    sync.RWMutex
+	// quotaLimitResolver 用户级配额上限解析（core#169 闸内权威复核；nil=跳过
+	// 用户级复核，预检仍在）
+	quotaLimitResolver QuotaLimitResolver
+	moderator          moderation.Moderator // 内容审核钩子（nil = 不审核）
+	flagEmitter        FlagEventEmitter     // share.flagged webhook（nil = 不推送）
+	federation         FederationNotifier   // P2P 联邦口令路由钩子（nil = 非联邦模式；读写走 federationMu——P1 后台热切换=运行期写）
+	federationMu       sync.RWMutex
 
 	// 存储兜底（storageClient 惰性本地后端，仅未注入时使用；见 files.go）
 	fallbackOnce    sync.Once
@@ -275,12 +278,76 @@ func (s *Service) SetQuotaChecker(qc QuotaChecker) {
 	s.quotaChecker = qc
 }
 
+// QuotaLimitResolver 用户级存储配额上限解析（core#169 闸内权威复核用）。
+// 独立小接口而非扩 UserServiceInterface：既有实现方/测试桩不动，bootstrap
+// 注入 user service 实例即可（user.Service 以同签名满足）。nil = 闸内跳过
+// 用户级复核（预检仍在）。
+type QuotaLimitResolver interface {
+	// GetStorageQuotaLimit 生效存储配额上限（字节，0 = 不限）。
+	GetStorageQuotaLimit(ctx context.Context, userID uint) int64
+}
+
+// SetQuotaLimitResolver 注入用户级配额上限解析方（bootstrap 接线 user service）。
+func (s *Service) SetQuotaLimitResolver(r QuotaLimitResolver) {
+	s.quotaLimitResolver = r
+}
+
 // checkQuota 登录用户上传前配额检查（匿名上传无配额语义，跳过）
 func (s *Service) checkQuota(ctx context.Context, userID *uint, addBytes int64) error {
 	if s.quotaChecker == nil || userID == nil {
 		return nil
 	}
 	return s.quotaChecker.CheckQuota(ctx, *userID, addBytes)
+}
+
+// UserQuotaExceededError 用户级存储配额超限（core#169 闸内权威判定；handler
+// 侧经 ErrCode 透传 CodeStorageQuota，与预检路径的 user.QuotaExceededError 同码）。
+type UserQuotaExceededError struct {
+	Used  int64
+	Limit int64
+	Add   int64
+}
+
+func (e *UserQuotaExceededError) Error() string {
+	return fmt.Sprintf("存储配额超限（已用 %d / 上限 %d 字节，本次需 %d 字节；口径：存活分享，不含回收站）", e.Used, e.Limit, e.Add)
+}
+
+func (e *UserQuotaExceededError) ErrCode() int { return errcode.CodeStorageQuota }
+
+// quotaGateGuard 闸内权威复核闭包（core#169）：在「配额闸」串行段内的同一
+// 事务里重读合计再判定——checkUploadCaps/checkQuota 的读-比-放行只是预检
+// （fail-fast UX），判定与插入之间的并发窗口由这里收口。
+// siteQuota=本次请求预检时解析的站点配额值（0=不限；同一读点单次解析，
+// 规则 8 棘轮：本文件 GetGlobalConfig 直读恒 1 处）。
+//
+// 统计故障时 fail-open（与预检同策略：配额是治理项而非安全项，不因统计异常
+// 拒绝所有上传）；闸本身取锁失败则 fail-closed（返回错误，客户端可重试）——
+// 静默放行会把并发超卖窗口重新打开。
+func (s *Service) quotaGateGuard(ctx context.Context, userID *uint, addBytes, siteQuota int64) func(tx *gorm.DB) error {
+	return func(tx *gorm.DB) error {
+		if siteQuota > 0 {
+			used, err := dao.SumShareSizeIncludingDeletedTx(tx)
+			if err != nil {
+				logger.CtxWarn(ctx, "全局存储配额闸内统计失败，跳过复核（fail-open）", "err", err)
+			} else if used+addBytes > siteQuota {
+				metrics.RecordRejected(metrics.RejectQuota)
+				return &GlobalQuotaExceededError{Used: used, Quota: siteQuota}
+			}
+		}
+		if userID != nil && s.quotaLimitResolver != nil {
+			limit := s.quotaLimitResolver.GetStorageQuotaLimit(ctx, *userID)
+			if limit > 0 {
+				used, err := dao.SumShareSizeByUserTx(tx, *userID)
+				if err != nil {
+					logger.CtxWarn(ctx, "用户配额闸内统计失败，跳过复核（fail-open）", "err", err)
+				} else if used+addBytes > limit {
+					metrics.RecordRejected(metrics.RejectQuota)
+					return &UserQuotaExceededError{Used: used, Limit: limit, Add: addBytes}
+				}
+			}
+		}
+		return nil
+	}
 }
 
 // validCustomCode 自定义取件码合法性（P3）：3-32 位字母/数字/-/_
@@ -300,12 +367,27 @@ func validCustomCode(code string) bool {
 
 // createWithCode 带可选自定义码的写库（CustomCode 合法时直接占用；冲突报错不重试；
 // 空/非法时回退随机码）。customCode 仅登录用户可指定（handler 侧把关，防匿名抢注）。
+// 无配额复核（文本通道专用形态）；文件分享经 createShareRowTx 传 guard。
 func (s *Service) createWithCode(ctx context.Context, customCode string, build func(code string) *model.FileCode) (*model.FileCode, error) {
-	// 懒初始化守卫：本方法与 createWithRetry 是仅有的不经公开入口直用
-	// s.fileCodeRepo 的写库路径，此前 nil repo 靠零尺寸 struct 的 nil receiver
-	// 巧合可跑（dao 注入化改造后必炸，2026-10-10 随改造真修）。
+	return s.createShareRowTx(ctx, customCode, build, nil, nil)
+}
+
+// createShareRowTx 分享写库统一收口（core#169）。
+//
+// 结构：customCode 合法时直接占用（预检 + 唯一索引兜底，冲突不重试）；否则
+// 随机码 + 唯一冲突换码重试（最多 5 次）。**插入一律走「配额闸」串行段内的
+// 单事务**（FileCodeRepository.UnderQuotaGateTx）：guard(tx)（站点/用户配额
+// 权威复核，闸内重读合计）→ 主行 → extras(tx, rec)（子表清单等主行附属写入）。
+// 任一步失败 ⇒ 事务整体回滚——不再出现「父行已建、子行缺失」的半截状态，
+// 也把「读合计 → 判定 → 插入」收进同一串行段（并发上传打不穿配额）。
+//
+// 文本通道（无配额语义、无子行）经 createWithCode 传 (nil, nil)。
+func (s *Service) createShareRowTx(ctx context.Context, customCode string, build func(code string) *model.FileCode, guard func(tx *gorm.DB) error, extras func(tx *gorm.DB, rec *model.FileCode) error) (*model.FileCode, error) {
+	// 懒初始化守卫：本方法族是仅有的不经公开入口直用 s.fileCodeRepo 的写库
+	// 路径，此前 nil repo 靠零尺寸 struct 的 nil receiver 巧合可跑（dao 注入化
+	// 改造后必炸，2026-10-10 随改造真修）。
 	if customCode == "" {
-		return s.createWithRetry(ctx, build)
+		return s.createWithRetryTx(ctx, build, guard, extras)
 	}
 	if !validCustomCode(customCode) {
 		return nil, errors.New("自定义取件码需为 3-32 位字母、数字、- 或 _")
@@ -336,13 +418,31 @@ func (s *Service) createWithCode(ctx context.Context, customCode string, build f
 	if err := utils.CheckPickupCountCap(fc.ExpiredCount); err != nil {
 		return nil, err
 	}
-	if err := s.fileCodeRepo.Create(ctx, fc); err != nil {
+	if err := s.insertShareRow(ctx, fc, guard, extras); err != nil {
 		if gormx.IsUniqueViolation(err) {
 			return nil, errors.New("自定义取件码已被占用，请换一个")
 		}
 		return nil, err
 	}
 	return fc, nil
+}
+
+// insertShareRow 闸段事务插入（guard → 主行 → extras，任一失败整体回滚）。
+func (s *Service) insertShareRow(ctx context.Context, rec *model.FileCode, guard func(tx *gorm.DB) error, extras func(tx *gorm.DB, rec *model.FileCode) error) error {
+	return s.fileCodeRepo.UnderQuotaGateTx(ctx, func(tx *gorm.DB) error {
+		if guard != nil {
+			if err := guard(tx); err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(rec).Error; err != nil {
+			return err
+		}
+		if extras != nil {
+			return extras(tx, rec)
+		}
+		return nil
+	})
 }
 
 // customCodeTakenMessage 自定义码占用文案（core#112）：占用方在回收站时点名
@@ -367,8 +467,9 @@ func (s *Service) GenerateCode() string {
 	return uidgen.RandomString(charset, 8)
 }
 
-// createWithRetry 通用写库重试（code 唯一冲突时换码重试，最多 5 次）。
-func (s *Service) createWithRetry(ctx context.Context, build func(code string) *model.FileCode) (*model.FileCode, error) {
+// createWithRetryTx 通用写库重试（code 唯一冲突时换码重试，最多 5 次）。
+// 每次尝试都是完整闸段（core#169）：guard 复核 → 主行 → extras。
+func (s *Service) createWithRetryTx(ctx context.Context, build func(code string) *model.FileCode, guard func(tx *gorm.DB) error, extras func(tx *gorm.DB, rec *model.FileCode) error) (*model.FileCode, error) {
 	var fc *model.FileCode
 	err := retry.Do(ctx, retry.Config{
 		Attempts: 5,
@@ -382,7 +483,7 @@ func (s *Service) createWithRetry(ctx context.Context, build func(code string) *
 		if err := utils.CheckPickupCountCap(rec.ExpiredCount); err != nil {
 			return err
 		}
-		if err := s.fileCodeRepo.Create(ctx, rec); err != nil {
+		if err := s.insertShareRow(ctx, rec, guard, extras); err != nil {
 			return err
 		}
 		fc = rec
@@ -523,19 +624,29 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 
 // checkUploadCaps 单用户单次上传上限（users.max_upload_size，0=不限；匿名无此
 // 约束）+ 站点级全局存储配额 + 存储配额强制执行。超限返回带具体上限文案的错误。
-func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize int64) error {
+// 返回**本次生效的站点配额值**（storage.quota，0=不限）——core#169 的闸内权威
+// 复核（quotaGateGuard）复用同一读点，不二读全局配置（规则 8 棘轮：本文件
+// GetGlobalConfig 直读恒 1 处）。
+//
+// ⚠️ 本函数是**预检**（fail-fast UX）。core#169：读-比-放行与后续插入之间无
+// 原子性 ⇒ 并发上传可打穿配额；权威闸在插入时收口（见 quotaGateGuard +
+// FileCodeRepository.UnderQuotaGateTx 的「闸锁 → 合计复核 → 插入」单闸段）。
+func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize int64) (int64, error) {
 	// 站点级全局存储配额（storage.quota，0=不限）：全通道统一闸口
 	// （直传/分片完成/预签名完成/本地导入/多文件均经此处）。统计口径=
-	// **物理占用**（含回收站软删——purge 前仍占盘；评审 D01）。原存活口径
-	// 漏计软删 ⇒ 站点配额虚低。未完成分片会话暂不计入。用户配额仍为逻辑
-	// 口径（存活制）。统计故障时 fail-open（配额是治理项而非安全项，不因
-	// 统计异常拒绝所有上传）。
+	// **逻辑分享容量**（GetLogicalShareSizeIncludingDeleted，core#193 正名）：
+	// 含回收站软删——purge 前分享行仍在、用量不回退（评审 D01）；**未按物理
+	// 对象去重**——秒传共享的同一 blob 每个分享各计一次。保守口径：宁高估
+	// 不低估；真实磁盘占用另见 GetPhysicalObjectUsage。原存活口径漏计软删 ⇒
+	// 站点配额虚低。未完成分片会话暂不计入。用户配额仍为存活口径。
+	// 统计故障时 fail-open（配额是治理项而非安全项，不因统计异常拒绝所有上传）。
+	siteQuota := int64(0)
 	if cfg := conf.GetGlobalConfig(); cfg != nil && cfg.Storage.Quota > 0 {
-		quota := cfg.Storage.Quota
-		if used, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx); err == nil {
-			if used+totalSize > quota {
+		siteQuota = cfg.Storage.Quota
+		if used, err := s.fileCodeRepo.GetLogicalShareSizeIncludingDeleted(ctx); err == nil {
+			if used+totalSize > siteQuota {
 				metrics.RecordRejected(metrics.RejectQuota)
-				return &GlobalQuotaExceededError{Used: used, Quota: quota}
+				return siteQuota, &GlobalQuotaExceededError{Used: used, Quota: siteQuota}
 			}
 		} else {
 			logger.CtxWarn(ctx, "全局存储配额统计失败，本次跳过配额检查", "err", err)
@@ -546,15 +657,15 @@ func (s *Service) checkUploadCaps(ctx context.Context, userID *uint, totalSize i
 			// typed error（CodeTooLarge→413）：此前为普通 error，NewTypedError
 			// 兜底 CodeInternal，前端显示「服务器内部错误」掩盖超限真相（2026-10-19 事故）。
 			if err := gate.CheckUploadSizeCap(userID, totalSize, capSize); err != nil {
-				return err
+				return siteQuota, err
 			}
 		}
 	}
 	if err := s.checkQuota(ctx, userID, totalSize); err != nil {
 		metrics.RecordRejected(metrics.RejectQuota)
-		return err
+		return siteQuota, err
 	}
-	return nil
+	return siteQuota, nil
 }
 
 // CheckUploadSizeCap 登录用户单次上传总大小预检（多文件绑定按申报大小 fail-fast，
@@ -573,7 +684,9 @@ type GlobalQuotaExceededError struct {
 }
 
 func (e *GlobalQuotaExceededError) Error() string {
-	return fmt.Sprintf("站点存储空间已满（已用 %d / 上限 %d 字节），请联系管理员清理过期分享或调整配额", e.Used, e.Quota)
+	// 口径说明（core#193）：用量=逻辑分享容量（含回收站、未去重），不再宣称
+	// 「物理占用」——物理占用低于该值（秒传去重命中时差距可达数量级）。
+	return fmt.Sprintf("站点存储空间已满（已用 %d / 上限 %d 字节；口径：全部分享含回收站、未去重），请联系管理员清理过期分享或调整配额", e.Used, e.Quota)
 }
 
 func (e *GlobalQuotaExceededError) ErrCode() int { return errcode.CodeStorageQuota }
@@ -654,8 +767,9 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 		return nil, err
 	}
 
-	// 单用户单次上传上限 + 存储配额强制执行
-	if err := s.checkUploadCaps(ctx, req.UserID, req.Size); err != nil {
+	// 单用户单次上传上限 + 存储配额强制执行（siteQuota 带给闸内权威复核）
+	siteQuota, err := s.checkUploadCaps(ctx, req.UserID, req.Size)
+	if err != nil {
 		return nil, err
 	}
 
@@ -698,7 +812,12 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 		filePending = p
 	}
 
-	fileCode, err := s.createWithCode(ctx, req.CustomCode, func(code string) *model.FileCode {
+	// 写库（core#169）：配额闸串行段内的单事务——guard 权威复核 → 主行 → 子行。
+	// 子表同步写一行（P0 多文件：子表是文件清单的**唯一真相源**）
+	// ⚠️ 2026-10-26 审计修复：子行写失败 ⇒ **回滚分享**（与多文件通道同策略），
+	// 不留半截状态——原实现「主行已建、子行缺失」需手工回滚，现随闸段事务
+	// 整体回滚（语义不变，少一条手工补偿路径）。
+	fileCode, err := s.createShareRowTx(ctx, req.CustomCode, func(code string) *model.FileCode {
 		return &model.FileCode{
 			Code:         code,
 			FilePath:     req.FilePath,
@@ -718,36 +837,27 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 			WrappedKey:   req.WrappedKey,
 			Note:         req.Note,
 		}
+	}, s.quotaGateGuard(ctx, req.UserID, req.Size, siteQuota), func(tx *gorm.DB, rec *model.FileCode) error {
+		if rec.GetFilePath() == "" {
+			return nil
+		}
+		child := &model.FileCodeFile{
+			FileCodeID:   rec.ID,
+			FileName:     req.Text,
+			UUIDFileName: rec.UUIDFileName,
+			FilePath:     rec.GetFilePath(),
+			Size:         req.Size,
+			FileHash:     req.FileHash,
+		}
+		if err := tx.Create(child).Error; err != nil {
+			logger.CtxError(ctx, "write child file row failed, rolling back share",
+				"code", rec.Code, "err", err)
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-
-	// 子表同步写一行（P0 多文件：子表是文件清单的**唯一真相源**）
-	// ⚠️ 2026-10-26 审计修复：原实现写失败只 Warn「降级为主表读取」——但**虚拟行
-	// 已退役**（主表回退路径不存在）⇒ 分享已发布却**没有子行** ⇒ 取件页文件列表
-	// 为空、管理台子文件数 0（下载仍走主表单文件分支 ⇒「看起来能用」⇒ 极难发现）。
-	// ⇒ 子行写失败 ⇒ **回滚分享**（与多文件通道同策略），不留半截状态。
-	if fc := fileCode; fc != nil {
-		if rel := fc.GetFilePath(); rel != "" {
-			child := &model.FileCodeFile{
-				FileCodeID:   fc.ID,
-				FileName:     req.Text,
-				UUIDFileName: fc.UUIDFileName,
-				FilePath:     rel,
-				Size:         req.Size,
-				FileHash:     req.FileHash,
-			}
-			if err := s.fileFileRepo.CreateBatch(ctx, []*model.FileCodeFile{child}); err != nil {
-				logger.CtxError(ctx, "write child file row failed, rolling back share",
-					"code", fc.Code, "err", err)
-				if derr := s.fileCodeRepo.Delete(ctx, fc.ID); derr != nil {
-					logger.CtxError(ctx, "rollback share after child row failure failed",
-						"code", fc.Code, "err", derr)
-				}
-				return nil, fmt.Errorf("写文件清单失败: %w", err)
-			}
-		}
 	}
 
 	// 更新用户统计（次数 +1，存储按文件大小）

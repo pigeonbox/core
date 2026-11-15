@@ -103,7 +103,7 @@ func TestGlobalQuota_IncludesRecycleBin(t *testing.T) {
 	setStorageQuota(t, 1000)
 	seedAndSoftDeleteShare(t, gormDB, "RQ00001", 900) // 回收站里 900
 
-	err := svc.checkUploadCaps(ctx, nil, 200)
+	_, err := svc.checkUploadCaps(ctx, nil, 200)
 	if err == nil {
 		t.Fatal("物理口径下必须超限拒绝（回收站软删仍占盘）")
 	}

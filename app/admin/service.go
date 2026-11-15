@@ -33,6 +33,10 @@ type Service struct {
 	// NewService() 持独立实例（测试隔离）；Default() 单例改绑 config.Default()
 	// ——system_configs 单行读改写语义要求全站唯一配置实例（2026-10-03 事故）。
 	cfg *appconfig.Service
+
+	// gcSvc 对象 GC 任务执行器（core#192）：purge outbox 任务构造 + worker
+	// 消费；deleter 随 SetStorage 注入。
+	gcSvc *GCService
 }
 
 // FederationNotifier P2P 联邦撤销钩子（窄接口，实现在 app/federation；
@@ -73,12 +77,23 @@ func NewService(gormDB *gorm.DB) *Service {
 		fileFileRepo:       dao.NewFileCodeFileRepository(gormDB),
 		sysConfigRepo:      dao.NewSystemConfigRepository(gormDB),
 		cfg:                appconfig.NewService(gormDB),
+		// GC 任务执行器（core#192）：purge 路径的 outbox 任务构造 + worker
+		// 消费。deleter 随 SetStorage 注入（同一存储实例）。
+		gcSvc: NewGCService(gormDB, nil),
 	}
 }
+
+// GC 返回 GC 任务执行器（bootstrap worker 与 purge outbox 共用同一实例）。
+func (s *Service) GC() *GCService { return s.gcSvc }
 
 // SetStorage 注入存储服务（用于过期清理删物理文件）
 func (s *Service) SetStorage(st storage.StorageInterface) {
 	s.storage = st
+	// GC 执行器与过期清理用同一存储实例（core#192；GCObjectDeleter 只取
+	// DeleteFile 一个能力，未实现删除的实例不注入 ⇒ 任务留表待换实例）
+	if deleter, ok := st.(GCObjectDeleter); ok {
+		s.gcSvc.SetDeleter(deleter)
+	}
 }
 
 // logAdminOperation 写入管理操作审计日志（P0 修复：模型/DAO 早已有之，
