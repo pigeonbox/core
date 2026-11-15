@@ -813,11 +813,23 @@ var ErrShareGone = errors.New("share code not found")
 // 不入枚举锁定桶：持码者反复打开失效页是正常行为，不是猜码。
 var ErrShareExpired = errors.New("file has expired")
 
+// ExpiredShareError 分享已过期，携带**规范分享码**（frontend-core#93：取件
+// 失败事件要挂到正确的分享行——6 位取件码/小写入口解析后才知道归属）。
+//
+// 与 ErrShareExpired 的关系：Is() 桥接 ⇒ 既有 errors.Is(err, ErrShareExpired)
+// 判据（gone_sentinel_test、metadata/preview 面）全部照常命中；
+// Error() 文案逐字保留 "file has expired"（既有断言依赖）。
+type ExpiredShareError struct{ Code string }
+
+func (e *ExpiredShareError) Error() string { return ErrShareExpired.Error() }
+
+func (e *ExpiredShareError) Is(target error) bool { return target == ErrShareExpired }
+
 // validateShareRecord 过期 / 管控判定（各解析路径共用）。
 func (s *Service) validateShareRecord(fileCode *model.FileCode) (*model.FileCode, error) {
-	// 检查文件是否过期
+	// 检查文件是否过期（typed：携带规范分享码，供失败事件归因）
 	if fileCode.IsExpired() {
-		return nil, ErrShareExpired
+		return nil, &ExpiredShareError{Code: fileCode.Code}
 	}
 
 	// 管控状态：blocked / pending_review 拒绝取件（typed error，handler 按业务码透传）
