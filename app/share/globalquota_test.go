@@ -37,7 +37,7 @@ func seedAndSoftDeleteShare(t *testing.T, gormDB *gorm.DB, code string, size int
 	require.NoError(t, gormDB.Delete(&model.FileCode{}, "code = ?", code).Error)
 }
 
-// 回归：站点级全局存储配额（storage.quota）——全通道闸口 checkUploadCaps，
+// 回归：站点级全局存储配额（storage.quota）——全通道闸口 reserveUploadCaps，
 // 统计口径=**物理占用**（含回收站软删——purge 前仍占盘，评审 D01），quota=0 不限。
 func TestGlobalStorageQuota(t *testing.T) {
 	svc, gormDB, _, _, _ := newTestServiceWithDB(t)
@@ -103,7 +103,10 @@ func TestGlobalQuota_IncludesRecycleBin(t *testing.T) {
 	setStorageQuota(t, 1000)
 	seedAndSoftDeleteShare(t, gormDB, "RQ00001", 900) // 回收站里 900
 
-	_, err := svc.checkUploadCaps(ctx, nil, 200)
+	release, err := svc.reserveUploadCaps(ctx, nil, 200)
+	if release != nil {
+		release()
+	}
 	if err == nil {
 		t.Fatal("物理口径下必须超限拒绝（回收站软删仍占盘）")
 	}

@@ -96,11 +96,13 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 		seenPath[key] = struct{}{}
 	}
 
-	// 单用户单次上传总大小上限 + 存储配额（合计一次校验/扣检；siteQuota 带给闸内复核）
-	siteQuota, err := s.checkUploadCaps(ctx, req.UserID, totalSize)
+	// 单用户单次上传总大小上限 + 存储配额（合计一次判定/预留，core#169：
+	// 与单文件通道同款预留账本，defer 覆盖 insert 及其后全部路径）
+	release, err := s.reserveUploadCaps(ctx, req.UserID, totalSize)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 
 	// 内容审核：逐文件判定，任一命中即整单处置（reject 拒绝 / pending 待审）
 	filePending := false
@@ -125,9 +127,7 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 	}
 
 	first := req.Entries[0]
-	// 写库（core#169）：配额闸串行段内的单事务——guard 权威复核 → 主行 → 子行
-	// 批量写。子行失败随事务整体回滚（原手工「删主行」补偿路径退役）。
-	fileCode, err := s.createShareRowTx(ctx, req.CustomCode, func(code string) *model.FileCode {
+	fileCode, err := s.createWithCode(ctx, req.CustomCode, func(code string) *model.FileCode {
 		return &model.FileCode{
 			Code:         code,
 			FilePath:     first.RelPath,
@@ -146,27 +146,28 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 			WrappedKey:   req.WrappedKey,
 			Note:         req.Note,
 		}
-	}, s.quotaGateGuard(ctx, req.UserID, totalSize, siteQuota), func(tx *gorm.DB, rec *model.FileCode) error {
-		children := make([]*model.FileCodeFile, 0, len(req.Entries))
-		for i, e := range req.Entries {
-			children = append(children, &model.FileCodeFile{
-				FileCodeID:   rec.ID,
-				FileName:     e.FileName,
-				RelDir:       e.RelDir,
-				UUIDFileName: uniqueNameOf(e.RelPath),
-				FilePath:     e.RelPath,
-				Size:         e.Size,
-				FileHash:     e.FileHash,
-				SortOrder:    i,
-			})
-		}
-		if err := tx.Create(&children).Error; err != nil {
-			return fmt.Errorf("写入分享文件列表失败: %w", err)
-		}
-		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// 子表批量写入；失败则回滚主表（分享未发布，物理文件交 handler 清理）
+	children := make([]*model.FileCodeFile, 0, len(req.Entries))
+	for i, e := range req.Entries {
+		children = append(children, &model.FileCodeFile{
+			FileCodeID:   fileCode.ID,
+			FileName:     e.FileName,
+			RelDir:       e.RelDir,
+			UUIDFileName: uniqueNameOf(e.RelPath),
+			FilePath:     e.RelPath,
+			Size:         e.Size,
+			FileHash:     e.FileHash,
+			SortOrder:    i,
+		})
+	}
+	if err := s.fileFileRepo.CreateBatch(ctx, children); err != nil {
+		_ = s.fileCodeRepo.Delete(ctx, fileCode.ID)
+		return nil, fmt.Errorf("写入分享文件列表失败: %w", err)
 	}
 
 	// 用户统计：次数 +1，存储按合计
