@@ -162,21 +162,21 @@ func CanRefTransition(from, to string) bool {
 // 不内嵌 gorm.Model：软删除对本模型无意义（生命周期由 State 表达，
 // Purged 后行保留作账本），gorm.DeletedAt 会与状态机抢语义。
 type Blob struct {
-	ID uint `gorm:"primaryKey" json:"id`
+	ID uint `gorm:"primaryKey" json:"id"`
 	// ObjectKey 存储相对路径（唯一索引）：与 file_codes.file_path 同值域。
-	ObjectKey string `gorm:"uniqueIndex;size:255" json:"object_key`
-	Size      int64  `gorm:"default:0" json:"size`
+	ObjectKey string `gorm:"uniqueIndex;size:255" json:"object_key"`
+	Size      int64  `gorm:"default:0" json:"size"`
 	// FileHash 内容哈希（秒传去重键；可空——存量/文本对象无哈希）。
-	FileHash string `gorm:"size:64;index" json:"file_hash`
+	FileHash string `gorm:"size:64;index" json:"file_hash"`
 	// State 生命周期状态（见 Blob* 常量；default active = 写路径建即态）。
-	State string `gorm:"size:20;default:'active';index" json:"state`
+	State string `gorm:"size:20;default:'active';index" json:"state"`
 	// TrashedAt 进入宽限期的时间（State=trashed 时非空；宽限判据）。
-	TrashedAt *time.Time `json:"trashed_at`
+	TrashedAt *time.Time `json:"trashed_at"`
 	// PurgedAt 物理对象删除完成时间（State=purged 时非空）。
-	PurgedAt *time.Time `json:"purged_at`
+	PurgedAt *time.Time `json:"purged_at"`
 
-	CreatedAt time.Time `json:"created_at`
-	UpdatedAt time.Time `json:"updated_at`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TableName 显式表名（注册表/换库搬运按此对账）。
@@ -186,18 +186,18 @@ func (Blob) TableName() string { return "blobs" }
 //
 // 软删不释放（见文件头不变量）；硬删释放 = State 置 released（行保留作账本）。
 type FileReference struct {
-	ID uint `gorm:"primaryKey" json:"id`
+	ID uint `gorm:"primaryKey" json:"id"`
 	// BlobID 被引用的对象。
-	BlobID uint `gorm:"index;uniqueIndex:idx_file_ref_blob_share" json:"blob_id`
+	BlobID uint `gorm:"index;uniqueIndex:idx_file_ref_blob_share" json:"blob_id"`
 	// FileCodeID 引用方分享（file_codes.id）。
-	FileCodeID uint `gorm:"index;uniqueIndex:idx_file_ref_blob_share" json:"file_code_id`
+	FileCodeID uint `gorm:"index;uniqueIndex:idx_file_ref_blob_share" json:"file_code_id"`
 	// State RefActive / RefReleased。
-	State string `gorm:"size:20;default:'active'" json:"state`
+	State string `gorm:"size:20;default:'active'" json:"state"`
 	// ReleasedAt 硬删释放时间（State=released 时非空）。
-	ReleasedAt *time.Time `json:"released_at`
+	ReleasedAt *time.Time `json:"released_at"`
 
-	CreatedAt time.Time `json:"created_at`
-	UpdatedAt time.Time `json:"updated_at`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TableName 显式表名。

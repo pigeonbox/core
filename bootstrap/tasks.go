@@ -171,6 +171,13 @@ func startMaintenanceJanitor() {
 		} else if removed > 0 {
 			logger.Info("orphan files removed", zap.Int("count", removed))
 		}
+		// 文件生命周期账本回收（core#172 首片）：引用归零且过宽限的对象
+		// 补删 + 账本推进 purged（双守卫见 blob_gc.go；宽限 24h 与孤儿对账同量级）
+		if n, err := j.ReclaimBlobs(ctx, 24*time.Hour); err != nil {
+			logger.Warn("blob reclaim failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("blobs reclaimed", zap.Int("count", n))
+		}
 		if n, err := j.CleanupLogs(ctx); err != nil {
 			logger.Warn("log retention cleanup failed", zap.Error(err))
 		} else if n > 0 {

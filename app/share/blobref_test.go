@@ -180,6 +180,29 @@ func TestCreateMultiFileShare_WritesRefsPerChild(t *testing.T) {
 	}
 }
 
+// 配额守卫（core#172，沿用 core#169 预留账本口径不重复实现）：
+// 配额闸拒绝 ⇒ 分享未建 ⇒ 账本零残留（blob/引用行都不得出现）——
+// 即账本双写挂在 reserveUploadCaps 之后的 insert 成功路径上，
+// 不绕过、不提前于 #169 的预留-提交-回滚账本。
+func TestCreateShare_QuotaRejectedLeavesNoLedgerRows(t *testing.T) {
+	svc, g, _ := newBlobRefTestService(t)
+	ctx := context.Background()
+
+	// 存量 800 + 配额 1000（setStorageQuota 口径来自 globalquota_test.go，
+	// 即 #169 的测试口径）⇒ 新 300 必拒
+	require.NoError(t, g.Create(&model.FileCode{
+		Code: "QG0001", FilePath: "uploads/qg.bin", Size: 800, Text: "qg", ExpiredCount: -1,
+	}).Error)
+	setStorageQuota(t, 1000)
+	u := uint(1)
+
+	_, err := svc.CreateShare(ctx, dedupeReq(&u, "uploads/qg-new.bin", "h-qg", "n.bin", 300))
+	require.Error(t, err, "超额必须被 #169 预留账本拒绝")
+
+	assert.Empty(t, blobRows(t, g), "配额拒绝 ⇒ 不得落 blob 行")
+	assert.Empty(t, refRows(t, g), "配额拒绝 ⇒ 不得落引用行")
+}
+
 // mustSoftDelete 回收站软删（返回行数）。
 func mustSoftDelete(t *testing.T, svc *Service, userID uint, code string) int {
 	t.Helper()
