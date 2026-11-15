@@ -44,6 +44,12 @@ func UserAuth() app.HandlerFunc {
 			return
 		}
 
+		// 半会话（core#180）：pending-2FA 令牌只可走二验换发端点，用户面拒。
+		if claims.MFAPending {
+			respondUnauthorized(c, "需要完成二次验证")
+			return
+		}
+
 		// 注销黑名单检查（logout 端点写入；此前 /api/v1 组未接黑名单，
 		// 登出后 token 仍然可用）
 		if isRevoked(ctx, tokenString) {

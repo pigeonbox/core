@@ -153,6 +153,9 @@ func customizedRegister(r *server.Hertz) {
 	if config.ServesPublicPlane() {
 		r.GET("/api/v1/user/oidc/login", customHandler.OIDCLogin)
 		r.GET("/api/v1/user/oidc/callback", customHandler.OIDCCallback)
+		// 半会话二验换发（core#180）：登录流程端点，同属访客登录入口公开面；
+		// 与 callback 同样不挂认证中间件（半会话会被中间件一致拒绝）。
+		r.POST("/api/v1/user/oidc/mfa", customHandler.OIDCMFAComplete)
 	}
 
 	// ===== 管理端增强面（用户 CRUD / 文件管理 / 富统计 / 传输日志 / 分享治理 /
