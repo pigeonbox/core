@@ -216,7 +216,7 @@ func initThriftIDLServices(database *gorm.DB) {
 	shareSvc.SetQuotaChecker(userSvc)
 	// 用户级配额上限解析（core#169 闸内权威复核）：插入时的串行段内按
 	// user 域同源规则（MaxStorageQuota > 系统默认）重读上限并合计判定。
-	shareSvc.SetQuotaLimitResolver(userSvc)
+	shareSvc.SetQuotaChecker(userSvc)
 	// user 面 handler 同实例注入：注册开关/配额默认值经 DefaultsProvider 桥到
 	// admin 持久化配置（此前 handler 直连 admin 包级单例，跨面依赖绕过装配点）
 	userHandler.SetUserService(userSvc)
