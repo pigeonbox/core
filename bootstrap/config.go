@@ -263,6 +263,7 @@ var envBindings = map[string][]string{
 	// moderation.clamav（文件病毒扫描）
 	"moderation.clamav.enabled": {"PB_MODERATION_CLAMAV_ENABLED"},
 	"moderation.clamav.addr":    {"PB_MODERATION_CLAMAV_ADDR"},
+	"moderation.clamav.strict":  {"PB_CLAMAV_STRICT"},
 	// admin 运维
 	"admin.log_retention_days":           {"PB_ADMIN_LOG_RETENTION_DAYS"},
 	"admin.pickup_detail_retention_days": {"PB_ADMIN_PICKUP_DETAIL_RETENTION_DAYS"},

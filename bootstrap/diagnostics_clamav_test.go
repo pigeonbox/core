@@ -87,7 +87,7 @@ func TestDiagnosticsReport_ClamAVDisabledWhenNotWired(t *testing.T) {
 
 func TestDiagnosticsReport_ClamAVDegradedWhenClamdDown(t *testing.T) {
 	resetSetupAutoToken(t)
-	withClamAV(t, moderationApp.NewClamAVModerator("127.0.0.1:1", 1, 0, nil))
+	withClamAV(t, moderationApp.NewClamAVModerator("127.0.0.1:1", 1, 0, nil, false))
 	withTestConfig(t, &conf.AppConfiguration{
 		App:        conf.AppConfig{DataPath: t.TempDir()},
 		Deployment: conf.DeploymentConfig{Mode: conf.DeployModeStandalone},
@@ -109,7 +109,7 @@ func TestDiagnosticsReport_ClamAVDegradedWhenClamdDown(t *testing.T) {
 func TestDiagnosticsReport_ClamAVHealthyThenClamdStops(t *testing.T) {
 	resetSetupAutoToken(t)
 	addr, stop := fakeClamdPong(t)
-	withClamAV(t, moderationApp.NewClamAVModerator(addr, 5, 0, nil))
+	withClamAV(t, moderationApp.NewClamAVModerator(addr, 5, 0, nil, false))
 	withTestConfig(t, &conf.AppConfiguration{
 		App:        conf.AppConfig{DataPath: t.TempDir()},
 		Deployment: conf.DeploymentConfig{Mode: conf.DeployModeStandalone},
@@ -127,9 +127,23 @@ func TestDiagnosticsReport_ClamAVHealthyThenClamdStops(t *testing.T) {
 	assert.True(t, second.Moderation.ClamAV.Degraded, "停掉 clamd 后诊断必须显 degraded")
 }
 
+// TestDiagnosticsReport_ClamAVStrictField diagnostics 必须回传 strict 模式
+// （core#161）：运维据此判断 degraded 计数是「放行次数」还是「拒收次数」。
+func TestDiagnosticsReport_ClamAVStrictField(t *testing.T) {
+	resetSetupAutoToken(t)
+	withClamAV(t, moderationApp.NewClamAVModerator("127.0.0.1:1", 1, 0, nil, true))
+	withTestConfig(t, &conf.AppConfiguration{
+		App:        conf.AppConfig{DataPath: t.TempDir()},
+		Deployment: conf.DeploymentConfig{Mode: conf.DeployModeStandalone},
+	})
+
+	report := diagnosticsReport(context.Background())
+	assert.True(t, report.Moderation.ClamAV.Strict, "strict 装配时诊断必须回传 strict=true")
+}
+
 func TestDiagnosticsReport_ClamAVDegradedCountFromFailOpen(t *testing.T) {
 	resetSetupAutoToken(t)
-	m := moderationApp.NewClamAVModerator("127.0.0.1:1", 1, 1024, errOpener{})
+	m := moderationApp.NewClamAVModerator("127.0.0.1:1", 1, 1024, errOpener{}, false)
 	withClamAV(t, m)
 	withTestConfig(t, &conf.AppConfiguration{
 		App:        conf.AppConfig{DataPath: t.TempDir()},

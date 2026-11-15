@@ -26,7 +26,7 @@ import (
 func TestClamAV_Health_PingRecordsResult(t *testing.T) {
 	// 侧一：探通 ⇒ ok
 	addr := fakeClamd(t)
-	m := NewClamAVModerator(addr, 5, 0, nil)
+	m := NewClamAVModerator(addr, 5, 0, nil, false)
 	require.NoError(t, m.Ping())
 	h := m.Health()
 	require.NotNil(t, h.LastPing, "Ping 后必须有 last_ping")
@@ -35,7 +35,7 @@ func TestClamAV_Health_PingRecordsResult(t *testing.T) {
 	assert.False(t, h.LastPing.At.IsZero(), "必须记录探测时刻")
 
 	// 侧二：连不上 ⇒ fail + 错误摘要（负对照锚点：Ping 恒绿实现会让这里转红）
-	dead := NewClamAVModerator("127.0.0.1:1", 1, 0, nil)
+	dead := NewClamAVModerator("127.0.0.1:1", 1, 0, nil, false)
 	assert.Error(t, dead.Ping())
 	h = dead.Health()
 	require.NotNil(t, h.LastPing)
@@ -45,7 +45,7 @@ func TestClamAV_Health_PingRecordsResult(t *testing.T) {
 
 // TestClamAV_Health_FailOpenDegradedCount 近 N 次扫描里 fail-open 放行次数。
 func TestClamAV_Health_FailOpenDegradedCount(t *testing.T) {
-	dead := NewClamAVModerator("127.0.0.1:1", 1, 0, &fakeOpener{content: "x"})
+	dead := NewClamAVModerator("127.0.0.1:1", 1, 0, &fakeOpener{content: "x"}, false)
 	for i := 0; i < 3; i++ {
 		assert.Equal(t, VerdictAllow, dead.InspectFile(context.Background(), UploadMeta{
 			StoragePath: "uploads/x.txt", FileName: "x.txt", Size: 1,
@@ -58,7 +58,7 @@ func TestClamAV_Health_FailOpenDegradedCount(t *testing.T) {
 
 	// 恢复后新扫描进窗口，fail-open 计数随窗口滑动回落（不是只增不减）
 	addr := fakeClamd(t)
-	ok := NewClamAVModerator(addr, 5, 1024, &fakeOpener{content: "clean"})
+	ok := NewClamAVModerator(addr, 5, 1024, &fakeOpener{content: "clean"}, false)
 	for i := 0; i < 2; i++ {
 		assert.Equal(t, VerdictAllow, ok.InspectFile(context.Background(), UploadMeta{
 			StoragePath: "uploads/c.txt", FileName: "c.txt", Size: 5,
@@ -73,7 +73,7 @@ func TestClamAV_Health_FailOpenDegradedCount(t *testing.T) {
 func TestClamAV_Health_OutcomeKinds(t *testing.T) {
 	addr := fakeClamd(t)
 	opener := &fakeOpener{content: "clean content"}
-	m := NewClamAVModerator(addr, 5, 1024, opener)
+	m := NewClamAVModerator(addr, 5, 1024, opener, false)
 
 	// clean
 	assert.Equal(t, VerdictAllow, m.InspectFile(context.Background(), UploadMeta{
@@ -98,7 +98,7 @@ func TestClamAV_Health_OutcomeKinds(t *testing.T) {
 
 // TestClamAV_Health_WindowBounded 窗口有界：只留最近 scanWindowCap 次。
 func TestClamAV_Health_WindowBounded(t *testing.T) {
-	dead := NewClamAVModerator("127.0.0.1:1", 1, 0, &fakeOpener{content: "x"})
+	dead := NewClamAVModerator("127.0.0.1:1", 1, 0, &fakeOpener{content: "x"}, false)
 	for i := 0; i < scanWindowCap+50; i++ {
 		dead.InspectFile(context.Background(), UploadMeta{
 			StoragePath: "uploads/x.txt", FileName: "x.txt", Size: 1})
