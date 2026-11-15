@@ -124,6 +124,20 @@ func (r *FileCodeRepository) PathsByCodeForUser(ctx context.Context, userID uint
 	return paths, nil
 }
 
+// IDByCodeForUser 硬删前抓分享 id（回收站行，Unscoped）——core#172 账本释放
+// 需要 fileCodeID，而硬删后行已物理消失查不到 ⇒ 必须**删前**抓取（与
+// PathsByCodeForUser 同一时序）。查不到返回 gorm.ErrRecordNotFound（调用方
+// 映射为「不在回收站」或跳过账本释放）。
+func (r *FileCodeRepository) IDByCodeForUser(ctx context.Context, userID uint, code string) (uint, error) {
+	var fc model.FileCode
+	err := r.db().WithContext(ctx).Unscoped().
+		Where("code = ? AND user_id = ?", code, userID).First(&fc).Error
+	if err != nil {
+		return 0, err
+	}
+	return fc.ID, nil
+}
+
 // HardDeleteByIDs 物理删除 DB 行（回收站「彻底删除」用；对象删除由调用方负责）。
 // 子文件行一并硬删（彻底删除不留软删残留）。
 //
