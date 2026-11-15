@@ -205,20 +205,19 @@ func (s *Service) fetchDiscovery(ctx context.Context) (discovery, error) {
 }
 
 // TestDiscovery 管理端「测试连接」：验证 issuer 的 discovery 端点可达且合法。
+//
+// core#185：与 fetchDiscovery **复用同一实现**（不复制判据）——此前这里只查
+// 端点非空，而登录期 fetchDiscovery 还逐端点过 ValidateEndpointURL（SSRF
+// 私网/回环拒绝）⇒ 配置页「测试连接」通过、真实登录却被解析期校验拒绝，
+// 配置期/登录期口径漂移误导管理员。判据只许有一份（同 S01「判据只有一份」）。
 func (s *Service) TestDiscovery(ctx context.Context) error {
 	if s.cfg.Issuer == "" {
 		return errors.New("issuer 未配置")
 	}
-	wellKnown := strings.TrimSuffix(s.cfg.Issuer, "/") + "/.well-known/openid-configuration"
-	var d struct {
-		AuthorizationEndpoint string `json:"authorization_endpoint"`
-		TokenEndpoint         string `json:"token_endpoint"`
-	}
-	if err := httpjson.DoJSON(ctx, s.client, httpjson.Request{URL: wellKnown}, &d); err != nil {
+	if _, err := s.fetchDiscovery(ctx); err != nil {
+		// 保留管理端既有错误前缀（settings_admin 透传给「测试连接」按钮）；
+		// 内层错误点名具体端点/回源失败，与登录期逐字同口径。
 		return fmt.Errorf("discovery 不可用: %w", err)
-	}
-	if d.AuthorizationEndpoint == "" || d.TokenEndpoint == "" {
-		return errors.New("discovery 缺少 authorization/token 端点")
 	}
 	return nil
 }

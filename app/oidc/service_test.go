@@ -193,6 +193,44 @@ func TestDiscovery_RejectsPrivateEndpoints(t *testing.T) {
 	assert.ErrorIs(t, err, security.ErrEndpointURL)
 }
 
+// TestTestDiscovery_RejectsPrivateEndpoints（core#185）：管理端「测试连接」
+// 必须与 fetchDiscovery 做**同一**端点 SSRF 校验——此前 TestDiscovery 只查
+// 端点非空 ⇒ 配置页测试通过、真实登录却被解析期校验拒绝（配置期/登录期漂移，
+// 误导管理员）。
+//
+// 负对照（改错转红）：把 TestDiscovery 退回「只查非空」⇒ require.Error 转红
+// （返回 nil）；去掉错误点名断言 ⇒ 漂移回「笼统报错不点名端点」时也转红。
+func TestTestDiscovery_RejectsPrivateEndpoints(t *testing.T) {
+	// 严格口径：私网判定必须生效（allow_private 关；与登录期默认口径一致）
+	old := conf.GetGlobalConfig()
+	conf.SetGlobalConfig(&conf.AppConfiguration{})
+	defer conf.SetGlobalConfig(old)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"authorization_endpoint": "https://8.8.8.8/auth",
+			"token_endpoint":         "http://169.254.169.254/token", // 云元数据：必须拒
+			"userinfo_endpoint":      "https://1.1.1.1/userinfo",
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc := NewService(newOIDCDB(t), Config{
+		Enabled: true, Issuer: srv.URL, ClientID: "c",
+		ClientSecret: secretx.NewSecureString("s"),
+	})
+	// 假 IdP 在环回是测试环境产物（与 TestDiscovery_RejectsPrivateEndpoints
+	// 同款处理）：换 test server 自带的无守卫客户端，只测解析期端点校验。
+	svc.client = srv.Client()
+
+	err := svc.TestDiscovery(context.Background())
+	require.Error(t, err, "测试连接必须与登录期同口径拒绝私网端点（core#185）")
+	assert.Contains(t, err.Error(), "token_endpoint", "错误必须点名被拒端点（与 fetchDiscovery 同口径）")
+	assert.ErrorIs(t, err, security.ErrEndpointURL)
+}
+
 func TestOIDC_EmailMatchBindsSub(t *testing.T) {
 	oidcDB := newOIDCDB(t)
 	auth.SetJWTSecret("oidc-test-secret-0123456789abcdef")
