@@ -480,7 +480,13 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 		// 枚举防护记账（2026-11-06）：码解析不出来到不了闸门，在此按 IP 记一次
 		// ——**换码也会累计**（见 gate.PickupEnumScope），否则本入口的枚举探测
 		// 完全没有成本上限（限流桶只限 QPS，不限总次数）。
-		gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
+		// core#182：只在**确证码不存在**（ErrShareGone）时记——过期
+		// （ErrShareExpired）与基建故障不入桶，与 metadata/preview 面同口径
+		// （core#163）；否则刷新失效页的正常用户会被记成猜码、DB 故障期
+		// 全网请求被记成枚举攻击。响应仍统一 404（不扩大探测面）。
+		if errors.Is(err, shareService.ErrShareGone) {
+			gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
+		}
 		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return
 	}
@@ -705,9 +711,12 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 		}
 		// 枚举防护记账（core#163）：码解析不出来到不了下方的规范码预检，在此按
 		// IP 记一次（(IP,码) + 按 IP 枚举双维度）——与同文件 GetShare 的同名
-		// 段（2026-11-06）同一口径：封禁态不记（持码者被管控不是猜码），其余
-		// 落到「不存在或已过期」的分支记账。
-		gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
+		// 段（2026-11-06）同一口径。core#182 收紧：只有**确证码不存在**
+		// （ErrShareGone）才记——封禁态（持码者被管控不是猜码）、过期
+		// （ErrShareExpired）与基建故障一律不入桶，与 metadata/preview 面一致。
+		if errors.Is(err, shareService.ErrShareGone) {
+			gate.RecordPickupFailure(ctx, middleware.ClientIP(c), code)
+		}
 		resp.NewErrorWithMessage(c, errcode.CodeNotFound, "分享不存在或已过期")
 		return nil, "", false
 	}
