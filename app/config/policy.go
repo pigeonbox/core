@@ -128,7 +128,7 @@ func ValidateConfigInvariants(cfg *SystemConfig) error {
 	}
 	if cfg.UploadEx != nil {
 		perFile = cfg.UploadEx.MaxFileSize
-	} else if g := conf.GetGlobalConfig(); g != nil {
+	} else if g := conf.Snapshot(); g != nil {
 		perFile = g.Upload.MaxFileSize
 	}
 	if total > 0 && perFile > 0 && total < perFile {
