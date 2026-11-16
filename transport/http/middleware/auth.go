@@ -5,9 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/pigeonbox/contracts/errcode"
-	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/errors"
-	pkgmw "github.com/pigeonbox/core/pkg/middleware"
 )
 
 const (
@@ -22,54 +20,6 @@ const (
 	// ContextKeyAuthType 认证类型上下文键 (jwt/api_key)
 	ContextKeyAuthType = "auth_type"
 )
-
-// parseAndSetClaims 解析JWT并将用户信息存入上下文。
-// c.Set 四件套委托 pkg/middleware 统一实现（键名单一真相源）。
-// 注意：本栈只写 c.Set，不做 ctx value 注入/X- headers（与 pkg 栈的有意差异，
-// 统一前需验证 /api/v1 组审计归因的预期行为）。
-func parseAndSetClaims(c *app.RequestContext, tokenString string) error {
-	claims, err := auth.ParseToken(tokenString)
-	if err != nil {
-		return err
-	}
-	pkgmw.SetJWTClaims(c, claims)
-	return nil
-}
-
-// extractBearerToken 从Authorization头提取Bearer token
-func extractBearerToken(c *app.RequestContext) string {
-	authHeader := string(c.GetHeader("Authorization"))
-	if authHeader == "" {
-		return ""
-	}
-	parts := splitToken(authHeader)
-	if len(parts) == 2 && parts[0] == "Bearer" {
-		return parts[1]
-	}
-	return ""
-}
-
-// splitToken 分割token字符串
-func splitToken(authHeader string) []string {
-	result := make([]string, 0, 2)
-	current := make([]rune, 0, len(authHeader))
-
-	for _, ch := range authHeader {
-		if ch == ' ' {
-			if len(current) > 0 {
-				result = append(result, string(current))
-				current = current[:0]
-			}
-		} else {
-			current = append(current, ch)
-		}
-	}
-	if len(current) > 0 {
-		result = append(result, string(current))
-	}
-
-	return result
-}
 
 // GetUserID 从上下文获取用户ID
 func GetUserID(c *app.RequestContext) uint {
