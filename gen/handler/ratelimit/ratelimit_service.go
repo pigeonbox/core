@@ -6,10 +6,12 @@ package ratelimit
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cloudwego/hertz/pkg/app"
 
 	ratelimitmodel "github.com/pigeonbox/contracts/gen/ratelimit"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
 )
@@ -67,6 +69,10 @@ func UpdateConfig(ctx context.Context, c *app.RequestContext) {
 	// 保留当前 Redis 后端设置（UpdateConfig 不改变后端形态）
 	cfg.UseRedis = getLimiter().SnapshotConfig().UseRedis
 	getLimiter().UpdateConfig(cfg)
+	// 关掉限流等于打开爆破面 ⇒ 变更必须可追溯（core#219）。
+	audit.Record(ctx, "ratelimit.config.update", fmt.Sprintf(
+		"enabled=%v global_qps=%d upload_qps=%d download_qps=%d login_qps=%d burst=%d block_seconds=%d",
+		cfg.Enabled, cfg.GlobalQPS, cfg.UploadQPS, cfg.DownloadQPS, cfg.LoginQPS, cfg.Burst, cfg.BlockSeconds), true)
 	resp.SuccessWithMessage(c, "updated", nil)
 }
 

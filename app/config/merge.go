@@ -48,6 +48,10 @@ func (s *Service) UpdateConfigJSON(ctx context.Context, raw []byte) error {
 	// 两者都在则顶层为准（与运行时取值口径一致：sc.LocalImport 覆盖 sc.UploadEx）。
 	normalizeLocalImportShape(incoming)
 
+	// ①.6 审计细节（core#219）：只记录**字段键名**（不落值——配置体可能含
+	// SMTP 口令/OIDC secret），随 ctx 带到 UpdateConfig 的单一审计行。
+	ctx = withAuditDetail(ctx, auditKeysDetail("keys=", configChangeKeys(incoming)))
+
 	// ② 底座 = 已落库配置（无记录 ⇒ 底座为空 ⇒ 语义退化为"整段替换"，
 	//    与旧行为一致）
 	base := map[string]json.RawMessage{}

@@ -470,7 +470,7 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 		}
 	}
 
-	s.logConfigOperation(ctx, "config.update", "system config persisted to database", true)
+	s.logConfigOperation(ctx, "config.update", configAuditTarget(ctx), true)
 	// 广播变更（多副本 admin 模式；standalone 下回调为 nil 空转）
 	s.notifyConfigPersisted()
 	return nil
@@ -699,6 +699,8 @@ func (s *Service) UpdateUserSettingsJSON(ctx context.Context, raw []byte) error 
 	if err := json.Unmarshal(raw, &incoming); err != nil {
 		return fmt.Errorf("用户配置体必须是 JSON 对象: %w", err)
 	}
+	// 审计细节（core#219）：用户配置段同样只记录字段键名。
+	ctx = withAuditDetail(ctx, auditKeysDetail("user.keys=", configChangeKeys(incoming)))
 	// 底座 = **已落库**的用户配置（loadPersistedConfig：已在线配置的取持久化值，
 	// 未在线配置的取 yaml 默认）⇒ 不把 env/运行态覆盖值固化进库
 	// （此前取 s.config.User = 运行态 ⇒ 首次部分提交会把 env 值写进 DB）。
