@@ -9,9 +9,10 @@
 //     由本方法在宽限期后补刀，并把 blob 行推进到 purged 终态收敛账本。
 //   - **双守卫才删**（缺一不删，宁泄漏勿误删）：
 //     ① 账本存活引用 = 0（快照后并发重建引用的竞态由 CountActiveRefs 复核）；
-//     ② 路径引用 = 0 —— 沿用既有 CountFilePathReferences 口径（含软删行、
-//     含**无账本行的存量分享**：首片不做回填，存量分享只有路径没有引用行，
-//     只看账本会把它们当成零引用误删）。
+//     ② 路径守卫 = 0 —— **降级后口径**（CountReclaimPathGuard，回填全量验证
+//     2026-11-16 放行）：只数软删行（回收站占位）与无账本行（回填 best-effort
+//     失败面）；active+有 ref 的行由回填/双写保证覆盖、交守卫①承接，不再重复
+//     扫描（旧 CountFilePathReferences 全量口径的历史使命随回填完成而结束）。
 //   - 软删不进候选：软删不释放引用 ⇒ blob 停在 active ⇒ 根本不在
 //     ListReclaimable 结果里（负对照在 share 层 blobref_test.go 与本文件
 //     路径守卫测试双层覆盖）。
@@ -58,10 +59,12 @@ func (j *Janitor) ReclaimBlobs(ctx context.Context, grace time.Duration) (int, e
 		if alive > 0 {
 			continue // 负对照：引用未归零不回收
 		}
-		// 守卫②：路径引用（既有口径，含软删行与无账本行的存量分享）。
+		// 守卫②（core#172 降级后口径，回填全量验证 2026-11-16 放行）：只数
+		// 「软删行（回收站占位，任何覆盖态）+ 无账本行（回填 best-effort 失败面）」；
+		// active+有 ref 的行交守卫①承接（启动回填 + 写路径双写保证覆盖）。
 		// 查不清 ⇒ 跳过（与 deletePhysicalIfUnreferenced 同款：查不清不删）。
 		if b.ObjectKey != "" && j.fileCodeRepo != nil {
-			pathRefs, err := j.fileCodeRepo.CountFilePathReferences(ctx, b.ObjectKey, 0)
+			pathRefs, err := j.fileCodeRepo.CountReclaimPathGuard(ctx, b.ObjectKey)
 			if err != nil {
 				logger.CtxWarn(ctx, "blob reclaim: path refcount failed (skip)",
 					"path", b.ObjectKey, "err", err)
