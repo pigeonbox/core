@@ -109,9 +109,12 @@ type PickupCodeMinter interface {
 type Service struct {
 	fileCodeRepo *dao.FileCodeRepository
 	fileFileRepo *dao.FileCodeFileRepository // 多文件子表 DAO（构造注入）
-	userService  UserServiceInterface
-	storage      storage.StorageInterface
-	baseURL      string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
+	// blobRepo 文件生命周期账本 DAO（core#172 首片：blobs/file_references 双写与
+	// 硬删释放；nil = 账本面关闭，接入点全部降级为 no-op，见 blobref.go 取舍）。
+	blobRepo    *dao.BlobRepository
+	userService UserServiceInterface
+	storage     storage.StorageInterface
+	baseURL     string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
 	// baseURLProvider 对外 base 地址的**动态**来源（2026-10-22 站点公网地址）。
 	// nil = 只用构造期的 baseURL（env/yaml 的 server.base_url）。
 	// 非 nil 时每次拼链接都问它 —— 管理后台改「站点公网地址」后**立即生效**，
@@ -248,6 +251,7 @@ func NewService(gormDB *gorm.DB, baseURL string, storageService storage.StorageI
 	return &Service{
 		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
 		fileFileRepo: dao.NewFileCodeFileRepository(gormDB),
+		blobRepo:     dao.NewBlobRepository(gormDB),
 		userService:  nil,
 		storage:      storageService,
 		baseURL:      baseURL,
@@ -748,6 +752,10 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 			}
 		}
 	}
+
+	// 文件生命周期账本双写（core#172 首片）：blob + 引用并行落账，best-effort
+	//（失败仅告警不回滚——取舍见 blobref.go；既有路径口径照常兜底）。
+	s.attachBlobRef(ctx, fileCode)
 
 	// 更新用户统计（次数 +1，存储按文件大小）
 	s.bumpUserStats(req.UserID, req.Size)
@@ -1313,12 +1321,24 @@ func (s *Service) HardDeleteUserShare(ctx context.Context, userID uint, code str
 	if perr != nil {
 		logger.CtxWarn(ctx, "hard delete: path capture failed (janitor will reconcile)", "code", code, "err", perr)
 	}
+	// 删前抓分享 id（core#172 账本释放：硬删后行已物理消失，见 IDByCodeForUser）。
+	// 查不到（不存在/查失败）⇒ 跳过账本释放，仅告警，不阻断硬删。
+	fcID, idErr := s.fileCodeRepo.IDByCodeForUser(ctx, userID, code)
+	if idErr != nil && !errors.Is(idErr, gorm.ErrRecordNotFound) {
+		logger.CtxWarn(ctx, "hard delete: id capture failed (blob ref release skipped)", "code", code, "err", idErr)
+	}
 	n, err := s.fileCodeRepo.HardDeleteByCode(ctx, userID, code)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
 		return ErrNotInRecycleBin
+	}
+	// 账本释放（core#172）：引用递减 → 归零则 blob 进 trashed（宽限期起点）；
+	// 未归零保持 active（共享对象负对照）。只在硬删成功后执行——软删绝不释放
+	//（负对照：软删不回收，回收站行仍占对象）。
+	if idErr == nil {
+		s.releaseBlobRef(ctx, fcID)
 	}
 	// 对象清理：引用计数保护（含软删行、查不清不删），与 admin 删除同编排。
 	// 失败仅告警——远端孤儿由 janitor 扫描兜底。

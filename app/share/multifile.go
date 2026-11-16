@@ -170,6 +170,10 @@ func (s *Service) CreateMultiFileShare(ctx context.Context, req *MultiShareReq) 
 		return nil, fmt.Errorf("写入分享文件列表失败: %w", err)
 	}
 
+	// 文件生命周期账本双写（core#172 首片）：逐子文件路径落 blob+引用，
+	// best-effort（取舍见 blobref.go）。
+	s.attachBlobRefs(ctx, fileCode.ID, children)
+
 	// 用户统计：次数 +1，存储按合计
 	s.bumpUserStats(req.UserID, totalSize)
 

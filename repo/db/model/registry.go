@@ -56,6 +56,10 @@ var tables = []TableSpec{
 	{Name: "users", Model: &User{}, AutoIncrement: true},
 	{Name: "file_codes", Model: &FileCode{}, AutoIncrement: true},
 	{Name: "file_code_files", Model: &FileCodeFile{}, AutoIncrement: true},
+	// 文件生命周期统一模型（core#172 首片）：blobs（物理对象）先于
+	// file_references（分享引用）——外键依赖在前（导入顺序）。
+	{Name: "blobs", Model: &Blob{}, AutoIncrement: true},
+	{Name: "file_references", Model: &FileReference{}, AutoIncrement: true},
 	{Name: "file_previews", Model: &FilePreview{}, AutoIncrement: true},
 	{Name: "file_requests", Model: &FileRequest{}, AutoIncrement: true},
 	{Name: "upload_chunks", Model: &UploadChunk{}, AutoIncrement: true},

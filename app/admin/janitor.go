@@ -46,6 +46,8 @@ type Janitor struct {
 
 	fileCodeRepo *dao.FileCodeRepository
 	fileFileRepo *dao.FileCodeFileRepository
+	// blobRepo 文件生命周期账本 DAO（core#172：ReclaimBlobs 回收面）。
+	blobRepo     *dao.BlobRepository
 	chunkRepo    *dao.ChunkRepository
 	transferRepo *dao.TransferLogRepository
 	adminLogRepo *dao.AdminOperationLogRepository
@@ -59,6 +61,7 @@ func NewJanitor(gormDB *gorm.DB, svc StorageProvider, retentionDays int) *Janito
 		retentionDays: retentionDays,
 		fileCodeRepo:  dao.NewFileCodeRepository(gormDB),
 		fileFileRepo:  dao.NewFileCodeFileRepository(gormDB),
+		blobRepo:      dao.NewBlobRepository(gormDB),
 		chunkRepo:     dao.NewChunkRepository(gormDB),
 		transferRepo:  dao.NewTransferLogRepository(gormDB),
 		adminLogRepo:  dao.NewAdminOperationLogRepository(gormDB),
