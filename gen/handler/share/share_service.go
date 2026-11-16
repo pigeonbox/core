@@ -117,7 +117,7 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 	}
 
 	// 文本分享大小上限（默认 222KB，对齐上游；upload.text_max_bytes 可调）
-	if maxBytes := utils.GetTextShareMaxBytes(); maxBytes > 0 && int64(len(req.Text)) > maxBytes {
+	if over, _ := gate.ExceedsTextShare(int64(len(req.Text))); over {
 		resp.NewErrorByCode(c, errcode.CodeTooLarge)
 		return
 	}
@@ -263,7 +263,7 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 
 	// 3. 检查文件大小（upload.upload_size 单请求体上限，0=不限；
 	// 修复：此前硬编码 10MB 不读配置，调大 upload_size 对直传通道无效）
-	if maxSize := utils.GetMaxUploadSize(); maxSize > 0 && file.Size > maxSize {
+	if over, maxSize := gate.ExceedsRequestSize(file.Size); over {
 		resp.NewErrorWithMessage(c, errcode.CodeTooLarge, fmt.Sprintf("文件大小超过限制（最大 %d MB）", maxSize/1024/1024))
 		return
 	}

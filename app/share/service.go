@@ -480,7 +480,7 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 		return nil, errors.New("开启密码保护时必须提供密码")
 	}
 	// 文本大小上限（service 层兜底，handler 已先行校验）
-	if maxBytes := utils.GetTextShareMaxBytes(); maxBytes > 0 && int64(len(text)) > maxBytes {
+	if over, maxBytes := gate.ExceedsTextShare(int64(len(text))); over {
 		return nil, fmt.Errorf("%w（上限 %d 字节）", utils.ErrTextTooLarge, maxBytes)
 	}
 

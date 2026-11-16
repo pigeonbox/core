@@ -27,7 +27,7 @@ func startAPIKeyExpiryNotify() {
 	notifySvc := notifyApp.NewService(db.GetDB())   // 装配层显式句柄
 
 	// 启动即扫一轮（FirstDelay=0），此后每 6h 一轮；panic 由 loop 收编
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+	startBGLoop(loop.Config{
 		Name:     "api-key-expiry-notify",
 		Interval: apiKeyExpiryScanInterval,
 	}, func(ctx context.Context) {
@@ -53,5 +53,5 @@ func startAPIKeyExpiryNotify() {
 		if len(keys) > 0 {
 			logger.Info("api key expiry notifications sent", zap.Int("count", len(keys)))
 		}
-	}))
+	})
 }

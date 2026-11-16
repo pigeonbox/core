@@ -26,6 +26,7 @@ import (
 	configApp "github.com/pigeonbox/core/app/config"
 	federationApp "github.com/pigeonbox/core/app/federation"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
 )
 
@@ -186,7 +187,17 @@ func federationSyncApply(cfg federationApp.SyncConfig) {
 		fedSyncSched.stop()
 		return
 	}
-	fedSyncSched.apply(cfg.Enabled, cfg.Interval())
+	// 后台任务预算（core#173 第六片 Resource）：生产周期由 cfg.Interval() 夹取到
+	// minSyncInterval（1min）= gate.MinTaskInterval，恒过；违例（配置笔误/未来改动）
+	// 拒绝起跑并停掉既有循环——宁可不同步也不热循环。FirstDelay = interval 与
+	// federationSyncScheduler.apply 的接线一致。
+	interval := cfg.Interval()
+	if err := gate.CheckTaskBudget("federation-invite-sync", interval, interval); err != nil {
+		logger.Error("federation sync budget violated, not started", zap.Error(err))
+		fedSyncSched.stop()
+		return
+	}
+	fedSyncSched.apply(cfg.Enabled, interval)
 }
 
 // federationSyncApplyFromConf 热路径入口（OnP2PFederationChanged 钩子）：

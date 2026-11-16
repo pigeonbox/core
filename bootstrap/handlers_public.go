@@ -19,6 +19,7 @@ import (
 	configApp "github.com/pigeonbox/core/app/config"
 	setupApp "github.com/pigeonbox/core/app/setup"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/utils"
@@ -188,12 +189,11 @@ func safeImageURL(raw string) string {
 	return ""
 }
 
-// textShareMaxBytesOrDefault 文本分享上限（字节），<=0 回退 222KB（对齐上游默认）
+// textShareMaxBytesOrDefault 文本分享上限（字节），<=0 回退 222KB（对齐上游默认）。
+// 取值收口到 pkg/gate.TextShareMaxBytes（core#173 第六片）：与服务端
+// ExceedsTextShare 同一次读数，UI 下发值与拒绝判定不可能漂移。
 func textShareMaxBytesOrDefault() int64 {
-	if v := config.Upload.TextMaxBytes; v > 0 {
-		return v
-	}
-	return 222 * 1024
+	return gate.TextShareMaxBytes()
 }
 
 // effectiveExpireStyles 前端可选过期样式：管理台 AllowedExpireStyles 裁剪优先，

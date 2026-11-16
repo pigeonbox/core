@@ -167,7 +167,7 @@ func startExpiryReminder() {
 	notifier := notifyApp.NewService(handle)
 
 	var lastRun time.Time
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+	startBGLoop(loop.Config{
 		Name:     "share-expiry-reminder",
 		Interval: expiryReminderTick,
 		// 首跑立即：重启用不必先等一个节拍（interval 判据仍在，不会补发历史）。
@@ -195,7 +195,7 @@ func startExpiryReminder() {
 		if sent > 0 {
 			logger.Info("share expiry reminders sent", zap.Int("count", sent))
 		}
-	}))
+	})
 }
 
 // 编译期断言：notify 域的服务确实满足本任务的窄接口（改了签名立刻红）。

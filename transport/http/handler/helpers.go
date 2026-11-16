@@ -17,6 +17,7 @@ import (
 	"github.com/oekit/pkg/pathx"
 	"github.com/pigeonbox/contracts/errcode"
 	shareService "github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/storage"
@@ -131,7 +132,7 @@ func saveUploadEntries(ctx context.Context, c *app.RequestContext, st storage.St
 			reject(errcode.CodeFileTypeDenied, fmt.Sprintf("文件类型禁止上传: %s", name))
 			return nil, false
 		}
-		if maxFile := utils.GetMaxFileSize(); maxFile > 0 && fh.Size > maxFile {
+		if over, _ := gate.ExceedsFileSize(fh.Size); over {
 			reject(errcode.CodeTooLarge, fmt.Sprintf("文件 %s 超过单文件大小上限", name))
 			return nil, false
 		}

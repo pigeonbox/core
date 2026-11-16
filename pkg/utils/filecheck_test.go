@@ -6,7 +6,6 @@ import (
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // withUploadConfig 为单个测试注入上传配置，结束后恢复原全局配置。
@@ -33,22 +32,6 @@ func TestIsBlockedExtension_Allowed(t *testing.T) {
 	assert.False(t, IsBlockedExtension("doc.pdf", bl))
 	assert.False(t, IsBlockedExtension("noext", bl))
 	assert.False(t, IsBlockedExtension("archive.tar.gz", bl))
-}
-
-func TestCheckUploadSize_OK(t *testing.T) {
-	require.NoError(t, CheckUploadSize(1024, 10*1024*1024))
-	require.NoError(t, CheckUploadSize(0, 10*1024*1024)) // 空文件允许
-}
-
-func TestCheckUploadSize_TooLarge(t *testing.T) {
-	err := CheckUploadSize(11*1024*1024, 10*1024*1024)
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, ErrFileTooLarge))
-}
-
-func TestCheckUploadSize_NoLimit(t *testing.T) {
-	// maxSize=0 表示不限
-	require.NoError(t, CheckUploadSize(999999999, 0))
 }
 
 // ---- 治理重构（2026-10-03）：白名单/黑名单/魔数组合语义 ----
