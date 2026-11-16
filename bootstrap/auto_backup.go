@@ -158,7 +158,7 @@ func startAutoBackup() {
 		zap.String("dir", sch.Dir()),
 		zap.Int("keep", sch.Keep()),
 		zap.String("at", sch.At().String()))
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+	startBGLoop(loop.Config{
 		Name:       "auto-backup",
 		Interval:   autoBackupCheckInterval,
 		FirstDelay: autoBackupFirstDelay,
@@ -174,7 +174,7 @@ func startAutoBackup() {
 				zap.Int64("size", res.Size),
 				zap.Int("pruned", len(res.Pruned)))
 		}
-	}))
+	})
 }
 
 // AutoBackupStatus 自动备份状态（诊断 / 管理台共用）。

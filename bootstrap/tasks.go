@@ -16,6 +16,7 @@ import (
 	adminApp "github.com/pigeonbox/core/app/admin"
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
 	previewPkg "github.com/pigeonbox/core/preview"
 	"github.com/pigeonbox/core/repo/db"
@@ -80,12 +81,30 @@ func drainBackgroundTasks(ctx context.Context) error {
 	}
 }
 
+// startBGLoop 后台周期任务的**唯一启动口**（core#173 第六片：Resource 收口）。
+//
+// 预算判定先行（gate.CheckTaskBudget：任务名非空、周期 ≥ MinTaskInterval、首跑
+// 延迟落在 [0, interval]）——违例即拒绝起跑（ERROR 日志 + 不启动），随后才是
+// 循环本体与排水挂载。周期任务一律经本口启动；绕过本口直接 loop.Run 的循环由
+// bootstrap/resource_entry_guard_test 拦红。
+//
+// 并发口径：每个任务单飞（loop.Run 串行，忙时丢 tick），跨任务并发由本口
+// 起的任务数天然有界——预算是「每个任务多久跑一次」，不是线程池。
+func startBGLoop(cfg loop.Config, fn func(context.Context)) {
+	if err := gate.CheckTaskBudget(cfg.Name, cfg.Interval, cfg.FirstDelay); err != nil {
+		logger.Error("background task budget violated, not started",
+			zap.String("task", cfg.Name), zap.Error(err))
+		return
+	}
+	trackBackgroundLoop(loop.Run(backgroundContext(), cfg, fn))
+}
+
 // startExpiredFileCleanup 定时清理过期文件（DB 记录 + 物理文件）。
 // 默认每 1 小时执行一次（首跑同延迟，与旧 ticker 语义一致）；懒清理由取件
 // 路径覆盖（GetFileByCode 发现过期即返回错误）。轮次感知循环 ctx：停机时
 // 尽快收尾而非硬扛整轮（未完成部分由下轮/下次启动的对账兜底）。
 func startExpiredFileCleanup(svc *adminApp.Service) {
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+	startBGLoop(loop.Config{
 		Name:       "expired-file-cleanup",
 		Interval:   time.Hour,
 		FirstDelay: time.Hour,
@@ -97,7 +116,7 @@ func startExpiredFileCleanup(svc *adminApp.Service) {
 				zap.Int64("count", n),
 				zap.Int64("freed_bytes", freed))
 		}
-	}))
+	})
 }
 
 // startGCJobsWorker 对象 GC 任务面消费（core#192）：1 分钟周期。认领（行级
@@ -109,7 +128,7 @@ func startExpiredFileCleanup(svc *adminApp.Service) {
 func startGCJobsWorker() {
 	adminSvc := adminApp.Default()
 	gc := adminSvc.GC()
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+	startBGLoop(loop.Config{
 		Name:       "gc-jobs-worker",
 		Interval:   time.Minute,
 		FirstDelay: time.Minute,
@@ -120,7 +139,7 @@ func startGCJobsWorker() {
 		} else if n > 0 {
 			logger.Info("gc jobs processed", zap.Int("count", n))
 		}
-	}))
+	})
 }
 
 // tasksDB 后台任务取的全局 DB 句柄（装配层显式句柄，棘轮规则 10 的唯一访问点）。
@@ -144,7 +163,7 @@ func tasksDB() *gorm.DB { return db.GetDB() }
 // created_at 迟早超过窗口，届时一并物理删除——被删掉的是「已记不清的旧
 // 会话」，不影响任何在线判定。
 func startAccountTrustCleanup() {
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+	startBGLoop(loop.Config{
 		Name:       "account-trust-cleanup",
 		Interval:   6 * time.Hour,
 		FirstDelay: 15 * time.Minute,
@@ -164,7 +183,7 @@ func startAccountTrustCleanup() {
 		} else if n > 0 {
 			logger.Info("expired password reset tokens purged", zap.Int64("count", n))
 		}
-	}))
+	})
 }
 
 // startMaintenanceJanitor 孤儿文件对账 + 日志保留清理（24h 周期，首跑延迟 10 分钟
@@ -184,7 +203,7 @@ func startMaintenanceJanitor() {
 	// 管理端孤儿端点（POST /admin/storage/clean-presign-orphans 与
 	// GET /admin/storage/insights 的孤儿计数）复用同一 janitor 实例
 	storageHandler.SetJanitor(j)
-	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+	startBGLoop(loop.Config{
 		Name:       "maintenance-janitor",
 		Interval:   24 * time.Hour,
 		FirstDelay: 10 * time.Minute,
@@ -244,5 +263,5 @@ func startMaintenanceJanitor() {
 		} else if files > 0 || rows > 0 {
 			logger.Info("preview cache cleaned", zap.Int("files", files), zap.Int64("rows", rows))
 		}
-	}))
+	})
 }
