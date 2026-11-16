@@ -231,13 +231,20 @@ func NewService(gormDB *gorm.DB, rdb *redis.Client, baseURL string, signingKey s
 	} else {
 		kv = newMemoryKV()
 	}
+	// blobRepo 条件注入（core#172 第三片）：gen/handler/presign 测试以
+	// NewService(nil, ...) 构造，nil gormDB 不建 repo ⇒ blobEnsurePending/
+	// blobAdvance 的 nil 守卫按「无账本」跳过，不 panic。
+	var blobRepo *dao.BlobRepository
+	if gormDB != nil {
+		blobRepo = dao.NewBlobRepository(gormDB)
+	}
 	return &Service{
 		rdb:           kv,
 		defaultExpire: 1 * time.Hour,
 		signingKey:    []byte(signingKey),
 		baseURL:       baseURL,
 		fileCodeRepo:  dao.NewFileCodeRepository(gormDB),
-		blobRepo:      dao.NewBlobRepository(gormDB),
+		blobRepo:      blobRepo,
 	}
 }
 
