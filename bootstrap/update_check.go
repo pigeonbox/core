@@ -48,6 +48,14 @@ func initUpdateCheck() {
 			if dp := strings.TrimSpace(config.App.DataPath); dp != "" {
 				cfg.CachePath = filepath.Join(dp, "update-check.json")
 			}
+			// 匿名安装分布上报（hub#385）：默认空 = 关闭；开启后只发
+			// docs/DIAGNOSTICS.md 列出的七个字段。
+			cfg.ReportURL = strings.TrimSpace(config.Update.ReportURL)
+			if cfg.ReportURL != "" {
+				cfg.InstanceID = instanceIDFor()
+				cfg.UpgradeFrom = upgradeFromVersion()
+				cfg.SchemaVersion = currentSchemaVersion(context.Background())
+			}
 		}
 		updateCheckerInst = updatecheck.New(cfg)
 	})

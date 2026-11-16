@@ -29,7 +29,7 @@ func newRestoreTestDB(t *testing.T) *gorm.DB {
 	g, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, g.AutoMigrate(&model.FileCode{}, &model.FileCodeFile{},
-		&model.SystemConfigRecord{}, &model.AdminOperationLog{}))
+		&model.SystemConfigRecord{}, &model.AdminOperationLog{}, &model.GCJob{}))
 	sqlDB, err := g.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)

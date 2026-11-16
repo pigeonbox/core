@@ -28,6 +28,7 @@ import (
 	"github.com/oekit/kitx/uidgen"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/internal/uploadlock"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/utils"
@@ -97,7 +98,22 @@ type Service struct {
 	// nowFn 过期判定的时钟注入点（缺省真实墙钟；测试可控推进——签名时效的
 	// 生效与否是「传输期跨越过期时刻」类缺陷的判据量，必须可被测试测量）。
 	nowFn func() time.Time
+	// crossGate 上传完成面的**跨副本**互斥闸（core#191；bootstrap 注入
+	// repo/db.DLock，MySQL GET_LOCK / PG advisory lock / sqlite 进程条纹方言
+	// 分派）。nil = 未装配（单测/旧装配）⇒ 退化为单副本语义（进程锁仍在）。
+	crossGate CrossReplicaGate
 }
+
+// CrossReplicaGate 跨副本命名互斥闸（core#191）。窄接口：repo/db.DLock 以同
+// 签名满足；测试可注入桩。
+type CrossReplicaGate interface {
+	// Lock 取得 name 的互斥权；返回幂等 release。等待上限由实现自持，
+	// ctx 取消/超时返回错误（此时未进入临界段）。
+	Lock(ctx context.Context, name string) (release func(), err error)
+}
+
+// SetCrossReplicaGate 注入跨副本完成面互斥闸（bootstrap 接线，core#191）。
+func (s *Service) SetCrossReplicaGate(g CrossReplicaGate) { s.crossGate = g }
 
 // nowTime 会话过期判定的统一时间源。
 func (s *Service) nowTime() time.Time {
@@ -416,6 +432,23 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 		return nil, lockErr
 	}
 	defer release()
+
+	// 跨副本互斥（core#191）：上面的 uploadlock 只在进程内——多副本部署
+	// （deployment.mode=public × N）下两个 Pod 各自加各自的锁、互不可见 ⇒
+	// 同一 upload_id 可被不同副本并发 Complete（可能产生两条 file_codes、
+	// 两次配额记账）。DB 级命名闸（MySQL GET_LOCK / PG advisory lock /
+	// sqlite 进程条纹的方言分派，见 repo/db/dblock.go）收口正确性；进程锁
+	// 降级为减少无谓 DB 往返的性能层（issue 方案第 4 步——正确性不再依赖它）。
+	// 失败（等待超时/ctx 取消）= 有并发方正在完成同一会话 ⇒ 返回错误让客户端
+	// 重试（重试进入时幂等回读必命中）。bootstrap 注入；nil = 单测/旧装配，
+	// 进程锁仍在（降级为单副本语义）。
+	if s.crossGate != nil {
+		dRelease, dErr := s.crossGate.Lock(ctx, dblock.UploadCompletionKey(uploadID))
+		if dErr != nil {
+			return nil, fmt.Errorf("上传完成跨副本互斥等待失败（可能有并发完成，请重试）: %w", dErr)
+		}
+		defer dRelease()
+	}
 
 	// 1. 读 meta
 	metaJSON, err := s.rdb.Get(ctx, fmt.Sprintf(keyUploadMeta, uploadID)).Result()
