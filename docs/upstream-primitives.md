@@ -91,3 +91,45 @@
 **核实记录**：core `pkg/memkv` 的 `_ = s.c.SetWithTTL(...)` 吞错核实为**无风险**——
 底座 `oekit/pkg/cache.LocalCache.SetWithTTL` 恒返回 nil（v0.40.0 local.go:752-757，
 写锁内直接落盘），error 仅接口形态（2026-11-09 核实）。
+
+## 9. 2026-11-17 oekit 抬地板 sweep 评估（pkg v0.52.0 · core v0.15.4 · concurrency v0.38.1 · gormx v0.12.2 · kitx v0.10.1 · logx v0.11.0 · redisx v0.16.3 · network v0.11.2）
+
+本节记录 sweep 当日**新出现**的上游原语与本仓判定。判定口径同前节：形状匹配 +
+收益为正 + **不改语义**，三条同时成立才收编；任一不成立即登记不收编并写明启用条件。
+
+### 9.1 自动兑现（同模块升级即吃到，本仓零改动）
+
+| 上游 | 修复 | 对本仓的影响面 |
+|---|---|---|
+| redisx v0.16.1 | 坏条目归一为 miss 回源自愈（反序列化失败/空字节不再硬报错，MGet 单键损坏不整批失败） | 本仓直用 redisx（`pkg/middleware/ratelimit.go`、`pkg/gate/quota.go`、`pkg/middleware/rediscmd.go`）⇒ 直接吃到 |
+| redisx v0.16.1 | `Refresh` 无 Source 入口 fail-fast（删除前返回 error，不再先清缓存后永不回源） | 同上 |
+| redisx v0.16.1 | `NewClientFromConfig` 构造期校验地址（Host 非空、Port 1..65535，不再静默连本机回环） | 同上 |
+| redisx v0.15.0 | `PeriodLimit`/`TokenLimiter` 补 `Close(ctx)` 幂等（探活 watchdog 停机口：Redis 永久不可达且 limiter 被丢弃时 goroutine 永不回收） | 同上（本仓 ratelimit 走 `redisx/ratelimit`） |
+| redisx v0.15.0 | 降级桶缓存无界增长修复 + per-key singleflight（高基数 key 在长故障窗口不再沉淀全量条目常驻内存） | 同上 |
+| redisx v0.15.0 | distlock 契约单源（`Locker` 改 `pkg/distlock.Locker` 类型别名，三哨兵改包级别名） | 本仓零使用 distlock ⇒ 无影响 |
+| gormx v0.12.1 | `SplitStatements` 未闭合块注释 fail-closed、advisory lock 取消路径尽力解锁、分页溢出回显一致 | 本仓直用 gormx ⇒ 直接吃到 |
+| gormx v0.11.15 | `GetByIDForUpdate` 主键 QuoteTo 参数化、scoper fail-closed、`Omit` 白名单收口 | 同上 |
+| kitx v0.9.4 | snowflake 时钟早于 epoch 拒发、`uidgen` 随机源无进展快速失败（恒 0xFF 注入源不再死循环） | 本仓直用 kitx ⇒ 直接吃到 |
+| concurrency v0.35.0 | `NewTokenBucket` 构造期校验 + `rps=0` 显式不限速档、`retry.Poll` interval≤0 构造期 panic、指数退避溢出边界修复 | 本仓直用 concurrency ⇒ 直接吃到 |
+| concurrency v0.35.1 | `WaitGroupWrapper` 嵌套 `Wrap` 死锁修复（AB-BA 挂死且无 panic 无日志） | 本仓零使用该形态 ⇒ 无影响 |
+| pkg v0.47.0–v0.52.0 | 29 单修复批（cron 契约 / config yaml 转义 / timex DST 非整小时回拨 / mathx 随机源统一等）、`timex` 周期端点不重叠、`errors.Newf`/`Wrapf` | 本仓直用 pkg ⇒ 直接吃到 |
+
+### 9.2 已收编（上游补齐后本仓本就不重复实现，无需动）
+
+- `convert.ResolveClientIP`（pkg v0.25.2→v0.26.0，#104/#106/#107 三单**全部 CLOSED**）：
+  `pkg/middleware/clientip.go` 的「X-Real-IP 不采信 / 候选值合法性校验 / 候选值端口归一 /
+  清单构造期解析」四处加固**上游已补齐**，本仓走 `convert.ResolveClientIPWithSet`。
+  ⇒ 第 6 节补偿壳台账**无挂着未回收的条目**（本次 sweep 逐条复核确认）。
+
+### 9.3 登记不收编（形状不匹配 / 语义冲突，写明启用条件）
+
+| 原语 | 上游 | 不收编理由 | 启用条件 |
+|---|---|---|---|
+| `errors.Newf` / `errors.Wrapf` | pkg v0.52.0 | 形状匹配但**错误处理口径有差**：`Wrapf(nil, …)` 返回 nil，而 `fmt.Errorf("…: %w", nil)` 返回**非 nil** 错误（渲染为 `%!w(<nil>)`）⇒ 属「会改变行为」，不能机械批量替换；core 现存 591 处 / 111 文件，属独立大 diff | 走独立 PR：逐点替换 + nil 口径负对照 + 文案逐字断言 |
+| `redisx.BruteForceGuard` | redisx v0.12.0+（v0.16.2 补 `Close(ctx)` 幂等 + `FailWithResult`） | 本仓 `pkg/middleware/lockout.go` 内存兜底**已收编** `concurrency/ratelimit.Lockout`，但 **Redis 侧仍手搓三步**（`IncrWithTTL` 计数 + `Set` 锁键 + `Del` 计数键）。上游形态是「ZSET 滑窗分布式锁 + 进程内降级」一体，且要求具体 `*redis.Client` ⇒ ①窗口语义变（滑窗 vs 本仓固定窗）②本仓 `redisLockCmds` 是**为注入内存 mock 而收窄的接口**，换上游会丢可测性 ③key 结构变（hash-tag ZSET vs 两把 key） | 若要为「计数—锁定」做原子化（当前三步非原子：计数与锁键分离，中间失败可致计数与锁定不一致），需先定「滑窗 vs 固定窗」口径并保留 mock 注入面 |
+| `resumable`（分片上传/断点续传会话面：CAS 进度 + 断点双源对账 + 孤儿清扫） | pkg v0.44.0 | **语义冲突**：本仓铁律是「`upload_id` 由 `file_hash` 派生 ⇒ 重 init 会另起新会话使旧位图作废 ⇒ 续传必须对既有会话补片，不能重新 init」；上游 resumable 是「独立会话 + CAS 进度对账」范式，模型不同 | 上游的「孤儿清扫」能力本仓**已由 chunk 会话 janitor 覆盖**（`repo/db/dao/chunk.go` `DeleteStaleSessions`）⇒ 无新增需求则不收编 |
+| `authz.SessionStore` + JWT `WithKeyID` | kitx v0.10.0 | 形状不匹配：本仓会话/refresh token 自持（`app/user` + `transport/http/handler/session_ops.go`），JWT 为自签对称（`pkg/auth/jwt.go` 直接依赖 `golang-jwt/jwt/v5`，非 kitx/jwt），与 kitx authz 的多实例注册/kick 编排不是同一问题域；`kid` 的目标场景是 JWKS 多钥轮换，本仓当前无此需求 | 引入 JWKS 多钥轮换，或会话存储形态与 kitx authz 对齐 |
+| `transport/hertzbridge` | core v0.15.0 | 适配到**上游**的 transport 抽象；本仓自持 transport 且直接用 hertz（`transport/http/handler`），无「框架无关 transport 抽象」需求 ⇒ 收编它等于引入一层用不上的间接 | 本仓若要把 transport 抽成框架无关抽象（换 Hertz 之外的后端） |
+| `scanrotation`（周期扫描墙钟预算 + 轮转游标记账件） | concurrency v0.37.0 | 本仓周期任务是**固定周期全量扫**（`bootstrap/tasks.go` 七件套 + `pkg/gate` 预算判定），无「分片轮转 + 防漏推钉子」的问题域 | 上「大规模分片扫描」（如 GC 全量扫按分片轮转）时 |
+| `breaker.WithBreakerStateChangeHandler` | concurrency v0.38.0 | 形态不匹配：本仓走 redisx 的 `ResilientLimiter`（Redis 窗口 + 本地桶降级），不是 concurrency 的 breaker | 本仓引入 concurrency breaker 时 |
+| gormx ILIKE 方言分派（MySQL 改写 LOWER） | gormx v0.12.1 | 本仓**刻意**用 `LIKE … ESCAPE '\'` + 自持 `EscapeLike`（`repo/db/dao/page.go`），跨库通用（ILIKE 在 MySQL 不存在、语义不可移植）；上游方言分派的前提是「用 ILIKE」 | 本仓改用 ILIKE 时（届时需处理 MySQL 缺 ILIKE） |
