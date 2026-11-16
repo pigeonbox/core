@@ -215,81 +215,58 @@ func IdentityFresh(ctx context.Context, claims *auth.Claims) bool {
 	return identityFresh(ctx, claims)
 }
 
+// respondJWTRejection 执行点拒绝型 → HTTP 映射（状态码/业务码/文案按各入口
+// 既有口径；staleMsg 为身份回查文案——AuthMiddleware/AdminMiddleware 与
+// UserAuth 有意不同，由调用方传入）。唯一 403 型拒绝是 CSRF。
+func respondJWTRejection(c *app.RequestContext, rej JWTRejection, staleMsg string) {
+	if rej == JWTCSRFRejected {
+		c.JSON(http.StatusForbidden, map[string]interface{}{
+			"code":    errcode.CodeForbidden,
+			"message": "缺少 CSRF 头（Cookie 认证的写请求须携带 X-Requested-With: XMLHttpRequest）",
+		})
+		c.Abort()
+		return
+	}
+	msg := RejectionMessage(rej)
+	if rej == JWTIdentityStale {
+		msg = staleMsg
+	}
+	c.JSON(http.StatusUnauthorized, map[string]interface{}{
+		"code":    errcode.CodeUnauthorized,
+		"message": msg,
+	})
+	c.Abort()
+}
+
+// injectJWTIdentity JWT 身份注入三连（c.Set 四件套 + ctx 身份 + 回显头）：
+// RequestContext 与 ctx 双写——c.Get 供 handler 用，ctx value 供 service 层
+// 提取审计操作者。pkg 侧三个 JWT 中间件共用同一方言（UserAuth 只做 c.Set，
+// 方言差异见 transport/http/middleware/user_auth.go 注释）。
+// 回归备注（2026-10-08）：此前可选路径只写 c.Set ⇒ JWT 用户被
+// UserIDFromContext 静默当匿名（直传闸门误判、传输日志归因恒空、自定义取件码
+// 失效）——双写缺一不可。
+func injectJWTIdentity(ctx context.Context, c *app.RequestContext, claims *auth.Claims) context.Context {
+	SetJWTClaims(c, claims)
+	ctx = withIdentity(ctx, claims.UserID, claims.Username, claims.Role, ClientIP(c), 0)
+	SetIdentityHeaders(c, claims)
+	return ctx
+}
+
 // AuthMiddleware JWT认证中间件
 //
 // 令牌来源：Authorization: Bearer 头或会话 Cookie（pb_token，浏览器端默认；
 // Cookie 认证的非安全方法另有 CSRF 头门禁，见 session.go）。
+// 判定链经 EvaluateJWT 单一执行点（core#173 第四片收口），本函数只做
+// 拒绝映射与身份注入。
 func AuthMiddleware() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
 		token, viaCookie := SessionToken(c)
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "未认证（缺少 Bearer 头或会话 Cookie）",
-			})
-			c.Abort()
+		claims, rej := EvaluateJWT(ctx, c, token, viaCookie, PolicySession)
+		if rej != JWTAccepted {
+			respondJWTRejection(c, rej, "账号状态已变更，请重新登录")
 			return
 		}
-
-		// 解析JWT token
-		claims, err := auth.ParseToken(token)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "Invalid or expired token",
-			})
-			c.Abort()
-			return
-		}
-
-		// 半会话（core#180）：pending-2FA 令牌只可走二验换发端点
-		//（POST /api/v1/user/oidc/mfa，不经本中间件），其余认证面一律拒。
-		if claims.MFAPending {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "需要完成二次验证",
-			})
-			c.Abort()
-			return
-		}
-
-		// 注销黑名单检查（logout 端点写入；已注销 token 即刻失效）
-		if auth.IsTokenRevoked(ctx, token) {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "Token has been revoked",
-			})
-			c.Abort()
-			return
-		}
-
-		// CSRF 门禁（仅 Cookie 认证的非安全方法）
-		if !CSRFAllowed(c, viaCookie) {
-			c.JSON(http.StatusForbidden, map[string]interface{}{
-				"code":    errcode.CodeForbidden,
-				"message": "缺少 CSRF 头（Cookie 认证的写请求须携带 X-Requested-With: XMLHttpRequest）",
-			})
-			c.Abort()
-			return
-		}
-
-		// 身份复核（封禁/降权/改密即时生效；DB 角色回填 claim）
-		if !identityFresh(ctx, claims) {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "账号状态已变更，请重新登录",
-			})
-			c.Abort()
-			return
-		}
-
-		// 将用户信息存储到上下文中（RequestContext + ctx 双写：
-		// c.Get 供 handler 用，ctx value 供 service 层提取审计操作者）
-		SetJWTClaims(c, claims)
-		ctx = withIdentity(ctx, claims.UserID, claims.Username, claims.Role, ClientIP(c), 0)
-		SetIdentityHeaders(c, claims)
-
-		c.Next(ctx)
+		c.Next(injectJWTIdentity(ctx, c, claims))
 	}
 }
 
@@ -300,6 +277,7 @@ func AuthMiddleware() app.HandlerFunc {
 // handler）先执行完，返回后才做角色检查：写操作已生效、读操作的响应体已生成
 // （hertz 的 JSON 写入是追加语义，403 只会拼在业务响应后面）。任意注册用户
 // 因此可执行全部 /admin/* 与 /api/v1/mcp。
+// 判定链经 EvaluateJWT 单一执行点（core#173 第四片收口）；角色关在放行前独立判定。
 func AdminMiddleware() app.HandlerFunc {
 	// 不需要认证的路径白名单
 	skipPaths := map[string]bool{
@@ -313,69 +291,15 @@ func AdminMiddleware() app.HandlerFunc {
 			return
 		}
 
-		// 认证+授权内联完成（令牌来源：Bearer 头或会话 Cookie）
+		// 认证（令牌来源：Bearer 头或会话 Cookie）+ 授权内联完成
 		token, viaCookie := SessionToken(c)
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "未认证（缺少 Bearer 头或会话 Cookie）",
-			})
-			c.Abort()
+		claims, rej := EvaluateJWT(ctx, c, token, viaCookie, PolicySession)
+		if rej != JWTAccepted {
+			respondJWTRejection(c, rej, "账号状态已变更，请重新登录")
 			return
 		}
 
-		claims, err := auth.ParseToken(token)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "Invalid or expired token",
-			})
-			c.Abort()
-			return
-		}
-
-		// 半会话（core#180）：pending-2FA 令牌只可走二验换发端点
-		//（POST /api/v1/user/oidc/mfa，不经本中间件），其余认证面一律拒。
-		if claims.MFAPending {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "需要完成二次验证",
-			})
-			c.Abort()
-			return
-		}
-
-		// 注销黑名单检查（与 AuthMiddleware 同语义：已注销 token 即刻失效）
-		if auth.IsTokenRevoked(ctx, token) {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "Token has been revoked",
-			})
-			c.Abort()
-			return
-		}
-
-		// CSRF 门禁（仅 Cookie 认证的非安全方法）
-		if !CSRFAllowed(c, viaCookie) {
-			c.JSON(http.StatusForbidden, map[string]interface{}{
-				"code":    errcode.CodeForbidden,
-				"message": "缺少 CSRF 头（Cookie 认证的写请求须携带 X-Requested-With: XMLHttpRequest）",
-			})
-			c.Abort()
-			return
-		}
-
-		// 身份复核（封禁/降权即时生效；DB 角色回填 claim 后再判管理员）
-		if !identityFresh(ctx, claims) {
-			c.JSON(http.StatusUnauthorized, map[string]interface{}{
-				"code":    errcode.CodeUnauthorized,
-				"message": "账号状态已变更，请重新登录",
-			})
-			c.Abort()
-			return
-		}
-
-		// 角色检查先于任何放行
+		// 角色检查先于任何放行（身份回查已把 DB 角色回填 claim，防降权旧 claim）
 		if claims.Role != "admin" {
 			c.JSON(http.StatusForbidden, map[string]interface{}{
 				"code":    errcode.CodeForbidden,
@@ -385,54 +309,24 @@ func AdminMiddleware() app.HandlerFunc {
 			return
 		}
 
-		SetJWTClaims(c, claims)
-		ctx = withIdentity(ctx, claims.UserID, claims.Username, claims.Role, ClientIP(c), 0)
-		SetIdentityHeaders(c, claims)
-
-		c.Next(ctx)
+		c.Next(injectJWTIdentity(ctx, c, claims))
 	}
 }
 
 // OptionalAuthMiddleware 可选认证中间件（不强制要求登录）
+//
+// 判定链经 EvaluateJWT 单一执行点（PolicyOptional：吊销恒查、不做 CSRF 门禁
+// ——身份在此仅影响配额归属/审计归因、非授权边界；半会话不在此拒——与强制
+// 面有意不对称，pending-2FA 令牌按普通身份注入）。
+// 任一拒绝型一律降级匿名。
 func OptionalAuthMiddleware() app.HandlerFunc {
 	return func(ctx context.Context, c *app.RequestContext) {
-		// 令牌来源：Bearer 头或会话 Cookie（可选路径不做 CSRF 门禁：
-		// 身份在此仅影响配额归属/审计归因，非授权边界）
 		token, _ := SessionToken(c)
-		if token == "" {
+		claims, rej := EvaluateJWT(ctx, c, token, false, PolicyOptional)
+		if rej != JWTAccepted {
 			c.Next(ctx)
 			return
 		}
-
-		// 解析JWT token
-		claims, err := auth.ParseToken(token)
-		if err != nil {
-			c.Next(ctx)
-			return
-		}
-
-		// 已注销 token 一律按匿名放行（2026-10-05 审计 P1 修复）：可选身份路径
-		// 也要尊重吊销语义，否则 logout 后旧 JWT 仍在分享/chunk/presign 等路由
-		// 注入 user_id（配额、归属、审计归因全部按"已登录"处理）
-		if auth.IsTokenRevoked(ctx, token) {
-			c.Next(ctx)
-			return
-		}
-
-		// 身份复核不过（封禁/纪元过期）同样降级匿名
-		if !identityFresh(ctx, claims) {
-			c.Next(ctx)
-			return
-		}
-
-		// 将用户信息存储到上下文中（与 AuthMiddleware 同款双写：
-		// c.Set 供 handler c.Get，ctx value 供 UserIDFromContext 审计/闸门读取。
-		// 回归：此前可选路径只写 c.Set，JWT 用户被 UserIDFromContext 静默
-		// 当匿名——直传闸门误判、传输日志归因恒空、自定义取件码失效）
-		SetJWTClaims(c, claims)
-		ctx = withIdentity(ctx, claims.UserID, claims.Username, claims.Role, ClientIP(c), 0)
-		SetIdentityHeaders(c, claims)
-
-		c.Next(ctx)
+		c.Next(injectJWTIdentity(ctx, c, claims))
 	}
 }

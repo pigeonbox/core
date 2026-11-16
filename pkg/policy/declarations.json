@@ -1,0 +1,1204 @@
+{
+ "comment": "路由策略声明矩阵（core#173）。真相源=gen/router 生成物(沿 Group 祖先链推导中间件→鉴权级别);校验器=pkg/policy(matrix_test.go)。新增公开路由必须在此声明,缺声明 CI 红。",
+ "routes": [
+  {
+   "pkg": "admin",
+   "handler": "AdminActivities",
+   "method": "GET",
+   "path": "/activities",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminBatchDeleteFiles",
+   "method": "POST",
+   "path": "/batch-delete",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminBatchExtendFiles",
+   "method": "POST",
+   "path": "/batch-extend",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminBatchSetFilesStatus",
+   "method": "POST",
+   "path": "/batch-status",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminCreateUser",
+   "method": "POST",
+   "path": "/users",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminDeleteFile",
+   "method": "DELETE",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminDeleteLocalFile",
+   "method": "DELETE",
+   "path": "/local-files",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminDeleteUser",
+   "method": "DELETE",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminDownloadFile",
+   "method": "GET",
+   "path": "/download",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminEnhancedStats",
+   "method": "GET",
+   "path": "/enhanced",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminFileDetail",
+   "method": "GET",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminGetConfig",
+   "method": "GET",
+   "path": "/config",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminGetUserSettings",
+   "method": "GET",
+   "path": "/user",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminImportLocalFile",
+   "method": "POST",
+   "path": "/import",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminListFiles",
+   "method": "GET",
+   "path": "/files",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminListFilesFiltered",
+   "method": "GET",
+   "path": "/filter",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminListLocalFiles",
+   "method": "GET",
+   "path": "/local-files",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminListUsers",
+   "method": "GET",
+   "path": "/users",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminListUsersFiltered",
+   "method": "GET",
+   "path": "/filter",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminLogin",
+   "method": "POST",
+   "path": "/login",
+   "auth": "anonymous",
+   "bucket": "admin",
+   "ownership": "any",
+   "override": "AdminMiddleware 白名单 /admin/login（pkg/middleware/auth.go:306）——登录端点必须匿名可达"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminPurgeFiles",
+   "method": "POST",
+   "path": "/purge",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminResetUserPassword",
+   "method": "POST",
+   "path": "/reset-password",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminRestoreFiles",
+   "method": "POST",
+   "path": "/restore",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminSetFileStatus",
+   "method": "PUT",
+   "path": "/status",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminStats",
+   "method": "GET",
+   "path": "/stats",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminStatsTrend",
+   "method": "GET",
+   "path": "/trend",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminTestNotifyChannel",
+   "method": "POST",
+   "path": "/test",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminTestOIDC",
+   "method": "POST",
+   "path": "/test",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminTestSMTP",
+   "method": "POST",
+   "path": "/test",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminTransferLogs",
+   "method": "GET",
+   "path": "/transfer",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminUpdateConfig",
+   "method": "PUT",
+   "path": "/config",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminUpdateFile",
+   "method": "PUT",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminUpdateUser",
+   "method": "PUT",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminUpdateUserSettings",
+   "method": "PUT",
+   "path": "/user",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "admin",
+   "handler": "AdminUpdateUserStatus",
+   "method": "PUT",
+   "path": "/status",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "chunk",
+   "handler": "ChunkUpload",
+   "method": "POST",
+   "path": "/:chunk_index",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "chunk",
+   "handler": "ChunkUploadCancel",
+   "method": "DELETE",
+   "path": "/:upload_id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "chunk",
+   "handler": "ChunkUploadComplete",
+   "method": "POST",
+   "path": "/:upload_id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "chunk",
+   "handler": "ChunkUploadInit",
+   "method": "POST",
+   "path": "/",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "chunk",
+   "handler": "ChunkUploadStatus",
+   "method": "GET",
+   "path": "/:upload_id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "common",
+   "handler": "NotifyPublicList",
+   "method": "GET",
+   "path": "/public",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "common",
+   "handler": "Ping",
+   "method": "GET",
+   "path": "/ping",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "common",
+   "handler": "UserAPIKeysRevokeAll",
+   "method": "POST",
+   "path": "/revoke-all",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "common",
+   "handler": "UserCheckAuth",
+   "method": "GET",
+   "path": "/check-auth",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "common",
+   "handler": "UserLogout",
+   "method": "POST",
+   "path": "/logout",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "common",
+   "handler": "UserRefresh",
+   "method": "POST",
+   "path": "/refresh",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "health",
+   "handler": "Health",
+   "method": "GET",
+   "path": "/health",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "health",
+   "handler": "Liveness",
+   "method": "GET",
+   "path": "/live",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "health",
+   "handler": "Ping",
+   "method": "GET",
+   "path": "/ping",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "health",
+   "handler": "Readiness",
+   "method": "GET",
+   "path": "/ready",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "health",
+   "handler": "Version",
+   "method": "GET",
+   "path": "/version",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "maintenance",
+   "handler": "CleanExpiredFiles",
+   "method": "POST",
+   "path": "/clean-expired",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "maintenance",
+   "handler": "CleanTempFiles",
+   "method": "POST",
+   "path": "/clean-temp",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "maintenance",
+   "handler": "GetStorageStatus",
+   "method": "GET",
+   "path": "/storage",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "maintenance",
+   "handler": "GetSystemInfo",
+   "method": "GET",
+   "path": "/system-info",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "maintenance",
+   "handler": "GetSystemLogs",
+   "method": "GET",
+   "path": "/logs",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "maintenance",
+   "handler": "OptimizeDatabase",
+   "method": "POST",
+   "path": "/optimize",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "notify",
+   "handler": "Active",
+   "method": "GET",
+   "path": "/active",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "notify",
+   "handler": "Create",
+   "method": "POST",
+   "path": "/notifies",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "notify",
+   "handler": "Delete",
+   "method": "DELETE",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "notify",
+   "handler": "Get",
+   "method": "GET",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "notify",
+   "handler": "List",
+   "method": "GET",
+   "path": "/notifies",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "notify",
+   "handler": "MarkRead",
+   "method": "POST",
+   "path": "/mark-read",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "notify",
+   "handler": "Mine",
+   "method": "GET",
+   "path": "/mine",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "own"
+  },
+  {
+   "pkg": "notify",
+   "handler": "UnreadCount",
+   "method": "GET",
+   "path": "/unread-count",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "own"
+  },
+  {
+   "pkg": "notify",
+   "handler": "Update",
+   "method": "PUT",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "p2p",
+   "handler": "AdminP2pDirectory",
+   "method": "GET",
+   "path": "/directory",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "p2p",
+   "handler": "AdminP2pInviteAccept",
+   "method": "POST",
+   "path": "/accept",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "p2p",
+   "handler": "AdminP2pInvitePush",
+   "method": "POST",
+   "path": "/invite-push",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "p2p",
+   "handler": "AdminP2pInvites",
+   "method": "GET",
+   "path": "/invites",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "p2p",
+   "handler": "PostP2PInvite",
+   "method": "POST",
+   "path": "/invite",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "presign",
+   "handler": "Abort",
+   "method": "POST",
+   "path": "/abort",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "presign",
+   "handler": "Complete",
+   "method": "POST",
+   "path": "/complete",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "presign",
+   "handler": "Init",
+   "method": "POST",
+   "path": "/upload",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "preview",
+   "handler": "GetPreview",
+   "method": "GET",
+   "path": "/:code",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "publicapi",
+   "handler": "FederationDeliver",
+   "method": "POST",
+   "path": "/deliver",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "publicapi",
+   "handler": "FederationDeliverySlot",
+   "method": "POST",
+   "path": "/delivery-slot",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "publicapi",
+   "handler": "FederationResolve",
+   "method": "GET",
+   "path": "/resolve",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "publicapi",
+   "handler": "MultiShareBind",
+   "method": "POST",
+   "path": "/multi-bind",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "publicapi",
+   "handler": "MultiShareDirect",
+   "method": "POST",
+   "path": "/multi-direct",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "publicapi",
+   "handler": "ShareMetadata",
+   "method": "GET",
+   "path": "/:code",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "publicapi",
+   "handler": "UserSharesImportLocal",
+   "method": "POST",
+   "path": "/import-local",
+   "auth": "user_or_apikey",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "qrcode",
+   "handler": "GenerateQRCode",
+   "method": "POST",
+   "path": "/generate",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "qrcode",
+   "handler": "GetQRCode",
+   "method": "GET",
+   "path": "/:id",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "ratelimit",
+   "handler": "GetConfig",
+   "method": "GET",
+   "path": "/config",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "ratelimit",
+   "handler": "Status",
+   "method": "GET",
+   "path": "/status",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "ratelimit",
+   "handler": "Test",
+   "method": "POST",
+   "path": "/test",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "ratelimit",
+   "handler": "UpdateConfig",
+   "method": "PUT",
+   "path": "/config",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "request",
+   "handler": "Create",
+   "method": "POST",
+   "path": "/requests",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "request",
+   "handler": "Delete",
+   "method": "DELETE",
+   "path": "/:token",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "request",
+   "handler": "GuestUpload",
+   "method": "POST",
+   "path": "/upload",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "request",
+   "handler": "ListMine",
+   "method": "GET",
+   "path": "/requests",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "own"
+  },
+  {
+   "pkg": "request",
+   "handler": "PublicGet",
+   "method": "GET",
+   "path": "/:token",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "setup",
+   "handler": "CheckInitialization",
+   "method": "GET",
+   "path": "/check",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "setup",
+   "handler": "Initialize",
+   "method": "POST",
+   "path": "/setup",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "DownloadFile",
+   "method": "GET",
+   "path": "/download",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "GetShare",
+   "method": "GET",
+   "path": "/",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "ShareFile",
+   "method": "POST",
+   "path": "/",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "ShareText",
+   "method": "POST",
+   "path": "/",
+   "auth": "optional",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "UserSharesBatchDelete",
+   "method": "POST",
+   "path": "/batch-delete",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "UserSharesBatchExtend",
+   "method": "POST",
+   "path": "/batch-extend",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "UserSharesHardDelete",
+   "method": "DELETE",
+   "path": "/hard",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "UserSharesList",
+   "method": "GET",
+   "path": "/shares",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share",
+   "handler": "UserSharesRestore",
+   "method": "POST",
+   "path": "/restore",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share_anonymous",
+   "handler": "Download",
+   "method": "GET",
+   "path": "/:code",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share_anonymous",
+   "handler": "GenerateCode",
+   "method": "POST",
+   "path": "/generate",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share_anonymous",
+   "handler": "Retrieve",
+   "method": "POST",
+   "path": "/retrieve",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "share_anonymous",
+   "handler": "SearchByCode",
+   "method": "GET",
+   "path": "/:code",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "storage",
+   "handler": "CleanPresignOrphans",
+   "method": "POST",
+   "path": "/clean-presign-orphans",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "storage",
+   "handler": "GetStorageInfo",
+   "method": "GET",
+   "path": "/storage",
+   "auth": "admin",
+   "bucket": "admin",
+   "ownership": "any"
+  },
+  {
+   "pkg": "storage",
+   "handler": "GetStorageInsights",
+   "method": "GET",
+   "path": "/insights",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "storage",
+   "handler": "MigrateStorage",
+   "method": "POST",
+   "path": "/migrate",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "storage",
+   "handler": "SwitchStorage",
+   "method": "POST",
+   "path": "/switch",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "storage",
+   "handler": "TestStorageConnection",
+   "method": "GET",
+   "path": "/:type",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "storage",
+   "handler": "UpdateStorageConfig",
+   "method": "PUT",
+   "path": "/config",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "ChangePassword",
+   "method": "POST",
+   "path": "/change-password",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "CreateAPIKey",
+   "method": "POST",
+   "path": "/api-keys",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "DeleteAPIKey",
+   "method": "DELETE",
+   "path": "/:id",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "ForgotPassword",
+   "method": "POST",
+   "path": "/forgot",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "ListAPIKeys",
+   "method": "GET",
+   "path": "/api-keys",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "Login",
+   "method": "POST",
+   "path": "/login",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "Register",
+   "method": "POST",
+   "path": "/register",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "ResetPassword",
+   "method": "POST",
+   "path": "/reset",
+   "auth": "anonymous",
+   "bucket": "public-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "RevokeAllSessions",
+   "method": "POST",
+   "path": "/revoke-all",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "RevokeSession",
+   "method": "DELETE",
+   "path": "/:id",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "TotpDisable",
+   "method": "POST",
+   "path": "/disable",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "TotpEnable",
+   "method": "POST",
+   "path": "/enable",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "TotpSetup",
+   "method": "POST",
+   "path": "/setup",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "UpdateProfile",
+   "method": "PUT",
+   "path": "/profile",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "UserFiles",
+   "method": "GET",
+   "path": "/files",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "UserInfo",
+   "method": "GET",
+   "path": "/info",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "UserSessions",
+   "method": "GET",
+   "path": "/sessions",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  },
+  {
+   "pkg": "user",
+   "handler": "UserStats",
+   "method": "GET",
+   "path": "/stats",
+   "auth": "user",
+   "bucket": "authed-default",
+   "ownership": "any"
+  }
+ ],
+ "overrides_note": "override 非空时校验器跳过\"声明 auth vs 静态链 auth\"一致性（人工复核标记）"
+}

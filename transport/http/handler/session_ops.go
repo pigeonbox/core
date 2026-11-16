@@ -49,7 +49,7 @@ func RefreshSession(ctx context.Context, c *app.RequestContext) {
 	// 找回重置、退出所有设备、管理员重置/封禁（纪元 +1）的止损全部可被
 	//「旧令牌换新令牌」绕过。复核失败回 401（与刷新失败同形），前端 401
 	// 拦截器照常跳登录。
-	if claims, perr := auth.ParseToken(oldToken); perr != nil || !middleware.IdentityFresh(ctx, claims) {
+	if _, err := middleware.FreshClaimsOfToken(ctx, oldToken); err != nil {
 		middleware.ClearSessionCookie(c)
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "账号状态已变更，请重新登录"})
 		return
@@ -77,7 +77,7 @@ func LogoutSession(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusUnauthorized, map[string]interface{}{"code": errcode.CodeUnauthorized, "message": "missing token"})
 		return
 	}
-	if claims, err := auth.ParseToken(token); err == nil {
+	if claims, err := middleware.ClaimsOfToken(token); err == nil {
 		remaining := time.Until(claims.ExpiresAt.Time)
 		auth.RevokeToken(ctx, token, remaining)
 	}
