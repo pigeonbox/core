@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/metrics"
 	"github.com/pigeonbox/core/pkg/utils"
 )
@@ -110,15 +109,13 @@ const defaultHTTPBodyLimit int64 = 10 * 1024 * 1024
 //   - 服务端 max_file_size ≤ 本值（单文件永远发得出去）；
 //   - user.user_upload_size（总量，CheckUploadSizeCap）≥ max_file_size。
 func HTTPBodyLimit() int64 {
-	cfg := conf.GetGlobalConfig()
-	if cfg == nil {
-		return defaultHTTPBodyLimit
-	}
-	uploadSize := cfg.Upload.UploadSize
+	// 走执行点自身 getter（utils 同源：nil ⇒ 0），不直读 conf——
+	// internal/arch 规则8 棘轮：容量面的全局配置读取只准落在 utils/gate 工具层。
+	uploadSize := MaxRequestSize()
 	if uploadSize <= 0 {
 		uploadSize = defaultHTTPBodyLimit
 	}
-	if maxFile := cfg.Upload.MaxFileSize; maxFile > uploadSize {
+	if maxFile := MaxFileSize(); maxFile > uploadSize {
 		uploadSize = maxFile
 	}
 	return uploadSize
