@@ -9,6 +9,7 @@ import (
 	"github.com/pigeonbox/core/app/backup"
 	configApp "github.com/pigeonbox/core/app/config"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/storage"
 	"gorm.io/gorm"
 )
@@ -40,6 +41,10 @@ func NewOfflineBackupService(cfg *conf.AppConfiguration, database *gorm.DB) (*ba
 	// （admin.Default() 内部要取 config.Default()）。
 	configApp.InitDefault(database)
 	adminApp.InitDefault(database)
+	// 审计执行点装配（core#173 第七片）：离线路径不走 Bootstrap()，而恢复过程的
+	// 配置操作（SaveRuntimeStorage 等）同样要落审计——句柄必须是本进程传入的
+	// database（离线库是独立库，不是 repo 层全局句柄）。与 Bootstrap() 同款接线。
+	audit.SetSink(daoAuditSink{db: database})
 	// 对象清单来源 = admin 域（含软删记录 ⇒ 软删分享可恢复，它的对象也得带走）。
 	adminSvc := adminApp.Default()
 

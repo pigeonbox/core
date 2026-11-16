@@ -27,9 +27,9 @@ import (
 	"time"
 
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
-	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"go.uber.org/zap"
@@ -38,8 +38,7 @@ import (
 
 // Service 配置中心服务。
 type Service struct {
-	configRepo         *dao.SystemConfigRepository
-	adminOperationRepo *dao.AdminOperationLogRepository // 配置操作审计（与 admin 域同表）
+	configRepo *dao.SystemConfigRepository
 
 	configMu     sync.RWMutex
 	config       *SystemConfig
@@ -63,8 +62,7 @@ type Service struct {
 // 单行读改写语义不允许多实例并存，见包注释）。
 func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
-		configRepo:         dao.NewSystemConfigRepository(gormDB),
-		adminOperationRepo: dao.NewAdminOperationLogRepository(gormDB),
+		configRepo: dao.NewSystemConfigRepository(gormDB),
 		// config 保持 nil，由 GetConfig 懒加载默认值 → DB 持久化配置
 	}
 }
@@ -759,19 +757,10 @@ func (s *Service) SaveRuntimeStorage(ctx context.Context, cfg *conf.StorageConfi
 	return nil
 }
 
-// logConfigOperation 写入配置操作审计（与 admin 域治理操作同表同语义；
-// 操作者提取走 middleware.AuditActor 单源）。审计失败只记运行日志，不阻断业务。
+// logConfigOperation 写入配置操作审计（与 admin 域治理操作同表同语义）。
+// 2026-11-16 收口到 pkg/audit 单一执行点（core#173 第七片）：操作者提取、
+// 构造、落盘、失败降级全在执行点——收口前本函数与 admin 域 logAdminOperation
+// 是孪生实现（各持一份构造+Create+告警）。审计失败只记运行日志，不阻断业务。
 func (s *Service) logConfigOperation(ctx context.Context, action, target string, success bool) {
-	actorID, actorName, ip := middleware.AuditActor(ctx)
-	entry := &model.AdminOperationLog{
-		Action:    action,
-		Target:    target,
-		Success:   success,
-		ActorID:   actorID,
-		ActorName: actorName,
-		IP:        ip,
-	}
-	if err := s.adminOperationRepo.Create(ctx, entry); err != nil {
-		logger.CtxWarn(ctx, "config audit log write failed", "action", action, "err", err)
-	}
+	audit.Record(ctx, action, target, success)
 }

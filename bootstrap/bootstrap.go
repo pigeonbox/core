@@ -17,6 +17,7 @@ import (
 	"github.com/pigeonbox/contracts/openapi"
 	setupApp "github.com/pigeonbox/core/app/setup"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
@@ -121,10 +122,11 @@ func BootstrapWithOptions(configPath string, opts ...Option) (*server.Hertz, err
 	// 真相源，存量分享缺子行时取件页会显示空列表）
 	RunDataMigrations(database)
 
-	// pkg 层持久化能力注入（pkg/middleware、pkg/transfer 不依赖 repo 层，
+	// pkg 层持久化能力注入（pkg/middleware、pkg/transfer、pkg/audit 不依赖 repo 层，
 	// 由 composition root 以 dao 桥接；须先于任何服务流量）
 	middleware.SetAPIKeyStore(daoAPIKeyStore{})
 	transfer.SetSink(daoTransferSink{})
+	audit.SetSink(daoAuditSink{db: database}) // 关键操作审计执行点（core#173 第七片；句柄=InitDatabase 同一实例）
 	// JWT 身份复核 + 会话纪元（2026-10-05 审计 P2）：封禁/降权/改密即时生效
 	middleware.SetIdentityLoader(func(ctx context.Context, userID uint) (*middleware.IdentityRecord, error) {
 		u, err := dao.NewUserRepository(database).GetByID(ctx, userID)
