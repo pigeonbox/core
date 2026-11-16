@@ -11,6 +11,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -33,6 +35,31 @@ func RunDataMigrations(gormDB *gorm.DB) {
 	backfillShareFileRows(gormDB)
 	purgeOrphanChildRows(gormDB)
 	dropRetiredFileCodeColumns(gormDB)
+	backfillBlobRefs(gormDB)
+}
+
+// backfillBlobRefs 文件生命周期账本存量回填（core#172 第二片）：
+// 给「只有 file_codes.file_path、无 Blob/Reference 行」的老数据补账本行。
+//
+// 幂等、差集驱动（见 dao.BackfillLegacyRefs 文件头）：首跑补齐全部存量，
+// 之后每轮差集为空近零成本；失败只记日志不阻断启动（账本是并行面，
+// 缺行由 ReclaimBlobs 守卫②路径口径兜底——泄漏方向，不误删）。
+// HasTable 守卫：账本表未迁移（AutoMigrate 未跑/老库）时跳过。
+func backfillBlobRefs(gormDB *gorm.DB) {
+	if !gormDB.Migrator().HasTable(&model.Blob{}) ||
+		!gormDB.Migrator().HasTable(&model.FileReference{}) {
+		return
+	}
+	st, err := dao.NewBlobRepository(gormDB).BackfillLegacyRefs(context.Background())
+	if err != nil {
+		logger.Error("data migration: backfill blob refs failed", zap.Error(err))
+		return
+	}
+	if st.Created > 0 || st.Failed > 0 {
+		logger.Info("data migration: backfilled blob refs",
+			zap.Int("scanned", st.Scanned), zap.Int("missing", st.Missing),
+			zap.Int("created", st.Created), zap.Int("failed", st.Failed))
+	}
 }
 
 // normalizeFilePathLayout 归一「目录 + UUID 文件名」历史布局。

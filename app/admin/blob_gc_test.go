@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pigeonbox/core/repo/db/model"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -151,4 +152,61 @@ func TestReclaimBlobs_ActiveStateNotCandidate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n, "active 态不是回收候选")
 	assert.FileExists(t, filepath.Join(root, filepath.FromSlash(rel)))
+}
+
+// 观测接线（core#172 第二片）：ReclaimBlobs 每轮**回收后**刷新状态分布
+// 与回收积压。负对照：过宽限的推进 purged、宽限期内的留 trashed 且计入
+// 积压、active 不动。
+func TestReclaimBlobs_UpdatesMetrics(t *testing.T) {
+	_, j, g := newBlobGCTestEnv(t)
+	ctx := context.Background()
+	old := time.Now().Add(-48 * time.Hour)
+	recent := time.Now().Add(-1 * time.Hour)
+	seedBlob(t, g, "uploads/2026/11/16/m1.bin", model.BlobTrashed, &old)    // 过宽限 ⇒ purged
+	seedBlob(t, g, "uploads/2026/11/16/m3.bin", model.BlobTrashed, &recent) // 宽限期内 ⇒ 留 trashed
+	seedBlob(t, g, "uploads/2026/11/16/m2.bin", model.BlobActive, nil)
+
+	n, err := j.ReclaimBlobs(ctx, 24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "只有过宽限的那条被回收")
+
+	assert.Equal(t, 1.0, gatherGauge(t, "pb_blob_reclaim_backlog", nil),
+		"积压 = 流水线未收敛行（宽限期内的 trashed 仍算积压）")
+	assert.Equal(t, 1.0, gatherGauge(t, "pb_blob_states", map[string]string{"state": "trashed"}),
+		"宽限期内的 trashed 必须保留在分布里")
+	assert.Equal(t, 1.0, gatherGauge(t, "pb_blob_states", map[string]string{"state": "purged"}),
+		"过宽限的应推进到 purged")
+	assert.Equal(t, 1.0, gatherGauge(t, "pb_blob_states", map[string]string{"state": "active"}),
+		"active 不受影响")
+}
+
+// gatherGauge 从默认注册表读 gauge 值（跨包不导出变量，走 Gather 接口）。
+func gatherGauge(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			match := true
+			for k, v := range labels {
+				found := false
+				for _, lp := range m.GetLabel() {
+					if lp.GetName() == k && lp.GetValue() == v {
+						found = true
+					}
+				}
+				if !found {
+					match = false
+				}
+			}
+			if match && m.GetGauge() != nil {
+				return m.GetGauge().GetValue()
+			}
+		}
+	}
+	t.Fatalf("metric %s not found", name)
+	return 0
 }
