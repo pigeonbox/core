@@ -173,6 +173,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		// 登记两步挂 AdminMiddleware；登录两步为公开登录入口（login 限流桶）
 		"POST /admin/webauthn/register/options", "POST /admin/webauthn/register/verify",
 		"POST /admin/webauthn/login/options", "POST /admin/webauthn/login/verify",
+		// 凭证管理（core#209 手写；AdminMiddleware，按当前管理员归属）
+		"GET /admin/webauthn/credentials", "DELETE /admin/webauthn/credentials/:id",
 	}
 
 	// 1. 契约内路由必须全部已注册

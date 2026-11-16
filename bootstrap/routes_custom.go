@@ -203,6 +203,10 @@ func customizedRegister(r *server.Hertz) {
 		r.POST("/admin/webauthn/register/verify", middleware.AdminMiddleware(), adminWebAuthnRegisterVerify)
 		r.POST("/admin/webauthn/login/options", adminWebAuthnLoginOptions)
 		r.POST("/admin/webauthn/login/verify", adminWebAuthnLoginVerify)
+		// 凭证管理（core#209）：list / delete 都是管理员本人面（AdminMiddleware），
+		// 只操作当前 JWT 归属的凭证行；delete 按行 id，跨用户 404。
+		r.GET("/admin/webauthn/credentials", middleware.AdminMiddleware(), adminWebAuthnCredentialList)
+		r.DELETE("/admin/webauthn/credentials/:id", middleware.AdminMiddleware(), adminWebAuthnCredentialDelete)
 
 		// ===== 通知渠道测试发送（core#122）：2026-11-13 IDL 化收编 =====
 		// 路由改由 contracts IDL 生成（idl/admin.thrift ⇒ gen/router/admin 注册，
