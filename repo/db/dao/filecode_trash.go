@@ -179,16 +179,27 @@ func softDeleteChildRows(tx *gorm.DB, ids []uint) error {
 	return tx.Where("file_code_id IN ?", ids).Delete(&model.FileCodeFile{}).Error
 }
 
-// hardDeleteChildRows 事务内物理删除 file_code_files 子行（主表 id 集合）。
+// hardDeleteChildRows 事务内物理删除 file_code_files 子行（主表 id 集合），
+// 并**同事务释放文件生命周期账本引用**（core#172 第二片·硬删全链）。
 //
 // 子表与主表「同生共死」：主表物理删除时子表必须一起物理删除，否则
 // ① 子行成孤儿（父行不存在）；② janitor 对账引用集仍含子行路径
 // ⇒ 被删分享的物理文件永不回收（core#62）。
 //
+// 账本释放挂这里而非 app 层：本函数是**全部硬删路径的收口**
+// （HardDeleteByIDs / HardDeleteByCode 两条 DAO 路径都经过它）⇒ 同事务
+// 保证「行删成功则引用必释放」，无「行删了引用还活着」的窗口。归零的
+// blob 转 trashed（宽限期起点），由 ReclaimBlobs 走 purge→purged 终态；
+// 未归零保持 active（共享对象负对照）。缺表/无引用为 no-op
+// （releaseLedgerRefsTx，账本缺表不阻断硬删主链）。
+//
 // 只删「物理行」（Unscoped）——软删子行同样要清：彻底删除不留软删残留。
 func hardDeleteChildRows(tx *gorm.DB, ids []uint) error {
 	if len(ids) == 0 {
 		return nil
+	}
+	if err := releaseLedgerRefsTx(tx, ids); err != nil {
+		return err
 	}
 	return tx.Unscoped().
 		Where("file_code_id IN ?", ids).

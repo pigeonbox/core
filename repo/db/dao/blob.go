@@ -127,11 +127,8 @@ func (r *BlobRepository) EnsureBlobWithRef(ctx context.Context, objectKey string
 	return blobID, nil
 }
 
-// ReleaseByShare 分享**硬删**后的引用释放（一个事务）：
-//
-//  1. 该分享全部 active 引用 → released（记 released_at）；
-//  2. 逐个受影响 blob 复核存活引用数，归零 ⇒ active→trashed（记 trashed_at
-//     = 回收宽限期起点）；未归零 ⇒ 保持 active（负对照：共享对象不进回收）。
+// ReleaseByShare 分享**硬删**后的引用释放（一个事务）。
+// 语义与实现见 releaseByShareTx（事务体单源，硬删路径同事务复用）。
 //
 // 软删**不调用**本方法（软删不释放——回收站行仍占对象，恢复后对象必须在）。
 // 幂等：无 active 引用时返回 0，不报错。
@@ -142,52 +139,92 @@ func (r *BlobRepository) ReleaseByShare(ctx context.Context, fileCodeID uint) (i
 	}
 	var released int64
 	err := r.db().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var refs []model.FileReference
-		if err := tx.Where("file_code_id = ? AND state = ?", fileCodeID, model.RefActive).
-			Find(&refs).Error; err != nil {
-			return err
-		}
-		if len(refs) == 0 {
-			return nil // 幂等
-		}
-		now := time.Now()
-		res := tx.Model(&model.FileReference{}).
-			Where("file_code_id = ? AND state = ?", fileCodeID, model.RefActive).
-			Updates(map[string]any{"state": model.RefReleased, "released_at": now})
-		if res.Error != nil {
-			return res.Error
-		}
-		released = res.RowsAffected
-
-		// 逐 blob 复核归零（共享对象：还有别的引用 ⇒ 不进回收）。
-		seen := make(map[uint]bool, len(refs))
-		for _, ref := range refs {
-			if seen[ref.BlobID] {
-				continue
-			}
-			seen[ref.BlobID] = true
-			var alive int64
-			if err := tx.Model(&model.FileReference{}).
-				Where("blob_id = ? AND state = ?", ref.BlobID, model.RefActive).
-				Count(&alive).Error; err != nil {
-				return err
-			}
-			if alive > 0 {
-				continue // 负对照①：引用未归零不进回收
-			}
-			// CAS：只在仍为 active 时转 trashed（并发释放只有一方成功）。
-			if err := tx.Model(&model.Blob{}).
-				Where("id = ? AND state = ?", ref.BlobID, model.BlobActive).
-				Updates(map[string]any{"state": model.BlobTrashed, "trashed_at": now}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		var err error
+		released, err = releaseByShareTx(tx, fileCodeID)
+		return err
 	})
 	if err != nil {
 		return 0, err
 	}
 	return released, nil
+}
+
+// releaseByShareTx 单分享引用释放的事务体（单源）：
+//
+//  1. 该分享全部 active 引用 → released（记 released_at）；
+//  2. 逐个受影响 blob 复核存活引用数，归零 ⇒ active→trashed（记 trashed_at
+//     = 回收宽限期起点）；未归零 ⇒ 保持 active（负对照：共享对象不进回收）。
+//
+// 调用方必须在事务内调用（ReleaseByShare 自开事务；HardDeleteByIDs 等硬删
+// 路径与行删除同事务——行删成功则引用必释放，原子）。
+// 幂等：无 active 引用返回 (0, nil)。
+func releaseByShareTx(tx *gorm.DB, fileCodeID uint) (int64, error) {
+	if fileCodeID == 0 {
+		return 0, errors.New("releaseByShareTx: fileCodeID 必填")
+	}
+	var refs []model.FileReference
+	if err := tx.Where("file_code_id = ? AND state = ?", fileCodeID, model.RefActive).
+		Find(&refs).Error; err != nil {
+		return 0, err
+	}
+	if len(refs) == 0 {
+		return 0, nil // 幂等
+	}
+	now := time.Now()
+	res := tx.Model(&model.FileReference{}).
+		Where("file_code_id = ? AND state = ?", fileCodeID, model.RefActive).
+		Updates(map[string]any{"state": model.RefReleased, "released_at": now})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	released := res.RowsAffected
+
+	// 逐 blob 复核归零（共享对象：还有别的引用 ⇒ 不进回收）。
+	seen := make(map[uint]bool, len(refs))
+	for _, ref := range refs {
+		if seen[ref.BlobID] {
+			continue
+		}
+		seen[ref.BlobID] = true
+		var alive int64
+		if err := tx.Model(&model.FileReference{}).
+			Where("blob_id = ? AND state = ?", ref.BlobID, model.RefActive).
+			Count(&alive).Error; err != nil {
+			return 0, err
+		}
+		if alive > 0 {
+			continue // 负对照①：引用未归零不进回收
+		}
+		// CAS：只在仍为 active 时转 trashed（并发释放只有一方成功）。
+		if err := tx.Model(&model.Blob{}).
+			Where("id = ? AND state = ?", ref.BlobID, model.BlobActive).
+			Updates(map[string]any{"state": model.BlobTrashed, "trashed_at": now}).Error; err != nil {
+			return 0, err
+		}
+	}
+	return released, nil
+}
+
+// releaseLedgerRefsTx 硬删路径的账本释放入口（core#172 第二片）：
+// 对一批分享 id 逐个 releaseByShareTx（同一事务）。
+//
+// HasTable 守卫：老库/测试库尚未迁移 blobs/file_references 时静默跳过
+// （账本是并行面，缺表不得阻断硬删主链——与 best-effort 哲学一致；
+// 物理对象仍由路径口径 deletePhysicalIfUnreferenced 兜底）。
+// 幂等：重复硬删/无 active 引用均为 no-op。
+func releaseLedgerRefsTx(tx *gorm.DB, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if !tx.Migrator().HasTable(&model.FileReference{}) {
+		return nil
+	}
+	for _, id := range ids {
+		if _, err := releaseByShareTx(tx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListReclaimable 回收候选：
