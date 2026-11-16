@@ -330,18 +330,25 @@ func validateAPIKey(ctx context.Context, c *app.RequestContext, plainKey string)
 	// 结果刻意丢弃——它不影响认证结论，写不进去也不该让请求失败。
 	_, _ = touchLastUsed(ctx, principal.KeyID, ClientIP(c))
 
-	c.Set("user_id", principal.UserID)
-	c.Set("username", principal.Username)
-	c.Set("role", principal.Role)
-	c.Set("api_key_id", principal.KeyID) // 与 transport 侧 ContextKeyAPIKeyID 同字符串
-	c.Set("auth_type", "api_key")        // 与 transport 侧 ContextKeyAuthType 同字符串
-	c.Header("X-User-ID", fmt.Sprintf("%d", principal.UserID))
-	// 回显头消毒（2026-10-08 加固）：新用户名建号时已白名单校验，但 legacy
-	// 存量用户名从未复验——header 值必须只含可见安全字符，防响应拆分/注入面
-	c.Header("X-Username", sanitizeHeaderValue(principal.Username))
-	c.Header("X-Role", principal.Role)
+	injectAPIKeyIdentity(c, principal)
 
 	return withIdentity(ctx, principal.UserID, principal.Username, principal.Role, ClientIP(c), principal.KeyID), nil
+}
+
+// injectAPIKeyIdentity API Key 身份注入（c.Set 五件套 + 回显头三连）——
+// 与 JWT 侧 SetJWTClaims 对偶，键名/消毒口径单处生效（core#173 第四片收口：
+// 身份注入全仓只此两处方言）。
+func injectAPIKeyIdentity(c *app.RequestContext, p *APIKeyPrincipal) {
+	c.Set("user_id", p.UserID)
+	c.Set("username", p.Username)
+	c.Set("role", p.Role)
+	c.Set("api_key_id", p.KeyID)  // 与 transport 侧 ContextKeyAPIKeyID 同字符串
+	c.Set("auth_type", "api_key") // 与 transport 侧 ContextKeyAuthType 同字符串
+	c.Header("X-User-ID", fmt.Sprintf("%d", p.UserID))
+	// 回显头消毒（2026-10-08 加固）：新用户名建号时已白名单校验，但 legacy
+	// 存量用户名从未复验——header 值必须只含可见安全字符，防响应拆分/注入面
+	c.Header("X-Username", sanitizeHeaderValue(p.Username))
+	c.Header("X-Role", p.Role)
 }
 
 // sanitizeHeaderValue 回显头消毒：剥离控制字符（CR/LF/其他 C0）与空白，

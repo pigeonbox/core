@@ -174,7 +174,7 @@ func OIDCCallback(ctx context.Context, c *app.RequestContext) {
 // 由本进程签发，解析失败只可能是 JWT secret 热更等极端边——回正式回跳位，
 // 不把用户甩进二验死循环）。
 func oidcFrontendRedirect(svc *oidcApp.Service, token string) string {
-	if claims, err := auth.ParseToken(token); err == nil && claims.MFAPending {
+	if claims, err := middleware.ClaimsOfToken(token); err == nil && claims.MFAPending {
 		return svc.FrontendMFACallback()
 	}
 	return svc.FrontendCallback()

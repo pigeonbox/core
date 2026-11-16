@@ -30,6 +30,7 @@ import (
 	"github.com/oekit/pkg/secretx"
 	"github.com/pigeonbox/core/internal/authn"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/pkg/security"
 	"github.com/pigeonbox/core/pkg/utils"
@@ -394,11 +395,10 @@ func (s *Service) ExchangeCallback(ctx context.Context, baseURL, code, state, no
 // TotpEnabled 在半会话签发后被关闭的边：按现值不再要求码（与本地登录
 // 「未开二验不查码」同口径）——换发仍需有效半会话，无绕过面。
 func (s *Service) ExchangeMFASession(ctx context.Context, halfToken, code string) (string, error) {
-	claims, err := auth.ParseToken(halfToken)
-	if err != nil || !claims.MFAPending {
-		return "", ErrMFASessionInvalid
-	}
-	if auth.IsTokenRevoked(ctx, halfToken) {
+	// 半会话校验收口到 pkg/middleware 执行点（core#173 第四片）：解析 →
+	// 必须是 pending-2FA → 未吊销，与历史内联三连逐项等价。
+	claims, err := middleware.HalfSessionClaims(ctx, halfToken)
+	if err != nil {
 		return "", ErrMFASessionInvalid
 	}
 	user, err := s.userRepo.GetByID(ctx, claims.UserID)
