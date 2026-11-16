@@ -31,6 +31,9 @@ package bootstrap
 
 import (
 	"context"
+	"database/sql"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -51,6 +54,17 @@ type DiagnosticsReport struct {
 	BuildCommit string `json:"build_commit,omitempty"`
 	// BuildTime 构建时间。
 	BuildTime string `json:"build_time,omitempty"`
+	// Platform / Arch 运行平台与架构（hub#385）：诊断包与匿名上报的分布维度。
+	// runtime.GOOS / GOARCH，不是配置值——跑在哪个平台由构建产物决定。
+	Platform string `json:"platform"`
+	Arch     string `json:"arch"`
+	// UpgradeFrom 上一次运行的构建版本（全新安装为空；hub#385）。
+	// 由数据目录下的 install-version.json 对比得出——「升级跨度」在进程内拿不到，
+	// 只能靠启动时落盘（见 bootstrap/install_version.go）。
+	UpgradeFrom string `json:"upgrade_from,omitempty"`
+	// SchemaVersion 已应用的迁移版本（未启用版本化迁移时为空；hub#385）。
+	// 方言相关（SQLite 与 PG 的迁移集版本号不同源），聚合时按 driver 分组看。
+	SchemaVersion string `json:"schema_version,omitempty"`
 	// DeploymentMode 部署模式：standalone | public | admin。
 	DeploymentMode string `json:"deployment_mode"`
 	// ServerTime 服务端当前时间（CLI 用它与本机时钟比对 ⇒ 时钟偏差）。
@@ -226,6 +240,12 @@ func diagnosticsReport(ctx context.Context) *DiagnosticsReport {
 	report.Version = version.Version
 	report.BuildCommit = version.BuildCommit
 	report.BuildTime = version.BuildTime
+	report.Platform = runtime.GOOS
+	report.Arch = runtime.GOARCH
+	// 升级跨度：进程内第一次诊断时落盘/对比（幂等，见 install_version.go）。
+	report.UpgradeFrom = upgradeFromVersion()
+	// schema 版本：DB 可达才查；表不存在（AutoMigrate 形态）即空，不报错。
+	report.SchemaVersion = currentSchemaVersion(ctx)
 	if config != nil {
 		report.DeploymentMode = config.NormalizedDeploymentMode()
 	}
@@ -354,4 +374,26 @@ func diagnosticsModeration() DiagnosticsModeration {
 // 鉴权在注册处（middleware.AdminOrAdminKey）——本函数只负责采集与应答。
 func diagnosticsHandler(ctx context.Context, c *app.RequestContext) {
 	resp.Success(c, diagnosticsReport(ctx))
+}
+
+// currentSchemaVersion 读取已应用的最大迁移版本（hub#385）。
+//
+// 口径与方言相关：SQLite 与 PostgreSQL 的迁移集版本号不同源（见
+// app/dbmigrate/format.go 的头注），故聚合分布时必须与 database.driver 一起看。
+// 任何失败（DB 未初始化 / 表不存在——AutoMigrate 形态 / 查询失败）一律返回空：
+// 诊断报告不能因为附加信息拿不到而整体失败。
+func currentSchemaVersion(ctx context.Context) string {
+	if database == nil {
+		return ""
+	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		return ""
+	}
+	var v sql.NullString
+	_ = sqlDB.QueryRowContext(ctx, "SELECT MAX(version) FROM schema_migrations").Scan(&v)
+	if !v.Valid {
+		return ""
+	}
+	return strings.TrimSpace(v.String)
 }
