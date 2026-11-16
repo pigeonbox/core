@@ -52,7 +52,18 @@ const (
 	// TargetFederationDirectory 联邦名录查询（GET <registry>/v1/directory；
 	// app/federation PeerDirectory）。core#116：此前同用 http.DefaultClient。
 	TargetFederationDirectory Target = "federation_directory"
+	// TargetUpdateCheck 更新检查（GET <endpoint>；app/updatecheck fetch，
+	// 5.0.0 起）。core#173 第二片：原为裸 &http.Client{（守卫豁免清单条目），
+	// 收编后超时/禁跳转策略进 policies 表、出站观测同族生效。
+	TargetUpdateCheck Target = "update_check"
 )
+
+// denyRedirect 禁止跟随任何重定向：3xx 一律按原响应返回（ErrUseLastResponse，
+// 调用方按非 2xx 判失败）。用于「跳转目标不受保存期校验约束」的出站点——
+// 对端回 302 即可借本站出站面绕过 SSRF 判定。
+func denyRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
 
 // DefaultTimeout 统一超时基准（core#87：此前三处各写一个常量，改一处忘两处）。
 // per-target 覆盖值见 policies——那些是**迁移**不是新决策，改动即 wire 行为变更。
@@ -142,11 +153,7 @@ var policies = map[Target]policy{
 	// 时长由调用方 ctx 截止治理（两处调用点均带 deadline）。禁跟随重定向：
 	// 对端回 302 到内网地址即可借本站出站面绕过 SSRF 判定 ⇒ 3xx 一律按原响应
 	// 返回（ErrUseLastResponse，调用方按非 200 判失败）。
-	TargetFederationDelivery: {
-		checkRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	},
+	TargetFederationDelivery: {checkRedirect: denyRedirect},
 	// core#116 两个联邦出站（原 http.DefaultClient 两处）。10s / 5s 均为**迁移**
 	// 不是新决策：原 pushInvite / directory.go 构造现场的 ctx 预算值（两处调用点
 	// 仍各自带同值 ctx deadline）。重定向逐跳复验 SSRF（ssrfRedirectGuard，见
@@ -161,6 +168,15 @@ var policies = map[Target]policy{
 		// core#181：挂拨号时刻复判（保存期严格公网口径，同开关不误杀）。
 		dialGuard: true,
 	},
+	// core#173 第二片：收编 app/updatecheck 裸客户端（原构造：Timeout=cfg.Timeout
+	// + 禁跟随跳转）。timeout:0 = 不设客户端级超时——fetch 恒带
+	// context.WithTimeout(cfg.Timeout)，预算等价迁移；denyRedirect 与原
+	// checkRedirect 逐字同语义（跳转目标不受 https 校验约束，一律不跟）。
+	// **dialGuard 有意不开**：endpoint 允许企业内网自建镜像（https-only +
+	// localhost 测试例外，见 updatecheck.validateEndpoint）——严格公网拨号
+	// 复判会误杀该受支持形态；其 SSRF 面由「https-only + 禁跳转 + 端点仅
+	// admin/PB_UPDATE_ENDPOINT 可配」封死（本包不再引入第二套端点策略）。
+	TargetUpdateCheck: {checkRedirect: denyRedirect},
 }
 
 // registry per-target 共享实例缓存（同 target 复用同一实例 = 连接池复用）。

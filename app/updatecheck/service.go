@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pigeonbox/core/pkg/outbound"
 )
 
 // 结果来源（Result.Source）。
@@ -151,14 +153,12 @@ func New(cfg Config) *Checker {
 	}
 	return &Checker{
 		cfg: cfg,
-		client: &http.Client{
-			Timeout: cfg.Timeout,
-			// 不跟随跳转：GitHub API 正常不跳；跟随会让「配置被改成任意 URL」的
-			// 影响面变大（跳转目标不受 https 校验约束）。
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		// 出站统一走注册表（core#173 第二片收编）：禁跳转与超时策略迁入
+		// pkg/outbound 策略表（TargetUpdateCheck），出站观测（metrics）同族生效。
+		// 禁跳转语义不变：GitHub API 正常不跳；跟随会让「配置被改成任意 URL」的
+		// 影响面变大（跳转目标不受 https 校验约束）。请求级超时不变：
+		// fetch 恒带 context.WithTimeout(cfg.Timeout)（策略表 timeout=0 由其治理）。
+		client: outbound.New(outbound.TargetUpdateCheck),
 	}
 }
 
