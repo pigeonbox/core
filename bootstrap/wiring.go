@@ -533,6 +533,7 @@ func applyNotifyConfig(target *notifyAppService.Service, cfg *conf.NotifyConfig)
 			cfg.SMTP.Username,
 			cfg.SMTP.Password,
 			cfg.SMTP.From,
+			cfg.SMTP.TLSMode,
 			userEmailLookup{},
 		))
 		logger.Info("SMTP mail notifications enabled", zap.String("host", cfg.SMTP.Host))

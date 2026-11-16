@@ -350,6 +350,44 @@ type BarkConfig struct {
 	DeviceKey string `mapstructure:"device_key" json:"device_key"` // env: PB_BARK_DEVICE_KEY
 }
 
+// SMTP TLS 策略（core#222）。
+//
+// 此前只有「按端口猜加密」：465=隐式 TLS，其余先明文、服务器 advertise
+// STARTTLS 才升级；认证固定 smtp.PlainAuth（非 TLS 非 localhost 直接拒绝）
+// ⇒ 内网 25 端口中继（无 STARTTLS）整条发信链路恒失败且只留一行 warn。
+const (
+	// SMTPTLSRequired 强制 TLS（默认）：端口 465 走隐式 TLS，其余端口必须
+	// STARTTLS；服务器不支持 ⇒ 显式报错（不再静默失败）。
+	SMTPTLSRequired = "required"
+	// SMTPTLSOpportunistic 机会式：465 隐式 TLS；其余明文连接、服务器支持
+	// STARTTLS 则升级。若配置了认证但服务器不支持 STARTTLS ⇒ 显式报错
+	// （绝不把凭据发到明文连接上）。
+	SMTPTLSOpportunistic = "opportunistic"
+	// SMTPTLSImplicit 强制隐式 TLS（不看端口；SMTPS 465/自建 TLS 端口）。
+	SMTPTLSImplicit = "implicit"
+	// SMTPTLSNone 允许明文（**显式危险 opt-in**）：不 STARTTLS；认证用
+	// 无 TLS 校验的 PLAIN（仅用于可信内网中继）。
+	SMTPTLSNone = "none"
+)
+
+// NormalizeSMTPTLSMode 归一化/校验 notify.smtp.tls_mode。
+// 空值 = 默认 required（安全默认）；别名 starttls/tls/plain 便于迁移旧配置。
+func NormalizeSMTPTLSMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", SMTPTLSRequired, "starttls":
+		return SMTPTLSRequired, nil
+	case SMTPTLSOpportunistic:
+		return SMTPTLSOpportunistic, nil
+	case SMTPTLSImplicit, "implicit_tls", "tls":
+		return SMTPTLSImplicit, nil
+	case SMTPTLSNone, "plain", "plaintext":
+		return SMTPTLSNone, nil
+	default:
+		return "", fmt.Errorf("无效的 notify.smtp.tls_mode %q（合法值：%s/%s/%s/%s）",
+			mode, SMTPTLSRequired, SMTPTLSOpportunistic, SMTPTLSImplicit, SMTPTLSNone)
+	}
+}
+
 // SMTPConfig SMTP 邮件配置（P2；默认禁用）
 type SMTPConfig struct {
 	Host     string `mapstructure:"host" json:"host"`         // env: PB_SMTP_HOST
@@ -357,6 +395,9 @@ type SMTPConfig struct {
 	Username string `mapstructure:"username" json:"username"` // env: PB_SMTP_USERNAME
 	Password string `mapstructure:"password" json:"password"` // env: PB_SMTP_PASSWORD
 	From     string `mapstructure:"from" json:"from"`         // 发件地址，空 = 取 Username；env: PB_SMTP_FROM
+	// TLSMode 传输层安全策略（core#222）：required（默认）/opportunistic/
+	// implicit/none。见上方常量；env: PB_SMTP_TLS_MODE
+	TLSMode string `mapstructure:"tls_mode" json:"tls_mode"`
 }
 
 // SetGlobalConfig 设置全局配置

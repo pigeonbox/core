@@ -193,6 +193,10 @@ func validateSystemConfig(cfg *SystemConfig) error {
 				return fmt.Errorf("notify.smtp.host 校验失败: %w", err)
 			}
 		}
+		// TLS 策略白名单（core#222）：非法值在保存时拒绝，而不是运行时静默回落。
+		if _, err := conf.NormalizeSMTPTLSMode(cfg.Notify.SMTP.TLSMode); err != nil {
+			return err
+		}
 		// notify.bark.server_url 保存期校验（2026-11-01 Telegram/Bark 渠道；
 		// telegram 目标 host 固定 api.telegram.org 无出站 URL 注入面，无需校验）
 		if u := strings.TrimSpace(cfg.Notify.Bark.ServerURL); u != "" {
