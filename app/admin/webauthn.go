@@ -63,6 +63,7 @@ import (
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
@@ -320,7 +321,7 @@ func (s *Service) WebAuthnRegisterOptions(ctx context.Context, userID uint, rp W
 	if err != nil {
 		return nil, fmt.Errorf("%w: 用户不存在: %w", ErrWebAuthnInvalid, err)
 	}
-	if u.Role != "admin" || u.Status != "active" {
+	if !authz.IsActiveAdmin(u.Role, u.Status) {
 		return nil, fmt.Errorf("%w: 仅在职管理员可登记 Passkey", ErrWebAuthnInvalid)
 	}
 	w, err := newWebAuthnFor(rp)
@@ -359,7 +360,7 @@ func (s *Service) WebAuthnRegisterVerify(ctx context.Context, userID uint, rp We
 	if err != nil {
 		return nil, fmt.Errorf("%w: 用户不存在: %w", ErrWebAuthnInvalid, err)
 	}
-	if u.Role != "admin" || u.Status != "active" {
+	if !authz.IsActiveAdmin(u.Role, u.Status) {
 		return nil, fmt.Errorf("%w: 仅在职管理员可登记 Passkey", ErrWebAuthnInvalid)
 	}
 	w, err := newWebAuthnFor(rp)
@@ -477,7 +478,7 @@ func (s *Service) resolveWebAuthnLoginTarget(ctx context.Context, username strin
 		}
 		return nil, fmt.Errorf("%w: 用户查询失败: %w", ErrWebAuthnInternal, err)
 	}
-	if u.Role != "admin" || u.Status != "active" {
+	if !authz.IsActiveAdmin(u.Role, u.Status) {
 		return nil, nil
 	}
 	wu, err := s.webAuthnUserOf(ctx, u)
@@ -503,7 +504,7 @@ func (s *Service) WebAuthnLoginVerify(ctx context.Context, rp WebAuthnRP, challe
 		return "", fmt.Errorf("%w: 登录挑战无效或已过期", ErrWebAuthnInvalid)
 	}
 	u, err := s.userRepo.GetByID(ctx, cer.userID)
-	if err != nil || u.Role != "admin" || u.Status != "active" {
+	if err != nil || !authz.IsActiveAdmin(u.Role, u.Status) {
 		return "", fmt.Errorf("%w: 登录挑战无效或已过期", ErrWebAuthnInvalid)
 	}
 	wu, err := s.webAuthnUserOf(ctx, u)

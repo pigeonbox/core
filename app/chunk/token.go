@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/repo/db/model"
 )
 
@@ -45,15 +46,15 @@ func VerifySessionToken(uploadID, token string) bool {
 func OwnedByCaller(info *model.UploadChunk, clientIP string, sessionToken string, callerUserID *uint) bool {
 	if info.OwnerIP == "" {
 		return VerifySessionToken(info.UploadID, sessionToken) ||
-			(info.UserID != nil && callerUserID != nil && *callerUserID == *info.UserID)
+			authz.OwnedByUser(info.UserID, callerUserID)
 	}
-	if info.OwnerIP == clientIP {
+	if authz.OwnedByIP(info.OwnerIP, clientIP) {
 		return true
 	}
 	if VerifySessionToken(info.UploadID, sessionToken) {
 		return true
 	}
-	if info.UserID != nil && callerUserID != nil && *callerUserID == *info.UserID {
+	if authz.OwnedByUser(info.UserID, callerUserID) {
 		return true
 	}
 	return false
@@ -63,13 +64,13 @@ func OwnedByCaller(info *model.UploadChunk, clientIP string, sessionToken string
 // 入参来自 InitiateUploadReq 而非 RequestContext；OwnerIP 为空的老数据
 // 视为无主空会话，走调用方的孤儿回收分支）。
 func chunkSessionOwnedBy(info *model.UploadChunk, ownerIP string, userID *uint, sessionToken string) bool {
-	if ownerIP != "" && info.OwnerIP == ownerIP {
+	if authz.OwnedByIP(info.OwnerIP, ownerIP) {
 		return true
 	}
 	if VerifySessionToken(info.UploadID, sessionToken) {
 		return true
 	}
-	if userID != nil && info.UserID != nil && *info.UserID == *userID {
+	if authz.OwnedByUser(info.UserID, userID) {
 		return true
 	}
 	return false

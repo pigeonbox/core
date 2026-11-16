@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/repo/db/model"
 )
@@ -127,7 +128,8 @@ func (s *Service) PickupTimeline(ctx context.Context, userID uint, code string) 
 	if err != nil || fc == nil {
 		return nil, ErrTimelineNotFound
 	}
-	if fc.UserID == nil || *fc.UserID != userID {
+	// 属主判定经 pkg/authz 单一执行点（core#173 第五片）；不可达仍统一 404。
+	if !authz.OwnedByUser(fc.UserID, &userID) {
 		return nil, ErrTimelineNotFound
 	}
 
