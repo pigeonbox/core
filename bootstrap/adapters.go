@@ -17,15 +17,17 @@ import (
 	previewApp "github.com/pigeonbox/core/app/preview"
 	requestApp "github.com/pigeonbox/core/app/request"
 	shareService "github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/transfer"
 	"github.com/pigeonbox/core/repo/db"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
+	"gorm.io/gorm"
 )
 
 // ===== pkg 层持久化桥 =====
-// pkg/middleware、pkg/transfer 不直接依赖 repo 层（底层包方向纯净），
+// pkg/middleware、pkg/transfer、pkg/audit 不直接依赖 repo 层（底层包方向纯净），
 // 持久化能力由 composition root 在此以 dao 实现注入。
 
 // daoAPIKeyStore pkg/middleware.APIKeyStore 的 dao 桥。
@@ -62,6 +64,20 @@ func (daoTransferSink) Create(ctx context.Context, e transfer.Entry) error {
 		Operation: e.Operation, FileCodeID: e.FileCodeID, FileCode: e.Code,
 		FileName: e.FileName, FileSize: e.FileSize, UserID: e.UserID,
 		APIKeyID: e.APIKeyID, Username: e.Username, IP: e.IP, DurationMs: e.DurationMs,
+	})
+}
+
+// daoAuditSink pkg/audit.Sink 的 dao 桥（core#173 第七片：审计执行点落盘）。
+// 句柄由装配点注入（Bootstrap / NewOfflineBackupService 传入的 *gorm.DB——
+// 离线路径传的是本进程独立库，不等于 repo 层全局句柄；全局 DB 棘轮规则10
+// 只减不增，见 internal/arch/ratchet_test.go）。列与 Entry 一一对应；
+// Message/LatencyMs 保持零值（现无写入方，行为零变化）。
+type daoAuditSink struct{ db *gorm.DB }
+
+func (s daoAuditSink) Create(ctx context.Context, e audit.Entry) error {
+	return dao.NewAdminOperationLogRepository(s.db).Create(ctx, &model.AdminOperationLog{ // 装配层显式句柄
+		Action: e.Action, Target: e.Target, Success: e.Success,
+		ActorID: e.ActorID, ActorName: e.ActorName, IP: e.IP,
 	})
 }
 

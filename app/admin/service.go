@@ -9,10 +9,8 @@ import (
 	"sync"
 
 	appconfig "github.com/pigeonbox/core/app/config"
-	"github.com/pigeonbox/core/pkg/logger"
-	"github.com/pigeonbox/core/pkg/middleware"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/repo/db/dao"
-	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"
 	"gorm.io/gorm"
 )
@@ -99,22 +97,11 @@ func (s *Service) SetStorage(st storage.StorageInterface) {
 }
 
 // logAdminOperation 写入管理操作审计日志（P0 修复：模型/DAO 早已有之，
-// 此前从未接线——后台所有变更操作零审计）。审计失败只记运行日志，不阻断业务。
-// 操作者从 hertz 请求上下文提取（middleware.AuditActor 单源，config 域同款）；
-// 定时任务等非请求场景记为 system。
+// 此前从未接线——后台所有变更操作零审计）。2026-11-16 收口到 pkg/audit 单一
+// 执行点（core#173 第七片）：操作者提取、构造、落盘、失败降级全在执行点，
+// 本函数只留域内入口（调用点语义与审计行字段零变化；config 域同款）。
 func (s *Service) logAdminOperation(ctx context.Context, action, target string, success bool) {
-	actorID, actorName, ip := middleware.AuditActor(ctx)
-	entry := &model.AdminOperationLog{
-		Action:    action,
-		Target:    target,
-		Success:   success,
-		ActorID:   actorID,
-		ActorName: actorName,
-		IP:        ip,
-	}
-	if err := s.adminOperationRepo.Create(ctx, entry); err != nil {
-		logger.CtxWarn(ctx, "admin audit log write failed", "action", action, "err", err)
-	}
+	audit.Record(ctx, action, target, success)
 }
 
 // Audit 管理端操作审计的统一入口（transport 侧审计写入收口到此，消除与
