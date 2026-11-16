@@ -109,6 +109,11 @@ type Service struct {
 	// 登录用户单次上传大小上限查询（bootstrap 注入 user 域；nil = 跳过预检）
 	uploadCap UploadSizeCapProvider
 
+	// blobRepo 会话账本（core#172 第三片：MergeUpload 后 committed 落账、
+	// 复检失败 aborted；接点见 blobstate.go。nil 守卫同 presign 口径，
+	// best-effort 不阻断完成主链）
+	blobRepo *dao.BlobRepository
+
 	// completionLock 上传完成面的**跨副本**互斥闸（core#191；NewService 自建，
 	// 方言分派见 repo/db/dblock.go）。uploadlock（internal，进程内条纹闸）只是
 	// 性能优化层；多副本部署（public × N）下同一 upload_id 的并发 Complete 由
@@ -129,6 +134,7 @@ func NewService(gormDB *gorm.DB) *Service {
 	return &Service{
 		chunkRepo:      dao.NewChunkRepository(gormDB),
 		fileCodeRepo:   dao.NewFileCodeRepository(gormDB),
+		blobRepo:       dao.NewBlobRepository(gormDB),
 		completionLock: dblock.NewDLock(gormDB),
 	}
 }
