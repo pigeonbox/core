@@ -172,8 +172,9 @@ func (s *Service) authorizePickup(ctx context.Context, req GetReq) (*model.FileC
 	// 此前本面只有域内 CheckPickup 的枚举判定——它在**解析成功之后**才执行，
 	// 不存在的码永远到不了 ⇒ 枚举本面只剩 QPS 桶。
 	//（clientIP 经 GetReq.ClientIP 从 middleware.ClientIP 透传，签名无需改。）
-	if remain, locked := gate.PickupLockedRemain(ctx, req.ClientIP, req.Code); locked {
-		return nil, &LockedError{Remain: remain}
+	if perr := gate.PrecheckPickup(ctx, req.ClientIP, req.Code); perr != nil {
+		// PrecheckPickup 契约：非 nil 必为 *gate.PickupLockedError
+		return nil, &LockedError{Remain: perr.(*gate.PickupLockedError).Remain}
 	}
 
 	// 获取文件信息（**分享码或 6 位取件码**）：走统一解析器（dao.ResolveByCode），

@@ -2,12 +2,9 @@ package storage
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net/http"
 	"os"
 	"syscall"
-	"time"
 
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/pkg/security"
@@ -306,51 +303,9 @@ func (s *Service) TestStorageConnection(ctx context.Context, storageType string)
 	return corestorage.BuildAndProbe(ctx, corestorage.ConfigFromConf(candidate, s.baseURL()))
 }
 
-// probeHTTP 通用端点探测：能建立 TLS/HTTP 连接即视为可达（401/403/404 都算通）。
-func probeHTTP(ctx context.Context, endpoint string) error {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("构造请求失败: %w", err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("端点不可达: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	return nil
-}
-
-// probeWebDAV WebDAV 探测：OPTIONS 请求 + 基本认证
-func probeWebDAV(ctx context.Context, endpoint, username, password string) error {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("构造请求失败: %w", err)
-	}
-	if username != "" {
-		req.SetBasicAuth(username, password)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("WebDAV 端点不可达: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("WebDAV 认证失败（401），请检查用户名/密码")
-	}
-	return nil
-}
+// probeHTTP/probeWebDAV 已删（core#173 第二片）：TestStorageConnection 改走
+// corestorage.BuildAndProbe 后二者无任何调用面（死代码），且是出站守卫豁免
+// 清单里本文件唯一的裸客户端构造理由——删除即收口，豁免条目随之移除。
 
 // UpdateStorageConfig 更新存储配置。
 // 流程与 SwitchStorage 一致：SSRF 校验 → 认证级 Probe → 热重载 → 更新内存
