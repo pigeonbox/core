@@ -263,6 +263,21 @@ func (r *BlobRepository) CountByState(ctx context.Context) (map[string]int64, er
 	return out, nil
 }
 
+// ListAllBlobs 全量枚举账本行（三方对账扫描用，core#172 尾项）：
+// 只取对账所需三列，按 id 升序。调用方是 24h 低频 janitor，全量加载可接受；
+// 行数 = 历史对象数（Purged 行保留作账本），比 file_codes 小一个量级。
+func (r *BlobRepository) ListAllBlobs(ctx context.Context) ([]model.Blob, error) {
+	var rows []model.Blob
+	err := r.db().WithContext(ctx).
+		Select("id", "object_key", "state").
+		Order("id ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
 // CountActiveRefs 某 blob 的存活引用数（账本口径）。
 func (r *BlobRepository) CountActiveRefs(ctx context.Context, blobID uint) (int64, error) {
 	var n int64
