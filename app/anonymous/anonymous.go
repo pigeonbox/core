@@ -87,6 +87,11 @@ type redisKV interface {
 type Service struct {
 	rdb          redisKV
 	fileCodeRepo *dao.FileCodeRepository
+	// blobRepo 文件生命周期账本（blobs/file_references，core#172 拆分项 3·
+	// 匿名直建面）：本域不经 share.CreateShare ⇒ 行落地后在此并行补账
+	// （best-effort，口径同 app/share/blobref.go）。gormDB 缺席时不建 repo，
+	// 挂账点经 blobRepo==nil 守卫静默跳过（同 app/presign 条件注入口径）。
+	blobRepo *dao.BlobRepository
 	// flights 同码并发回源合并（oekit singleflight，零值安全）：
 	// KV 双未命中到负标记落定之间是击穿窗口，枚举/重试风暴下 N 个相同码
 	// 会放大成 N 轮 DB 查询，Flight 合并为 1 轮（见 lookupShareCode）。
@@ -106,13 +111,17 @@ func (s *Service) SetSiteQuotaSource(fn func() int64) { s.siteQuotaOf = fn }
 // TTL KV，匿名取件全功能可用（单进程语义等价；重启丢失、不跨副本共享）。
 func NewService(rdb *redis.Client, gormDB *gorm.DB) *Service {
 	fileCodeRepo := dao.NewFileCodeRepository(gormDB)
+	var blobRepo *dao.BlobRepository
+	if gormDB != nil {
+		blobRepo = dao.NewBlobRepository(gormDB)
+	}
 	var kv redisKV
 	if rdb != nil {
 		kv = rdb
 	} else {
 		kv = newMemoryKV()
 	}
-	return &Service{rdb: kv, fileCodeRepo: fileCodeRepo, flights: singleflight.New[string]()}
+	return &Service{rdb: kv, fileCodeRepo: fileCodeRepo, blobRepo: blobRepo, flights: singleflight.New[string]()}
 }
 
 // CodeMeta 取件码展示信息（仅存于 Redis，真实状态查 DB）
@@ -486,6 +495,10 @@ func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousSharePara
 		}
 		return "", err
 	}
+	// 账本双写（core#172 拆分项 3·匿名直建面）：本行不经 share.CreateShare
+	// ⇒ 成功路径在此补挂（best-effort，口径同 app/share/blobref.go）。
+	// 占位行 FilePath 为空 ⇒ attach 自跳过，对象回填时由 BindFilePath 挂。
+	s.attachBlobRef(ctx, fc)
 	return pickupCode, nil
 }
 
@@ -589,7 +602,7 @@ func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, 
 	if note != "" {
 		cols["note"] = note
 	}
-	return s.fileCodeRepo.UnderQuotaGateTx(ctx, func(tx *gorm.DB) error {
+	if err = s.fileCodeRepo.UnderQuotaGateTx(ctx, func(tx *gorm.DB) error {
 		// 闸内权威复核（core#169）：重读行内旧尺寸算增量——占位行并发绑定的
 		// 窗口由「同码完成标记 + 闸串行」收口；合计与判定在同一事务里。
 		var old model.FileCode
@@ -608,7 +621,17 @@ func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, 
 			}
 		}
 		return tx.Model(&model.FileCode{}).Where("id = ?", fc.ID).Updates(cols).Error
-	})
+	}); err != nil {
+		return err
+	}
+	// 账本双写（core#172 拆分项 3）：对象已回填到占位行 ⇒ 补挂引用。
+	// presign 的取件码绑定分支不经 share.CreateShare；对象账本行由 #208 会话段
+	// 落在 committed，此处沿 CanReach 推进 active 并挂引用（幂等，重复绑定
+	// 不产生第二行）。best-effort：失败仅告警，回填主链不受阻。
+	fc.FilePath = filePath
+	fc.Size = size
+	s.attachBlobRef(ctx, fc)
+	return nil
 }
 
 // storageBaseName 取存储相对路径的末段（存储名；无路径时返回空串）。
