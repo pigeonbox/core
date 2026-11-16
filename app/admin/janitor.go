@@ -46,6 +46,8 @@ type Janitor struct {
 
 	fileCodeRepo *dao.FileCodeRepository
 	fileFileRepo *dao.FileCodeFileRepository
+	// blobRepo 文件生命周期账本 DAO（core#172：ReclaimBlobs 回收面）。
+	blobRepo     *dao.BlobRepository
 	chunkRepo    *dao.ChunkRepository
 	transferRepo *dao.TransferLogRepository
 	adminLogRepo *dao.AdminOperationLogRepository
@@ -59,6 +61,7 @@ func NewJanitor(gormDB *gorm.DB, svc StorageProvider, retentionDays int) *Janito
 		retentionDays: retentionDays,
 		fileCodeRepo:  dao.NewFileCodeRepository(gormDB),
 		fileFileRepo:  dao.NewFileCodeFileRepository(gormDB),
+		blobRepo:      dao.NewBlobRepository(gormDB),
 		chunkRepo:     dao.NewChunkRepository(gormDB),
 		transferRepo:  dao.NewTransferLogRepository(gormDB),
 		adminLogRepo:  dao.NewAdminOperationLogRepository(gormDB),
@@ -226,6 +229,36 @@ func (j *Janitor) CleanupPickupCharges(ctx context.Context, retentionDays int) (
 	if total > 0 {
 		logger.Info("pickup record cleanup done",
 			zap.Int64("deleted", total), zap.Int("retention_days", retentionDays))
+	}
+	return total, nil
+}
+
+// PickupFailureRetentionDays 取件失败事件留存天数（frontend-core#93 拍板）：
+// **7 天**，与分享过期语义对齐——过期即清，不进留存配置（失败事件是
+// 短命观测面，不是审计日志；owner 能看到的失败窗口与「分享还活着」同窗）。
+const PickupFailureRetentionDays = 7
+
+// CleanupPickupFailures 清理取件失败事件（frontend-core#93）。
+//
+// 两段清理：超 7 天的行 + 「分享已不存在」的孤儿行（与
+// CleanupPickupCharges 的孤儿口径一致，硬删、软删不算孤儿）。
+// 返回删除总行数。
+func (j *Janitor) CleanupPickupFailures(ctx context.Context) (int64, error) {
+	var total int64
+	cutoff := time.Now().AddDate(0, 0, -PickupFailureRetentionDays)
+	n, err := j.fileCodeRepo.DeleteExpiredPickupFailures(ctx, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	total += n
+	orphan, err := j.fileCodeRepo.DeleteOrphanPickupFailures(ctx)
+	if err != nil {
+		return total, err
+	}
+	total += orphan
+	if total > 0 {
+		logger.Info("pickup failure cleanup done",
+			zap.Int64("deleted", total), zap.Int("retention_days", PickupFailureRetentionDays))
 	}
 	return total, nil
 }

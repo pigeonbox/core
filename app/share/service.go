@@ -109,9 +109,12 @@ type PickupCodeMinter interface {
 type Service struct {
 	fileCodeRepo *dao.FileCodeRepository
 	fileFileRepo *dao.FileCodeFileRepository // 多文件子表 DAO（构造注入）
-	userService  UserServiceInterface
-	storage      storage.StorageInterface
-	baseURL      string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
+	// blobRepo 文件生命周期账本 DAO（core#172 首片：blobs/file_references 双写与
+	// 硬删释放；nil = 账本面关闭，接入点全部降级为 no-op，见 blobref.go 取舍）。
+	blobRepo    *dao.BlobRepository
+	userService UserServiceInterface
+	storage     storage.StorageInterface
+	baseURL     string // 基础 URL，用于生成分享链接（空=按请求来源动态推断，见 ResolveBase）
 	// baseURLProvider 对外 base 地址的**动态**来源（2026-10-22 站点公网地址）。
 	// nil = 只用构造期的 baseURL（env/yaml 的 server.base_url）。
 	// 非 nil 时每次拼链接都问它 —— 管理后台改「站点公网地址」后**立即生效**，
@@ -213,6 +216,19 @@ func (e *ContentRejectedError) Error() string { return "内容未通过安全审
 
 func (e *ContentRejectedError) ErrCode() int { return errcode.CodeContentRejected }
 
+// ScanUnavailableError 病毒扫描不可用拒收（core#161：moderation.clamav.strict=true
+// 且 clamd 不可达/超时/内容超 max_scan_bytes ⇒ 无法完成扫描 ⇒ 拒收该次上传）。
+//
+// 错误码复用 CodeContentRejected（30013，contracts 冻结不新增码）：语义上同属
+// 「审核层拒收」，且 30013 在前端 DYNAMIC_MESSAGE_CODES 里走**后端原文优先**
+// ⇒ 「病毒扫描暂不可用，请稍后重试」能直达用户（若改用 10006 会被前端 i18n
+// 覆盖成笼统的「服务不可用」，可操作信息丢失）。HTTP 403 与内容拒收同口径。
+type ScanUnavailableError struct{}
+
+func (e *ScanUnavailableError) Error() string { return "病毒扫描暂不可用，请稍后重试" }
+
+func (e *ScanUnavailableError) ErrCode() int { return errcode.CodeContentRejected }
+
 // ShareBlockedError 分享处于管控拒绝态（管理员禁用 / 待审核）。
 // handler 侧按 ErrCode 透传（20012 blocked / 20013 pending_review）。
 // 实现收口 pkg/errors.ShareBlocked——历史上 anonymous.BlockedError 持有一份
@@ -235,6 +251,7 @@ func NewService(gormDB *gorm.DB, baseURL string, storageService storage.StorageI
 	return &Service{
 		fileCodeRepo: dao.NewFileCodeRepository(gormDB),
 		fileFileRepo: dao.NewFileCodeFileRepository(gormDB),
+		blobRepo:     dao.NewBlobRepository(gormDB),
 		userService:  nil,
 		storage:      storageService,
 		baseURL:      baseURL,
@@ -588,6 +605,11 @@ func (s *Service) inspectText(ctx context.Context, text string) (bool, error) {
 // inspectFile 单文件审核判定（语义同 inspectText；meta 由各通道自组）。
 func (s *Service) inspectFile(ctx context.Context, meta moderation.UploadMeta) (bool, error) {
 	switch s.moderator.InspectFile(ctx, meta) {
+	case moderation.VerdictScanUnavailable:
+		// strict 模式扫描不可用（core#161）：拒收且文案可操作；
+		// 计数走独立拒因（非内容命中，不污染 moderationHits）。
+		metrics.RecordRejected(metrics.RejectScanUnavailable)
+		return false, &ScanUnavailableError{}
 	case moderation.VerdictReject:
 		metrics.RecordModerationHit("reject")
 		metrics.RecordRejected(metrics.RejectModerated)
@@ -731,6 +753,10 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 		}
 	}
 
+	// 文件生命周期账本双写（core#172 首片）：blob + 引用并行落账，best-effort
+	//（失败仅告警不回滚——取舍见 blobref.go；既有路径口径照常兜底）。
+	s.attachBlobRef(ctx, fileCode)
+
 	// 更新用户统计（次数 +1，存储按文件大小）
 	s.bumpUserStats(req.UserID, req.Size)
 
@@ -813,11 +839,23 @@ var ErrShareGone = errors.New("share code not found")
 // 不入枚举锁定桶：持码者反复打开失效页是正常行为，不是猜码。
 var ErrShareExpired = errors.New("file has expired")
 
+// ExpiredShareError 分享已过期，携带**规范分享码**（frontend-core#93：取件
+// 失败事件要挂到正确的分享行——6 位取件码/小写入口解析后才知道归属）。
+//
+// 与 ErrShareExpired 的关系：Is() 桥接 ⇒ 既有 errors.Is(err, ErrShareExpired)
+// 判据（gone_sentinel_test、metadata/preview 面）全部照常命中；
+// Error() 文案逐字保留 "file has expired"（既有断言依赖）。
+type ExpiredShareError struct{ Code string }
+
+func (e *ExpiredShareError) Error() string { return ErrShareExpired.Error() }
+
+func (e *ExpiredShareError) Is(target error) bool { return target == ErrShareExpired }
+
 // validateShareRecord 过期 / 管控判定（各解析路径共用）。
 func (s *Service) validateShareRecord(fileCode *model.FileCode) (*model.FileCode, error) {
-	// 检查文件是否过期
+	// 检查文件是否过期（typed：携带规范分享码，供失败事件归因）
 	if fileCode.IsExpired() {
-		return nil, ErrShareExpired
+		return nil, &ExpiredShareError{Code: fileCode.Code}
 	}
 
 	// 管控状态：blocked / pending_review 拒绝取件（typed error，handler 按业务码透传）
@@ -1283,12 +1321,24 @@ func (s *Service) HardDeleteUserShare(ctx context.Context, userID uint, code str
 	if perr != nil {
 		logger.CtxWarn(ctx, "hard delete: path capture failed (janitor will reconcile)", "code", code, "err", perr)
 	}
+	// 删前抓分享 id（core#172 账本释放：硬删后行已物理消失，见 IDByCodeForUser）。
+	// 查不到（不存在/查失败）⇒ 跳过账本释放，仅告警，不阻断硬删。
+	fcID, idErr := s.fileCodeRepo.IDByCodeForUser(ctx, userID, code)
+	if idErr != nil && !errors.Is(idErr, gorm.ErrRecordNotFound) {
+		logger.CtxWarn(ctx, "hard delete: id capture failed (blob ref release skipped)", "code", code, "err", idErr)
+	}
 	n, err := s.fileCodeRepo.HardDeleteByCode(ctx, userID, code)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
 		return ErrNotInRecycleBin
+	}
+	// 账本释放（core#172）：引用递减 → 归零则 blob 进 trashed（宽限期起点）；
+	// 未归零保持 active（共享对象负对照）。只在硬删成功后执行——软删绝不释放
+	//（负对照：软删不回收，回收站行仍占对象）。
+	if idErr == nil {
+		s.releaseBlobRef(ctx, fcID)
 	}
 	// 对象清理：引用计数保护（含软删行、查不清不删），与 admin 删除同编排。
 	// 失败仅告警——远端孤儿由 janitor 扫描兜底。

@@ -23,8 +23,9 @@ type Service struct {
 	transferLogRepo    *dao.TransferLogRepository
 	adminOperationRepo *dao.AdminOperationLogRepository
 	chunkRepo          *dao.ChunkRepository
-	fileFileRepo       *dao.FileCodeFileRepository // 多文件子表（files/maintenance 消费）
-	sysConfigRepo      *dao.SystemConfigRepository // 仅 OptimizeDatabase 表维护用（配置读写归 app/config 域）
+	fileFileRepo       *dao.FileCodeFileRepository       // 多文件子表（files/maintenance 消费）
+	sysConfigRepo      *dao.SystemConfigRepository       // 仅 OptimizeDatabase 表维护用（配置读写归 app/config 域）
+	webauthnRepo       *dao.WebAuthnCredentialRepository // Passkey 凭证（core#160）
 	storage            storage.StorageInterface
 	federation         FederationNotifier // P2P 联邦口令路由钩子（nil = 非联邦模式；读写走 federationMu——P1 后台热切换=运行期写）
 	federationMu       sync.RWMutex
@@ -76,6 +77,7 @@ func NewService(gormDB *gorm.DB) *Service {
 		chunkRepo:          dao.NewChunkRepository(gormDB),
 		fileFileRepo:       dao.NewFileCodeFileRepository(gormDB),
 		sysConfigRepo:      dao.NewSystemConfigRepository(gormDB),
+		webauthnRepo:       dao.NewWebAuthnCredentialRepository(gormDB),
 		cfg:                appconfig.NewService(gormDB),
 		// GC 任务执行器（core#192）：purge 路径的 outbox 任务构造 + worker
 		// 消费。deleter 随 SetStorage 注入（同一存储实例）。

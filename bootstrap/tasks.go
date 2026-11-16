@@ -194,6 +194,13 @@ func startMaintenanceJanitor() {
 		} else if removed > 0 {
 			logger.Info("orphan files removed", zap.Int("count", removed))
 		}
+		// 文件生命周期账本回收（core#172 首片）：引用归零且过宽限的对象
+		// 补删 + 账本推进 purged（双守卫见 blob_gc.go；宽限 24h 与孤儿对账同量级）
+		if n, err := j.ReclaimBlobs(ctx, 24*time.Hour); err != nil {
+			logger.Warn("blob reclaim failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("blobs reclaimed", zap.Int("count", n))
+		}
 		if n, err := j.CleanupLogs(ctx); err != nil {
 			logger.Warn("log retention cleanup failed", zap.Error(err))
 		} else if n > 0 {
@@ -204,6 +211,13 @@ func startMaintenanceJanitor() {
 			logger.Warn("pickup charge cleanup failed", zap.Error(err))
 		} else if n > 0 {
 			logger.Info("pickup charges cleaned", zap.Int64("count", n))
+		}
+		// 取件失败事件（frontend-core#93）：固定 7 天留存（janitor 常量），
+		// 不吃 admin.pickup_detail_retention_days（那是成功明细的留存）。
+		if n, err := j.CleanupPickupFailures(ctx); err != nil {
+			logger.Warn("pickup failure cleanup failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("pickup failures cleaned", zap.Int64("count", n))
 		}
 		if dirs, err := j.CleanupStaleUploads(ctx, 24*time.Hour); err != nil {
 			logger.Warn("stale chunk session cleanup failed", zap.Error(err))

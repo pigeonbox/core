@@ -56,6 +56,10 @@ var tables = []TableSpec{
 	{Name: "users", Model: &User{}, AutoIncrement: true},
 	{Name: "file_codes", Model: &FileCode{}, AutoIncrement: true},
 	{Name: "file_code_files", Model: &FileCodeFile{}, AutoIncrement: true},
+	// 文件生命周期统一模型（core#172 首片）：blobs（物理对象）先于
+	// file_references（分享引用）——外键依赖在前（导入顺序）。
+	{Name: "blobs", Model: &Blob{}, AutoIncrement: true},
+	{Name: "file_references", Model: &FileReference{}, AutoIncrement: true},
 	{Name: "file_previews", Model: &FilePreview{}, AutoIncrement: true},
 	{Name: "file_requests", Model: &FileRequest{}, AutoIncrement: true},
 	{Name: "upload_chunks", Model: &UploadChunk{}, AutoIncrement: true},
@@ -65,10 +69,15 @@ var tables = []TableSpec{
 	{Name: "system_configs", Model: &SystemConfigRecord{}, AutoIncrement: true},
 	{Name: "notifies", Model: &Notify{}, AutoIncrement: true},
 	{Name: "pickup_charges", Model: &PickupCharge{}, AutoIncrement: true},
+	// 取件失败事件（frontend-core#93）：owner 侧取件时间线的失败面；
+	// 无外键依赖，排在 pickup_charges 后仅按领域相邻。
+	{Name: "pickup_failures", Model: &PickupFailure{}, AutoIncrement: true},
 	// 5.2.0 账号与信任：登录会话表 + 找回密码一次性令牌表。
 	// 二者都以 users.id 为归属键 ⇒ 必须排在 users 之后（导入顺序）。
 	{Name: "user_sessions", Model: &UserSession{}, AutoIncrement: true},
 	{Name: "password_reset_tokens", Model: &PasswordResetToken{}, AutoIncrement: true},
+	// 管理员 Passkey（core#160）：以 users.id 为归属键 ⇒ 必须排在 users 之后。
+	{Name: "webauthn_credentials", Model: &WebAuthnCredential{}, AutoIncrement: true},
 	// 对象 GC 持久化任务（core#192）：独立任务表，无外键归属 ⇒ 排末尾。
 	{Name: "gc_jobs", Model: &GCJob{}, AutoIncrement: true},
 }

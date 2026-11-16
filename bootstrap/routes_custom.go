@@ -55,6 +55,12 @@ func customizedRegister(r *server.Hertz) {
 	// 此前端点缺失导致前端启动报 "获取配置失败: Network Error"。此处补齐。
 	r.GET("/api/config", publicConfigHandler)
 
+	// ===== 取件时间线（frontend-core#93；手写过渡，待收敛进 contracts IDL）=====
+	// 寄件者「谁在何时因何失败」：与 GET /api/v1/user/shares 同口径鉴权
+	// （JWT / 用户级 API Key 二选一；API Key 走 ScopeUser，前缀判定自动覆盖）。
+	// 豁免登记：routes_classification_test 的 handwrittenRouteExemptions（Pending）。
+	r.GET("/api/v1/user/shares/:code/timeline", middleware.UserOrAPIKey(), customHandler.PickupTimeline)
+
 	// ===== 预览缩略图取件（二进制面；同款取件闸门在 app/preview）=====
 	// /preview/:code 的响应里 Thumbnail 即本路由 URL（密码经 X-Share-Password 头）。
 	r.GET("/preview/:code/thumb", customHandler.PreviewThumb)
@@ -189,6 +195,14 @@ func customizedRegister(r *server.Hertz) {
 		r.GET("/admin/backups", middleware.AdminOrAdminKey(), listBackupsHandler)
 		r.GET("/admin/backups/:name", middleware.AdminOrAdminKey(), downloadBackupHandler)
 		r.POST("/admin/backups/run", middleware.AdminOrAdminKey(), runBackupHandler)
+
+		// ===== 管理员 Passkey（core#160；手写路由，contracts 冻结不进 IDL）====
+		// 登记两步需管理员 JWT（AdminMiddleware 内联认证+授权）；登录两步是
+		// 访客登录入口（公开面，无认证中间件），与 /admin/login 同族进 login 限流桶。
+		r.POST("/admin/webauthn/register/options", middleware.AdminMiddleware(), adminWebAuthnRegisterOptions)
+		r.POST("/admin/webauthn/register/verify", middleware.AdminMiddleware(), adminWebAuthnRegisterVerify)
+		r.POST("/admin/webauthn/login/options", adminWebAuthnLoginOptions)
+		r.POST("/admin/webauthn/login/verify", adminWebAuthnLoginVerify)
 
 		// ===== 通知渠道测试发送（core#122）：2026-11-13 IDL 化收编 =====
 		// 路由改由 contracts IDL 生成（idl/admin.thrift ⇒ gen/router/admin 注册，

@@ -2,10 +2,11 @@ package moderation
 
 // ClamAV 存活与降级可观测（core#121）。
 //
-// 背景：ClamAV 接线是 fail-open（连不上/超时 ⇒ 放行）——可用性优先是对的，
+// 背景：ClamAV 接线默认 fail-open（连不上/超时 ⇒ 放行）——可用性优先是对的，
 // 但此前是**静默失效**：clamd 挂掉时没有任何信号（Ping 零生产调用方），
 // 病毒扫描事实上关闭而管理台仍显示「已启用」。本文件只补可观测，
-// **不改 fail-open 语义**（业务永远不被扫描器阻塞）。
+// **不改默认 fail-open 语义**；core#161 起 `moderation.clamav.strict=true`
+// 可选收紧为拒收（VerdictScanUnavailable），窗口计数口径不变。
 //
 // 两个信号源：
 //   - last_ping：Ping() 最近一次结果（ok/fail + 耗时 + 错误摘要）。
@@ -34,7 +35,7 @@ const pingErrorCap = 200
 const (
 	outcomeClean    = "clean"     // 扫描完成且干净
 	outcomeHit      = "hit"       // 命中签名（调用方按 VerdictReject 拒绝）
-	outcomeFailOpen = "fail_open" // 扫描失败按 fail-open 放行
+	outcomeFailOpen = "fail_open" // 扫描不可用（open=放行 / strict=拒收，core#161）
 	outcomeSkipped  = "skipped"   // 未扫描（超大小上限/无路径/无 opener，按策略放行）
 )
 
@@ -58,7 +59,8 @@ type ClamAVHealth struct {
 	WindowSize int `json:"window_size"`
 	// ScansInWindow 窗口内已记录的扫描次数。
 	ScansInWindow int `json:"scans_in_window"`
-	// FailOpenInWindow 窗口内因 fail-open 放行的次数（= degraded 计数）。
+	// FailOpenInWindow 窗口内扫描不可用的次数（= degraded 计数；open 模式下
+	// 是被放行次数，strict 模式下是被拒收次数——core#161 复用本计数不另造）。
 	FailOpenInWindow int `json:"fail_open_in_window"`
 	// HitsInWindow 窗口内命中签名的次数。
 	HitsInWindow int `json:"hits_in_window"`

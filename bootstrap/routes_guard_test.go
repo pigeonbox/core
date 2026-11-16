@@ -137,6 +137,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"GET /api/v1/user/shares", "POST /api/v1/user/shares/batch-delete",
 		"POST /api/v1/user/shares/batch-extend", "POST /api/v1/user/shares/:code/restore",
 		"DELETE /api/v1/user/shares/:code/hard",
+		// 取件时间线（frontend-core#93；手写过渡，见 routes_classification 豁免表）
+		"GET /api/v1/user/shares/:code/timeline",
 		"GET /api/v1/notifies/mine", "GET /api/v1/notifies/unread-count",
 		"POST /api/v1/notifies/mark-read",
 		// ===== 多文件分享（P0 多文件，2026-10-26 IDL 化：publicapi 域生成路由；OptionalIdentity 可选身份）=====
@@ -164,9 +166,13 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"POST /user/totp/setup", "POST /user/totp/enable", "POST /user/totp/disable",
 		"GET /user/sessions", "DELETE /user/sessions/:id", "POST /user/sessions/revoke-all",
 		"POST /user/password/forgot", "POST /user/password/reset",
-		// ===== 定时自动备份（2026-11-06 手写；5.1.0；管理面）=====
+		// ===== 定时自动备份（2026-11-06 手写；5.1.0；管理面）====
 		// 列表+状态 / 下载包（二进制流）/ 立即备份（后台跑，立刻返回）
 		"GET /admin/backups", "GET /admin/backups/:name", "POST /admin/backups/run",
+		// ===== 管理员 Passkey（core#160 手写；contracts 冻结不进 IDL）====
+		// 登记两步挂 AdminMiddleware；登录两步为公开登录入口（login 限流桶）
+		"POST /admin/webauthn/register/options", "POST /admin/webauthn/register/verify",
+		"POST /admin/webauthn/login/options", "POST /admin/webauthn/login/verify",
 	}
 
 	// 1. 契约内路由必须全部已注册

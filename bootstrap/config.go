@@ -225,6 +225,11 @@ var envBindings = map[string][]string{
 	"security.api_token.per_key_burst":     {"PB_API_TOKEN_PER_KEY_BURST"},
 	"security.lockout.max_attempts":        {"PB_LOCKOUT_MAX_ATTEMPTS"},
 	"security.ssrf.allow_private_networks": {"PB_SSRF_ALLOW_PRIVATE"},
+	// security.webauthn / 管理员 Passkey（core#160）
+	"security.require_admin_webauthn": {"PB_SECURITY_REQUIRE_ADMIN_WEBAUTHN"},
+	"security.webauthn.rp_id":         {"PB_WEBAUTHN_RP_ID"},
+	"security.webauthn.rp_origins":    {"PB_WEBAUTHN_RP_ORIGINS"},
+	"security.webauthn.display_name":  {"PB_WEBAUTHN_RP_DISPLAY_NAME"},
 	// security.oidc（单点登录）
 	"security.oidc.enabled":       {"PB_OIDC_ENABLED"},
 	"security.oidc.issuer":        {"PB_OIDC_ISSUER"},
@@ -263,6 +268,7 @@ var envBindings = map[string][]string{
 	// moderation.clamav（文件病毒扫描）
 	"moderation.clamav.enabled": {"PB_MODERATION_CLAMAV_ENABLED"},
 	"moderation.clamav.addr":    {"PB_MODERATION_CLAMAV_ADDR"},
+	"moderation.clamav.strict":  {"PB_CLAMAV_STRICT"},
 	// admin 运维
 	"admin.log_retention_days":           {"PB_ADMIN_LOG_RETENTION_DAYS"},
 	"admin.pickup_detail_retention_days": {"PB_ADMIN_PICKUP_DETAIL_RETENTION_DAYS"},
@@ -305,6 +311,7 @@ var listValuedKeys = map[string]bool{
 	"upload.allowed_expire_styles":       true,
 	"security.trusted_proxies":           true,
 	"security.cors.allow_origins":        true,
+	"security.webauthn.rp_origins":       true,
 	"moderation.blocked_words":           true,
 }
 

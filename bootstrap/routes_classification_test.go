@@ -113,6 +113,26 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 	// （core#122 通知渠道测试发送已于 2026-11-13 收敛进 IDL：admin.thrift ⇒
 	// gen/router/admin 生成路由，本表的 Pending 条目随之移除——测试里的 ⑥「IDL
 	// 集与手写集互斥」即它的回归锁：手写注册加回即红。）
+	"GET /api/v1/user/shares/:code/timeline": {
+		Reason:  "取件时间线（frontend-core#93）：contracts 仓在本 PR 冻结、无法给 UserShareItemData/新 Resp 加字段，且无既有 per-share 未锁形扩展面 ⇒ 手写面过渡（与 /api/v1/user/shares 同鉴权 UserOrAPIKey）；下趟 contracts 开闸后收敛进 share.thrift（Pending 债务）",
+		Pending: true,
+	},
+	"POST /admin/webauthn/register/options": {
+		Reason:  "登录面：管理员 Passkey 登记挑战（core#160）——contracts 仓本 PR 冻结、AdminLoginReq/Resp 无 passkey 扩展面 ⇒ 手写过渡；下趟 contracts 开闸后收敛进 admin.thrift（Pending 债务）",
+		Pending: true,
+	},
+	"POST /admin/webauthn/register/verify": {
+		Reason:  "登录面：管理员 Passkey 登记校验（core#160）——同上，contracts 冻结无法给请求/响应加字段 ⇒ 手写过渡（Pending 债务）",
+		Pending: true,
+	},
+	"POST /admin/webauthn/login/options": {
+		Reason:  "登录面：Passkey 登录挑战（core#160）——公开登录入口，半会话式 challenge 往返无 IDL 模型可表达；contracts 冻结 ⇒ 手写过渡（Pending 债务）",
+		Pending: true,
+	},
+	"POST /admin/webauthn/login/verify": {
+		Reason:  "登录面：Passkey 登录校验并签发 JWT（core#160）——响应需与 AdminLoginData 同形但 contracts 冻结不能引用新模型 ⇒ 手写过渡（Pending 债务）",
+		Pending: true,
+	},
 	"POST /api/v1/mcp": {
 		Reason:  "协议面：MCP（Streamable HTTP）JSON-RPC 流，**不是** REST/JSON 包络 ⇒ thrift IDL 模型表达不了",
 		Pending: false,

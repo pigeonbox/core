@@ -45,6 +45,11 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 	if !withinRoots(real, cfg.Upload.LocalImport.Roots) {
 		return nil, errors.New("路径不在允许导入的目录内")
 	}
+	// 目录策略（core#159）：share_mode=deny 在此拒收（在落盘/拷贝之前，零副作用）。
+	// quota_bytes 尚未接线（用量归因待拍板，见 conf.DirectoryPolicyConfig TODO）。
+	if err := checkDirectoryPolicy(cfg.Share.DirectoryPolicies, real); err != nil {
+		return nil, err
+	}
 	opts.AbsPath = real
 	info, err := os.Stat(real)
 	if err != nil {

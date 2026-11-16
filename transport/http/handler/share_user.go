@@ -3,13 +3,16 @@ package handler
 
 import (
 	"context"
-	"github.com/pigeonbox/contracts/errcode"
+	"errors"
 	"os"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
 
+	"github.com/pigeonbox/contracts/errcode"
+
 	"github.com/pigeonbox/core/app/share"
+	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/transport/http/middleware"
 )
 
@@ -37,6 +40,41 @@ func userIDFromCtx(c *app.RequestContext) (uint, bool) {
 	}
 	id, ok := v.(uint)
 	return id, ok
+}
+
+// PickupTimeline 取件时间线（owner 侧「分享详情」；frontend-core#93）。
+// GET /api/v1/user/shares/:code/timeline
+//
+// 三态（state）：never 从未被访问 / failed 被尝试但失败 / picked 成功取件；
+// events 按时间倒序合并成功（pickup_charges）与失败（pickup_failures）事件。
+//
+// 为什么是手写面而不是 IDL：contracts 仓本 PR 不许动、且不存在既有的
+// 「未锁形」per-share 响应扩展面 ⇒ 按 routes_classification 的 Pending 豁免
+// 登记为待收敛债务（wire 形态 {code,message,data}，非分页、不进 page_forms）。
+func PickupTimeline(ctx context.Context, c *app.RequestContext) {
+	uid, ok := userIDFromCtx(c)
+	if !ok {
+		resp.NewErrorWithMessage(c, errcode.CodeUnauthorized, "未登录")
+		return
+	}
+	code := c.Param("code")
+	if code == "" {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "code 必填")
+		return
+	}
+	timeline, err := getShareService().PickupTimeline(ctx, uid, code)
+	if err != nil {
+		// 不存在 / 不是你的 / 已删除：统一 404 同文案（防枚举）。
+		if errors.Is(err, share.ErrTimelineNotFound) {
+			resp.NewErrorWithMessage(c, errcode.CodeNotFound, err.Error())
+			return
+		}
+		resp.NewInternalError(c, errcode.CodeInternal, "获取取件时间线", err)
+		return
+	}
+	c.JSON(consts.StatusOK, map[string]interface{}{
+		"code": 0, "message": "ok", "data": timeline,
+	})
 }
 
 // 用户分享管理 5 端点（列表/批量删除/批量延期/恢复/硬删）已于 2026-10-09 IDL 化：

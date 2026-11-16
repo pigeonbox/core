@@ -78,6 +78,23 @@ func (s *Service) GenerateTokenForAdmin(ctx context.Context, username, password,
 		}
 	}
 
+	// Passkey 闸（core#160，security.require_admin_webauthn 默认关）：
+	// 开闸且该管理员已登记 passkey ⇒ 纯口令不再放行，必须走
+	// /admin/webauthn/login/* 或提供第二因子——上面 TOTP 分支走完即视为
+	// 二验兜底已满足（issue：恢复码可复用为兜底），故此闸只拦
+	//「未开 TOTP 的纯口令」路径。未登记 passkey 的管理员不受影响
+	//（开闸不锁死存量）；40012 流程信号不计失败，与 ErrTotpRequired 同口径。
+	if !user.TotpEnabled && webAuthnGateEnabled() {
+		n, err := s.webauthnRepo.CountByUser(ctx, user.ID)
+		if err != nil {
+			logger.CtxError(ctx, "admin webauthn gate check failed", "user_id", user.ID, "err", err)
+			return "", fmt.Errorf("%w: Passkey 登记状态查询失败: %w", ErrInternal, err)
+		}
+		if n > 0 {
+			return "", ErrWebAuthnRequired
+		}
+	}
+
 	// 生成 token (24小时过期)
 	token, err := auth.GenerateToken(user.ID, user.Username, "admin")
 	if err != nil {

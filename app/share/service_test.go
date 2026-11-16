@@ -496,17 +496,40 @@ func TestShareStatusMachine(t *testing.T) {
 
 // ---- 治理重构（2026-10-03）：内容审核钩子 ----
 
-type mockModerator struct{ verdict moderation.Verdict }
+type mockModerator struct {
+	verdict     moderation.Verdict
+	fileVerdict moderation.Verdict // 文件侧判定（VerdictAllow=0，既有用例零值行为不变）
+}
 
 func (m *mockModerator) InspectText(context.Context, string) moderation.Verdict { return m.verdict }
 func (m *mockModerator) InspectFile(context.Context, moderation.UploadMeta) moderation.Verdict {
-	return moderation.VerdictAllow
+	return m.fileVerdict
 }
 
 type mockFlagEmitter struct{ codes []string }
 
 func (m *mockFlagEmitter) EmitShareFlagged(code, reason, ownerIP string) {
 	m.codes = append(m.codes, code)
+}
+
+// TestInspectFile_ScanUnavailable strict 扫描不可用（core#161）必须映射成
+// 可操作错误：ScanUnavailableError + 30013（前端 DYNAMIC_MESSAGE_CODES 走后端
+// 原文）+「病毒扫描暂不可用」文案——不得塌成笼统的「内容未通过安全审核」。
+func TestInspectFile_ScanUnavailable(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	svc.SetModerator(&mockModerator{fileVerdict: moderation.VerdictScanUnavailable})
+
+	_, err := svc.inspectFile(context.Background(), moderation.UploadMeta{
+		StoragePath: "uploads/x.txt", FileName: "x.txt", Size: 1,
+	})
+	require.Error(t, err)
+	var sue *ScanUnavailableError
+	require.True(t, errors.As(err, &sue), "扫描不可用必须是独立错误类型（≠ ContentRejectedError）")
+	assert.Equal(t, 30013, sue.ErrCode(), "复用既有错误码（contracts 冻结）")
+	assert.Contains(t, sue.Error(), "病毒扫描暂不可用", "文案必须可操作且点名扫描不可用")
+
+	var cre *ContentRejectedError
+	assert.False(t, errors.As(err, &cre), "不得与内容违规拒收混型")
 }
 
 func TestShareText_Moderation(t *testing.T) {
