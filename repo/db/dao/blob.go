@@ -246,6 +246,23 @@ func (r *BlobRepository) ListReclaimable(ctx context.Context, cutoff time.Time) 
 	return rows, nil
 }
 
+// CountByState blobs 表按状态计数（观测：状态分布 gauge）。
+func (r *BlobRepository) CountByState(ctx context.Context) (map[string]int64, error) {
+	var rows []struct {
+		State string
+		N     int64
+	}
+	if err := r.db().WithContext(ctx).Model(&model.Blob{}).
+		Select("state, COUNT(*) AS n").Group("state").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.State] = row.N
+	}
+	return out, nil
+}
+
 // CountActiveRefs 某 blob 的存活引用数（账本口径）。
 func (r *BlobRepository) CountActiveRefs(ctx context.Context, blobID uint) (int64, error) {
 	var n int64

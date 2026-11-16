@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/pigeonbox/core/pkg/logger"
+	"github.com/pigeonbox/core/pkg/metrics"
 	"github.com/pigeonbox/core/repo/db/model"
 	"go.uber.org/zap"
 )
@@ -99,6 +100,14 @@ func (j *Janitor) ReclaimBlobs(ctx context.Context, grace time.Duration) (int, e
 		}
 		purged++
 	}
+	// 观测（core#172 第二片）：**回收后**刷新——状态分布为本轮终态；
+	// 积压 = 流水线上未收敛的行（trashed 含宽限期内 + purge 进行中：
+	// 删对象失败留 purge 态重试的也算积压）。失败仅跳过指标（不影响主链）。
+	if counts, err := j.blobRepo.CountByState(ctx); err == nil {
+		metrics.SetBlobStates(counts)
+		metrics.SetReclaimBacklog(int(counts[model.BlobTrashed] + counts[model.BlobPurge]))
+	}
+
 	if purged > 0 {
 		logger.Info("blob reclaim done", zap.Int("purged", purged),
 			zap.Int("candidates", len(candidates)))
