@@ -616,9 +616,17 @@ func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.
 	head = readHead512(rc)
 	fileHash, _ = utils.HashReader(io.MultiReader(bytes.NewReader(head), rc))
 	_ = rc.Close()
+
+	// 账本 committed 落行（core#172 第三片）：最终 object_key 此刻才生成
+	//（newRelPath UUID），字节已落盘且已读回复核 ⇒ committed 是本路径最早
+	// 诚实入口；best-effort，失败仅告警不阻断绑定主链。
+	chunkSvc.BlobEnsureCommitted(ctx, uploadID, rel, actualSize, fileHash)
+
 	if !encrypted && head != nil {
 		if err := utils.CheckUploadContent(info.FileName, head); err != nil {
 			_ = st.DeleteFile(ctx, rel)
+			// 对象已删：账本转 aborted（core#172 第三片；行不存在 noop）
+			chunkSvc.BlobAbort(ctx, uploadID, rel)
 			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeFileTypeDenied, "message": err.Error()})
 			return nil, "", false
 		}
@@ -626,11 +634,15 @@ func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.
 	if actualSize > 0 {
 		if maxFile := utils.GetMaxFileSize(); maxFile > 0 && actualSize > maxFile {
 			_ = st.DeleteFile(ctx, rel)
+			// 对象已删：账本转 aborted（core#172 第三片；行不存在 noop）
+			chunkSvc.BlobAbort(ctx, uploadID, rel)
 			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeTooLarge, "message": fmt.Sprintf("合并后文件大小 %d 超过上限 %d", actualSize, maxFile)})
 			return nil, "", false
 		}
 		if info.FileSize > 0 && actualSize != info.FileSize {
 			_ = st.DeleteFile(ctx, rel)
+			// 对象已删：账本转 aborted（core#172 第三片；行不存在 noop）
+			chunkSvc.BlobAbort(ctx, uploadID, rel)
 			c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeChunkInvalid, "message": fmt.Sprintf("合并后大小 %d 与申报 %d 不符", actualSize, info.FileSize)})
 			return nil, "", false
 		}

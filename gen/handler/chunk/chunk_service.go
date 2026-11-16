@@ -695,7 +695,9 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	var head []byte
 	fileHash := ""
 	var actualSize int64
+	mergedReadable := false
 	if rc, fsize, rerr := getChunkService().OpenMerged(ctx, relativePath); rerr == nil {
+		mergedReadable = true
 		actualSize = fsize
 		// 先读 512 字节做魔数复检，再以 MultiReader 把头部拼回流算整文件哈希
 		//（ReadCloser 不保证可 Seek，不能回卷）
@@ -706,6 +708,14 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	if fileHash == "" {
 		// 哈希失败不阻断分享创建（仅失去秒传能力），记空
 		fmt.Println("计算文件哈希失败（分享创建继续，仅失去秒传能力）")
+	}
+
+	// 账本 committed 落行（core#172 第三片）：最终 object_key 此刻才生成（merge
+	// 内部 UUID），字节已落盘且已读回复核 ⇒ committed 是本路径最早诚实入口。
+	// 仅合并结果可读时落账（读失败 ⇒ 对象状态未知，交给首片 EnsureBlobWithRef
+	// 兜底）；best-effort，失败仅告警不阻断完成主链。
+	if mergedReadable {
+		getChunkService().BlobEnsureCommitted(ctx, uploadID, relativePath, actualSize, fileHash)
 	}
 
 	// E2E 客户端加密（P1）：客户端上传的已是密文，跳过魔数复检（密文头为随机字节）。
@@ -724,6 +734,8 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		if err := utils.CheckUploadContent(info.FileName, head); err != nil {
 			getChunkService().DeleteMergedFile(ctx, relativePath)
 			_ = getChunkService().DeleteUpload(ctx, uploadID)
+			// 对象已删、会话已清：账本转 aborted（core#172 第三片；行不存在 noop）
+			getChunkService().BlobAbort(ctx, uploadID, relativePath)
 			// 30011 ⇒ 415（与首片预检同一出口口径；业务文案保留可操作）
 			resp.NewErrorWithMessage(c, errcode.CodeFileTypeDenied, err.Error())
 			return
@@ -736,12 +748,16 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 		if maxFile := utils.GetMaxFileSize(); maxFile > 0 && actualSize > maxFile {
 			getChunkService().DeleteMergedFile(ctx, relativePath)
 			_ = getChunkService().DeleteUpload(ctx, uploadID)
+			// 对象已删：账本转 aborted（core#172 第三片；行不存在 noop）
+			getChunkService().BlobAbort(ctx, uploadID, relativePath)
 			resp.NewErrorWithMessage(c, errcode.CodeTooLarge, fmt.Sprintf("合并后文件大小 %d 字节超过上限 %d 字节", actualSize, maxFile))
 			return
 		}
 		if info.FileSize > 0 && actualSize != info.FileSize {
 			getChunkService().DeleteMergedFile(ctx, relativePath)
 			_ = getChunkService().DeleteUpload(ctx, uploadID)
+			// 对象已删：账本转 aborted（core#172 第三片；行不存在 noop）
+			getChunkService().BlobAbort(ctx, uploadID, relativePath)
 			resp.NewErrorWithMessage(c, errcode.CodeChunkInvalid, fmt.Sprintf("合并后文件大小 %d 与申报大小 %d 不符", actualSize, info.FileSize))
 			return
 		}
