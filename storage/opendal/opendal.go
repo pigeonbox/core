@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -165,13 +166,20 @@ type Config struct {
 //
 // s3/webdav 的连接参数缺失/非法时返回 error——不再静默回退 fs，
 // 「配置保存成功但实际读写落本地盘」正是拆分前遗留的假开关问题。
-// 未知 scheme 仍按 fs 兜底（真正 OpenDAL binding 接入后改为返回 error）。
+// 未知 scheme 同样**显式报错**（core#223）：宽容兜底已无收益——所有已接入
+// 的 scheme 都会在下面命中分支，落到 default 只可能是拼错/未实现的 scheme；
+// 静默当 fs 会让「配置写错」变成「数据悄悄落本地盘」。
+// fs scheme 的 Root 必须非空：空 Root 时 resolvePath 会产出相对路径、落在
+// 进程 CWD（同一个静默错的另一种形态）。
 func New(cfg Config) (*Operator, error) {
 	if cfg.Scheme == "" {
 		cfg.Scheme = SchemeFS
 	}
 	if cfg.Options == nil {
 		cfg.Options = map[string]string{}
+	}
+	if cfg.Scheme == SchemeFS && strings.TrimSpace(cfg.Root) == "" {
+		return nil, fmt.Errorf("opendal fs: root 不能为空（拒绝以进程工作目录为根）")
 	}
 	op := &Operator{
 		scheme:         cfg.Scheme,
@@ -226,14 +234,29 @@ func New(cfg Config) (*Operator, error) {
 			return nil, err
 		}
 		op.driver = d
+	case SchemeFS:
+		// 本地文件系统：root 已在入口校验非空，fs 分支由 resolvePath 做
+		// 包含性校验（core#223）。
 	default:
-		if !supportedSchemes[cfg.Scheme] {
-			// 未知 scheme：按 fs 兜底（保持既有宽容行为）
-			op.scheme = SchemeFS
-			op.presignEnabled = false
-		}
+		// 未知 scheme 不再静默回落 fs（core#223）。supportedSchemes 里的
+		// 已实现 scheme 必须各有一个 case 分支；漏接的新 scheme 也会走到这里
+		// ——这正是我们要的「响亮失败」。
+		return nil, fmt.Errorf("不支持的 opendal scheme: %q（支持: %s）",
+			cfg.Scheme, supportedSchemeNames())
 	}
 	return op, nil
+}
+
+// supportedSchemeNames 已接入 scheme 的稳定排序清单（错误文案用）。
+func supportedSchemeNames() string {
+	names := make([]string, 0, len(supportedSchemes))
+	for s, ok := range supportedSchemes {
+		if ok {
+			names = append(names, string(s))
+		}
+	}
+	sort.Strings(names)
+	return strings.Join(names, "/")
 }
 
 // NewCustom 用外部注入的驱动创建 Operator（测试专用：注入假驱动验证分派逻辑）。
@@ -252,10 +275,24 @@ func NewCustom(scheme Scheme, d Driver) *Operator {
 // Scheme 返回当前 scheme
 func (op *Operator) Scheme() Scheme { return op.scheme }
 
-// resolvePath 把相对 path 解析为 fs backend 实际路径
-func (op *Operator) resolvePath(p string) string {
-	p = strings.TrimPrefix(p, "/")
-	return filepath.Join(op.root, p)
+// resolvePath 把相对 path 解析为 fs backend 实际路径。
+//
+// 包含性校验（core#223，与 storage/local.go 的 localContain 同口径）：
+// 清洗 + Join 后必须仍落在 root 内，越界（`..`/绝对路径形态/root 自身）返回
+// 错误而不是静默拼路径。此前 ".." 不设防 ⇒ 所有 fs 分支可跳出 root。
+func (op *Operator) resolvePath(p string) (string, error) {
+	root := filepath.Clean(op.root)
+	if root == "." || root == string(filepath.Separator) || op.root == "" {
+		// New 已拒绝空 root；这里是 NewCustom/未来构造路径的最后防线
+		// （绝不把进程 CWD 或文件系统根当存储根）。
+		return "", fmt.Errorf("opendal fs: root %q 非法（不得为空/CWD/根目录）", op.root)
+	}
+	full := filepath.Clean(filepath.Join(root, strings.TrimPrefix(p, "/")))
+	rel, err := filepath.Rel(root, full)
+	if err != nil || full == root || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("illegal storage path: %s", p)
+	}
+	return full, nil
 }
 
 // key 把相对 path 规范为远端驱动的 key（去前导 /；bucket/root 前缀由驱动负责）
@@ -268,7 +305,10 @@ func (op *Operator) key(p string) string {
 // Write 写入数据
 func (op *Operator) Write(ctx context.Context, path string, data []byte) error {
 	if op.scheme == SchemeFS {
-		fullPath := op.resolvePath(path)
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 			return fmt.Errorf("mkdir: %w", err)
 		}
@@ -280,7 +320,10 @@ func (op *Operator) Write(ctx context.Context, path string, data []byte) error {
 // WriteStream 流式写入（size 为确切字节数；fs 直接 create+copy）
 func (op *Operator) WriteStream(ctx context.Context, path string, r io.Reader, size int64) error {
 	if op.scheme == SchemeFS {
-		fullPath := op.resolvePath(path)
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 			return fmt.Errorf("mkdir: %w", err)
 		}
@@ -298,7 +341,11 @@ func (op *Operator) WriteStream(ctx context.Context, path string, r io.Reader, s
 // Read 读取整个文件（限量整读，core#118：超 MaxWholeReadBytes 显式报错）
 func (op *Operator) Read(ctx context.Context, path string) ([]byte, error) {
 	if op.scheme == SchemeFS {
-		f, err := os.Open(op.resolvePath(path))
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return nil, err
+		}
+		f, err := os.Open(fullPath)
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +358,11 @@ func (op *Operator) Read(ctx context.Context, path string) ([]byte, error) {
 // Reader 获取流式读取器
 func (op *Operator) Reader(ctx context.Context, path string) (io.ReadCloser, error) {
 	if op.scheme == SchemeFS {
-		return os.Open(op.resolvePath(path))
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return nil, err
+		}
+		return os.Open(fullPath)
 	}
 	return op.driver.Reader(ctx, op.key(path))
 }
@@ -324,7 +375,11 @@ var ErrRangeUnsupported = errors.New("storage driver: range read unsupported")
 // length<=0 表示读到末尾。驱动未实现区间读能力时返回 ErrRangeUnsupported。
 func (op *Operator) ReadRange(ctx context.Context, path string, start, length int64) (io.ReadCloser, error) {
 	if op.scheme == SchemeFS {
-		f, err := os.Open(op.resolvePath(path))
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return nil, err
+		}
+		f, err := os.Open(fullPath)
 		if err != nil {
 			return nil, err
 		}
@@ -350,7 +405,11 @@ func (op *Operator) ReadRange(ctx context.Context, path string, start, length in
 // Stat 获取文件元信息；对象不存在时返回包装了 os.ErrNotExist 的错误
 func (op *Operator) Stat(ctx context.Context, path string) (*Metadata, error) {
 	if op.scheme == SchemeFS {
-		info, err := os.Stat(op.resolvePath(path))
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(fullPath)
 		if err != nil {
 			return nil, err
 		}
@@ -367,7 +426,11 @@ func (op *Operator) Stat(ctx context.Context, path string) (*Metadata, error) {
 // Delete 删除文件
 func (op *Operator) Delete(ctx context.Context, path string) error {
 	if op.scheme == SchemeFS {
-		return os.Remove(op.resolvePath(path))
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return err
+		}
+		return os.Remove(fullPath)
 	}
 	return op.driver.Delete(ctx, op.key(path))
 }
@@ -381,7 +444,11 @@ func (op *Operator) Exists(ctx context.Context, path string) bool {
 // CreateDir 创建目录（对象存储无目录概念时为 no-op）
 func (op *Operator) CreateDir(ctx context.Context, path string) error {
 	if op.scheme == SchemeFS {
-		return os.MkdirAll(op.resolvePath(path), 0755)
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return err
+		}
+		return os.MkdirAll(fullPath, 0755)
 	}
 	if m, ok := op.driver.(mkdirAller); ok {
 		return m.MkdirAll(ctx, op.key(path))
@@ -392,7 +459,11 @@ func (op *Operator) CreateDir(ctx context.Context, path string) error {
 // RemoveAll 递归删除
 func (op *Operator) RemoveAll(ctx context.Context, path string) error {
 	if op.scheme == SchemeFS {
-		return os.RemoveAll(op.resolvePath(path))
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return err
+		}
+		return os.RemoveAll(fullPath)
 	}
 	return op.driver.RemoveAll(ctx, op.key(path))
 }
@@ -400,7 +471,10 @@ func (op *Operator) RemoveAll(ctx context.Context, path string) error {
 // List 列出目录下的所有条目（驱动未实现时返回错误）
 func (op *Operator) List(ctx context.Context, path string) ([]*Metadata, error) {
 	if op.scheme == SchemeFS {
-		fullPath := op.resolvePath(path)
+		fullPath, err := op.resolvePath(path)
+		if err != nil {
+			return nil, err
+		}
 		entries, err := os.ReadDir(fullPath)
 		if err != nil {
 			return nil, err
@@ -411,7 +485,7 @@ func (op *Operator) List(ctx context.Context, path string) ([]*Metadata, error) 
 			if err != nil {
 				continue
 			}
-			rel, _ := filepath.Rel(op.root, filepath.Join(fullPath, e.Name()))
+			rel, _ := filepath.Rel(filepath.Clean(op.root), filepath.Join(fullPath, e.Name()))
 			result = append(result, &Metadata{
 				Path:    rel,
 				Size:    info.Size(),
@@ -436,8 +510,14 @@ func (op *Operator) List(ctx context.Context, path string) ([]*Metadata, error) 
 // 缓冲，与文件大小无关。
 func (op *Operator) Copy(ctx context.Context, src, dst string) error {
 	if op.scheme == SchemeFS {
-		srcPath := op.resolvePath(src)
-		dstPath := op.resolvePath(dst)
+		srcPath, err := op.resolvePath(src)
+		if err != nil {
+			return err
+		}
+		dstPath, err := op.resolvePath(dst)
+		if err != nil {
+			return err
+		}
 		in, err := os.Open(srcPath)
 		if err != nil {
 			return err
@@ -465,8 +545,14 @@ func (op *Operator) Copy(ctx context.Context, src, dst string) error {
 // Rename 重命名/移动
 func (op *Operator) Rename(ctx context.Context, src, dst string) error {
 	if op.scheme == SchemeFS {
-		srcPath := op.resolvePath(src)
-		dstPath := op.resolvePath(dst)
+		srcPath, err := op.resolvePath(src)
+		if err != nil {
+			return err
+		}
+		dstPath, err := op.resolvePath(dst)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
 			return err
 		}
