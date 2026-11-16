@@ -110,7 +110,7 @@ func TestBackfillLegacyRefs_QuotaDriftFree(t *testing.T) {
 
 	logical0, err := fcRepo.GetTotalSize(ctx)
 	require.NoError(t, err)
-	physical0, err := fcRepo.GetTotalSizeIncludingDeleted(ctx)
+	physical0, err := fcRepo.GetPhysicalObjectUsage(ctx)
 	require.NoError(t, err)
 
 	st, err := repo.BackfillLegacyRefs(ctx)
@@ -120,7 +120,7 @@ func TestBackfillLegacyRefs_QuotaDriftFree(t *testing.T) {
 
 	logical1, err := fcRepo.GetTotalSize(ctx)
 	require.NoError(t, err)
-	physical1, err := fcRepo.GetTotalSizeIncludingDeleted(ctx)
+	physical1, err := fcRepo.GetPhysicalObjectUsage(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, logical0, logical1, "回填不得漂移逻辑配额口径")
 	assert.Equal(t, physical0, physical1, "回填不得漂移物理配额口径")

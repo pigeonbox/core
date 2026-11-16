@@ -25,6 +25,9 @@ func newBlobPurgeTestEnv(t *testing.T) (string, *Service, *Janitor, *gorm.DB) {
 	root, svcStorage, g := newJanitorTestEnv(t)
 	require.NoError(t, g.AutoMigrate(
 		&model.Blob{}, &model.FileReference{}, &model.SystemConfigRecord{},
+		// #196 合入后 Purge 流程会向 gc_jobs 入队（持久化任务面），缺表则
+		// enqueue 失败 ⇒ 生命周期断言拿不到终态。与 files_restore_test 同口径。
+		&model.GCJob{},
 	))
 	svc := NewService(g)
 	svc.SetStorage(svcStorage)
@@ -65,10 +68,18 @@ func TestPurgeFiles_FullLifecycleChain(t *testing.T) {
 	ref := mustRef(t, g, fc.ID)
 	assert.Equal(t, model.RefActive, ref.State, "软删不得释放引用")
 
-	// ② 彻底删除：真对象消失 + 引用释放 + blob 转 trashed
+	// ② 彻底删除：DB 行硬删 + 引用释放 + blob 转 trashed；物理删除走
+	// gc_jobs outbox（core#196 合入后的持久化任务面），worker 消费才删对象。
 	purged, err := svc.PurgeFiles(ctx, []uint{fc.ID})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), purged)
+	assert.FileExists(t, abs, "outbox 形态下 purge 只登记任务，物理删除交给 GC worker")
+	var pending int64
+	require.NoError(t, g.Model(&model.GCJob{}).Where("state = ?", model.GCStatePending).Count(&pending).Error)
+	require.EqualValues(t, 1, pending, "purge 必须登记 GC 任务（进程崩溃也不丢）")
+	processed, err := svc.GC().RunOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, processed, "GC worker 应消费 purge 任务")
 	assert.NoFileExists(t, abs, "硬删后物理对象必须真消失")
 	ref = mustRef(t, g, fc.ID)
 	assert.Equal(t, model.RefReleased, ref.State, "硬删必须释放引用")
