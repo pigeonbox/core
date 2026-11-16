@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/cloudwego/hertz/pkg/app"
+	"github.com/pigeonbox/core/pkg/authz"
 	pkgmw "github.com/pigeonbox/core/pkg/middleware"
 )
 
@@ -78,7 +79,7 @@ func RequireRole(role string) app.HandlerFunc {
 			return
 		}
 
-		if GetUserRole(c) != role {
+		if !authz.RoleSatisfies(GetUserRole(c), role) {
 			respondForbidden(c, "Required role: "+role)
 			return
 		}
@@ -96,14 +97,11 @@ func RequireAnyRole(roles ...string) app.HandlerFunc {
 			return
 		}
 
-		currentRole := GetUserRole(c)
-		for _, role := range roles {
-			if currentRole == role {
-				c.Next(ctx)
-				return
-			}
+		if !authz.AnyRoleSatisfies(GetUserRole(c), roles...) {
+			respondForbidden(c, "Access denied: insufficient permissions")
+			return
 		}
 
-		respondForbidden(c, "Access denied: insufficient permissions")
+		c.Next(ctx)
 	}
 }

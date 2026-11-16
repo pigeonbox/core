@@ -13,6 +13,7 @@ import (
 	"github.com/oekit/pkg/ctxscope"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/authz"
 )
 
 // 请求级身份的 context 槽位（ctxscope.Key：命名空间 + 值类型双隔离）。
@@ -300,7 +301,7 @@ func AdminMiddleware() app.HandlerFunc {
 		}
 
 		// 角色检查先于任何放行（身份回查已把 DB 角色回填 claim，防降权旧 claim）
-		if claims.Role != "admin" {
+		if !authz.IsAdminRole(claims.Role) {
 			c.JSON(http.StatusForbidden, map[string]interface{}{
 				"code":    errcode.CodeForbidden,
 				"message": "Admin access required",

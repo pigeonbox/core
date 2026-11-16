@@ -12,6 +12,7 @@ import (
 	"github.com/oekit/concurrency/ratelimit"
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/authz"
 	"golang.org/x/time/rate"
 
 	"github.com/oekit/pkg/encoding"
@@ -455,7 +456,7 @@ func AdminOrAdminKey() app.HandlerFunc {
 			return
 		}
 		v, _ := c.Get("role")
-		if role, _ := v.(string); role != "admin" {
+		if role, _ := v.(string); !authz.IsAdminRole(role) {
 			c.JSON(http.StatusForbidden, map[string]interface{}{
 				"code":    errcode.CodeForbidden,
 				"message": "Admin access required",

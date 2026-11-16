@@ -5,6 +5,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/pigeonbox/contracts/errcode"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/errors"
 )
 
@@ -76,9 +77,9 @@ func IsAuthenticated(c *app.RequestContext) bool {
 	return GetUserID(c) > 0
 }
 
-// IsAdmin 检查是否是管理员
+// IsAdmin 检查是否是管理员（角色判定经 pkg/authz 单一执行点，core#173 第五片）
 func IsAdmin(c *app.RequestContext) bool {
-	return GetUserRole(c) == "admin"
+	return authz.IsAdminRole(GetUserRole(c))
 }
 
 // respondUnauthorized 返回401响应

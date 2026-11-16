@@ -22,6 +22,7 @@ import (
 	presignApp "github.com/pigeonbox/core/app/presign"
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/internal/paging"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -687,9 +688,10 @@ func multiObjectKeyOwnedByCaller(ctx context.Context, c *app.RequestContext, obj
 		callerUserID = &uid
 	}
 	if meta.UserID != 0 {
-		return callerUserID != nil && *callerUserID == meta.UserID
+		return authz.OwnedByUser(&meta.UserID, callerUserID)
 	}
-	return callerUserID == nil && middleware.ClientIP(c) == meta.OwnerIP
+	// 匿名属主：仅匿名调用方按 IP 匹配（判定原语经 pkg/authz，core#173 第五片）
+	return callerUserID == nil && authz.OwnedByIP(meta.OwnerIP, middleware.ClientIP(c))
 }
 
 // presignUploadIDFromObjectKey 从服务端生成的对象键

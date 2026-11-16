@@ -22,6 +22,7 @@ import (
 	oidcApp "github.com/pigeonbox/core/app/oidc"
 	"github.com/pigeonbox/core/conf"
 	presignHandler "github.com/pigeonbox/core/gen/handler/presign"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/repo/db"
@@ -115,7 +116,7 @@ func customizedRegister(r *server.Hertz) {
 				ip = middleware.ClientIP(c)
 			}
 			caller := mcpApp.Caller{
-				Admin:  middleware.RoleFromContext(ctx) == "admin",
+				Admin:  authz.IsAdminRole(middleware.RoleFromContext(ctx)),
 				UserID: uid,
 				IP:     ip,
 			}

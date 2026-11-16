@@ -10,6 +10,7 @@ import (
 
 	"github.com/pigeonbox/core/internal/authn"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/logger"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -48,8 +49,8 @@ func (s *Service) GenerateTokenForAdmin(ctx context.Context, username, password,
 		return "", errors.New("用户名或密码错误")
 	}
 
-	// 检查是否为管理员
-	if user.Role != "admin" {
+	// 检查是否为管理员（角色判定经 pkg/authz 单一执行点，core#173 第五片）
+	if !authz.IsAdminRole(user.Role) {
 		return "", errors.New("权限不足")
 	}
 

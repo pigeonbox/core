@@ -17,6 +17,7 @@ import (
 	"github.com/pigeonbox/core/app/moderation"
 	"github.com/pigeonbox/core/conf"
 	"github.com/pigeonbox/core/internal/paging"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
@@ -920,8 +921,8 @@ func (s *Service) DeleteFileByCode(ctx context.Context, code string, userID uint
 		return fmt.Errorf("分享不存在")
 	}
 
-	// 2. 验证文件所有权（userID匹配）
-	if file.UserID == nil || *file.UserID != userID {
+	// 2. 验证文件所有权（判定经 pkg/authz 单一执行点，core#173 第五片）
+	if !authz.OwnedByUser(file.UserID, &userID) {
 		return fmt.Errorf("无权限删除此分享")
 	}
 

@@ -30,6 +30,7 @@ import (
 	"github.com/oekit/pkg/secretx"
 	"github.com/pigeonbox/core/internal/authn"
 	"github.com/pigeonbox/core/pkg/auth"
+	"github.com/pigeonbox/core/pkg/authz"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/outbound"
 	"github.com/pigeonbox/core/pkg/security"
@@ -377,7 +378,7 @@ func (s *Service) ExchangeCallback(ctx context.Context, baseURL, code, state, no
 	// 过 authn.VerifySecondFactor 后换发正式会话（OIDC 原生无口令管理员不再
 	// 被锁死）。两条件必须同时成立：未开 MFA 的 admin 走 OIDC 属支持路径；
 	// user 角色不受影响。
-	if user.Role == "admin" && user.TotpEnabled {
+	if authz.IsAdminRole(user.Role) && user.TotpEnabled {
 		return auth.GeneratePendingMFAToken(user.ID, user.Username, user.Role)
 	}
 
