@@ -24,7 +24,17 @@ func (r *FileCodeRepository) db() *gorm.DB {
 	return r.conn
 }
 
+// Create 落库分享记录。
+//
+// 不变量（core#220）：ExpiredCount ∈ {-1} ∪ (0,+∞)。-1=无限，>0=剩余；
+// 0=已耗尽（不是可创建的初值，count+0 会建出「建完即死」的链接），
+// <-1 是历史脏值（IsCountExhausted 只判 ==0 ⇒ 负值会被当成「还有次数」）。
+// 入口已用 utils.CheckCountExpireValue 显式拒绝，这里再兜一层，保证任何
+// 新调用方都写不出越界行。
 func (r *FileCodeRepository) Create(ctx context.Context, fileCode *model.FileCode) error {
+	if fileCode != nil && fileCode.ExpiredCount < -1 {
+		return fmt.Errorf("非法的 expired_count=%d（合法值：-1=无限，>0=剩余）", fileCode.ExpiredCount)
+	}
 	return r.db().WithContext(ctx).Create(fileCode).Error
 }
 

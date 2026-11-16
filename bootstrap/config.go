@@ -246,6 +246,7 @@ var envBindings = map[string][]string{
 	"notify.smtp.username": {"PB_SMTP_USERNAME"},
 	"notify.smtp.password": {"PB_SMTP_PASSWORD"},
 	"notify.smtp.from":     {"PB_SMTP_FROM"},
+	"notify.smtp.tls_mode": {"PB_SMTP_TLS_MODE"},
 	// notify.telegram / notify.bark（外部推送渠道，2026-11-01）
 	"notify.telegram.bot_token": {"PB_TELEGRAM_BOT_TOKEN"},
 	"notify.telegram.chat_id":   {"PB_TELEGRAM_CHAT_ID"},

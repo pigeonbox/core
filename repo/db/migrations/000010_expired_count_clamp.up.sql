@@ -1,0 +1,11 @@
+-- core#220：次数型分享 expire_value 下界校验的存量数据修正。
+--
+-- 缺陷：count 型 expire_value 此前原样落库 ⇒ 历史数据里可能存在
+-- expired_count < -1 的行。语义（repo/db/model/filecode.go）是
+-- -1=无限 / 0=已耗尽 / >0=剩余；IsCountExhausted 只判 ==0 ⇒ 负值会被
+-- 当成「还有次数」，取件放行并按次递减（-5 → -6 …）⇒ 「按次数」分享
+-- 实际变成无限次。
+--
+-- 修正口径：负数（< -1）统一归一为 -1（无限）——与产品语义最接近，
+-- 且不会把用户可见的分享改死。0 保持不动（已耗尽，janitor/回收站语义依赖它）。
+UPDATE file_codes SET expired_count = -1 WHERE expired_count < -1;

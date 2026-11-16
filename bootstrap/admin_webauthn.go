@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -26,6 +27,7 @@ import (
 
 	adminsvc "github.com/pigeonbox/core/app/admin"
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
@@ -123,9 +125,15 @@ func adminWebAuthnRegisterVerify(ctx context.Context, c *app.RequestContext) {
 	}
 	row, err := getAdminWebAuthnService().WebAuthnRegisterVerify(ctx, uid, adminWebAuthnRP(c), req.Challenge, req.Credential, req.Name)
 	if err != nil {
+		// 免口令凭据的登记失败也要留痕：攻击者持会话反复尝试同样可观测。
+		audit.Record(ctx, "passkey.register",
+			fmt.Sprintf("user %d passkey register failed: %v", uid, err), false)
 		adminWebAuthnError(c, "Passkey 登记", err)
 		return
 	}
+	// 审计（core#219）：Passkey = 长期免口令凭据，登记/撤销必须可追溯。
+	audit.Record(ctx, "passkey.register",
+		fmt.Sprintf("user %d passkey %d registered (name=%q)", uid, row.ID, row.Name), true)
 	resp.Success(c, row)
 }
 
@@ -204,8 +212,13 @@ func adminWebAuthnCredentialDelete(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	if err := getAdminWebAuthnService().DeleteWebAuthnCredential(ctx, uid, uint(id)); err != nil {
+		audit.Record(ctx, "passkey.delete",
+			fmt.Sprintf("user %d passkey %d delete failed: %v", uid, id, err), false)
 		adminWebAuthnError(c, "Passkey 凭证删除", err)
 		return
 	}
+	// 撤销他人 Passkey 会降低安全性且无痕 ⇒ 审计必须含目标行 id（core#219）。
+	audit.Record(ctx, "passkey.delete",
+		fmt.Sprintf("user %d passkey %d deleted", uid, id), true)
 	resp.SuccessWithMessage(c, "Passkey 已删除", nil)
 }

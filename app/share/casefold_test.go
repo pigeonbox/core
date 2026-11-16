@@ -51,7 +51,7 @@ func TestCreateWithCode_CaseFoldUniqueness(t *testing.T) {
 	ctx := context.Background()
 
 	build := func(code string) *model.FileCode {
-		return &model.FileCode{Code: code, Status: model.StatusNormal}
+		return &model.FileCode{Code: code, Status: model.StatusNormal, ExpiredCount: -1}
 	}
 
 	t.Run("折叠开：仅大小写不同的自定义码拒绝", func(t *testing.T) {

@@ -135,6 +135,11 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
 		return
 	}
+	// 次数型下界（core#220）：count+0/负数不得落库。
+	if err := utils.CheckCountExpireValue(body.ExpireStyle, body.ExpireValue); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		return
+	}
 	passwordHash, ok := resolveSharePassword(c, body.RequireAuth, body.Password)
 	if !ok {
 		return

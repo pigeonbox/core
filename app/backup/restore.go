@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -37,7 +38,67 @@ type RestoreOptions struct {
 	DBPath string
 	// DryRun 只校验（manifest / 摘要 / DB 可用性），不落任何盘。
 	DryRun bool
+	// Limits 解包资源上限（core#221）；零值 = 默认上限（20 万条目 /
+	// 100 GiB / 200:1）。测试可注入小阈值验证拒绝路径。
+	Limits UnpackLimits
 }
+
+// UnpackLimits 备份解包资源上限（core#221：zip-slip 之后的「写太多」缺口）。
+//
+// 默认值刻意宽松（正常备份可达几十 GB），只拦「明显不是备份包」的形态：
+// 解压炸弹 / 条目洪水 / manifest 申报量级与实际严重不符。
+type UnpackLimits struct {
+	// MaxEntries 条目数上限（目录/链接/普通文件全部计入）。
+	MaxEntries int
+	// MaxTotalBytes 解包总量上限（所有常规文件的实际写入字节之和）。
+	MaxTotalBytes int64
+	// MaxCompressionRatio 压缩比上限（累计输出 / 累计已读压缩输入）。
+	// <=0 或非正视为默认；1 表示输出不得大于输入（极严格）。
+	MaxCompressionRatio int64
+	// CompressionRatioMinBytes 触发压缩比判定的最小累计输出（避免小包误报：
+	// gzip 头/小文件天然压缩比很高）。
+	CompressionRatioMinBytes int64
+}
+
+// 默认解包上限。
+const (
+	defaultMaxUnpackEntries          = 200_000
+	defaultMaxUnpackBytes      int64 = 100 << 30 // 100 GiB
+	defaultMaxCompressionRatio int64 = 200
+	defaultRatioMinBytes       int64 = 8 << 20 // 8 MiB 才开始判压缩比
+)
+
+// DefaultUnpackLimits 默认解包上限（CLI/服务端不传 Limits 时使用）。
+func DefaultUnpackLimits() UnpackLimits {
+	return UnpackLimits{
+		MaxEntries:               defaultMaxUnpackEntries,
+		MaxTotalBytes:            defaultMaxUnpackBytes,
+		MaxCompressionRatio:      defaultMaxCompressionRatio,
+		CompressionRatioMinBytes: defaultRatioMinBytes,
+	}
+}
+
+// withDefaults 零值字段补默认（部分注入时其余维度仍有保护）。
+func (l UnpackLimits) withDefaults() UnpackLimits {
+	if l.MaxEntries <= 0 {
+		l.MaxEntries = defaultMaxUnpackEntries
+	}
+	if l.MaxTotalBytes <= 0 {
+		l.MaxTotalBytes = defaultMaxUnpackBytes
+	}
+	if l.MaxCompressionRatio <= 0 {
+		l.MaxCompressionRatio = defaultMaxCompressionRatio
+	}
+	if l.CompressionRatioMinBytes <= 0 {
+		l.CompressionRatioMinBytes = defaultRatioMinBytes
+	}
+	return l
+}
+
+// unpackLimitError 解包资源上限命中（错误文案面向运维，含实际值与上限）。
+type unpackLimitError struct{ msg string }
+
+func (e *unpackLimitError) Error() string { return e.msg }
 
 // RestoreResult 恢复结果。
 type RestoreResult struct {
@@ -76,7 +137,7 @@ func (s *Service) Restore(ctx context.Context, r io.Reader, opts RestoreOptions)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	manifest, err := s.unpack(r, dir)
+	manifest, err := s.unpack(r, dir, opts.Limits)
 	if err != nil {
 		return nil, err
 	}
@@ -132,14 +193,31 @@ func (s *Service) Restore(ctx context.Context, r io.Reader, opts RestoreOptions)
 }
 
 // unpack 解包到 dir，返回 manifest。
-func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
-	gz, err := gzip.NewReader(r)
+//
+// 资源维度（core#221）：路径防御（safeEntryName/Rel）只保证「不写到别处」，
+// 不保证「不写太多」。三个上限在**写入前/写入中**判定：
+//   - 条目数：每次 tr.Next() 计数，超限立即中止（条目洪水）；
+//   - 解包总量：按实际写入字节累计（不信 hdr.Size），超限立即中止（填盘）；
+//   - 压缩比：累计输出 / 累计已读压缩输入，超阈值立即中止（gzip 炸弹）。
+//
+// manifest 对账：v1 包格式把 manifest 放在**最后**（导出侧需要先算完 sha256），
+// 无法「先读 manifest 建预算再解对象」。⇒ 解完后用 objects/ 目录实际大小
+// 与 manifest.ObjectBytes 对账（多出 >10%+1MiB ⇒ 视为申报量造假/包被拼接）。
+// 单对象级别还有 verifyObjects 的精确大小比对。
+func (s *Service) unpack(r io.Reader, dir string, limits UnpackLimits) (*Manifest, error) {
+	limits = limits.withDefaults()
+
+	// 计数包装：gzip 读多少压缩字节是压缩比分母的唯一可信来源。
+	cr := &countingReader{r: r}
+	gz, err := gzip.NewReader(cr)
 	if err != nil {
 		return nil, fmt.Errorf("备份包不是合法的 gzip: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
+	entries := 0
+	var totalOut int64
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -147,6 +225,11 @@ func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("读取备份包条目失败: %w", err)
+		}
+		entries++
+		if entries > limits.MaxEntries {
+			return nil, &unpackLimitError{msg: fmt.Sprintf(
+				"备份包条目数超过上限（已读 %d > %d）", entries, limits.MaxEntries)}
 		}
 		name, err := safeEntryName(hdr.Name)
 		if err != nil {
@@ -170,6 +253,15 @@ func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
 			// 符号链接/设备文件等一律不落盘（备份包不需要它们）。
 			continue
 		}
+		if hdr.Size < 0 {
+			return nil, fmt.Errorf("备份包条目 %q 的 size 非法: %d", hdr.Name, hdr.Size)
+		}
+		// 先按头部声明做一次预算预检（大条目在写第一个字节前就被拦住）。
+		if hdr.Size > limits.MaxTotalBytes-totalOut {
+			return nil, &unpackLimitError{msg: fmt.Sprintf(
+				"备份包解包总量超过上限（声明 %d + 已解 %d > %d）",
+				hdr.Size, totalOut, limits.MaxTotalBytes)}
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return nil, fmt.Errorf("创建目录失败 %q: %w", name, err)
 		}
@@ -177,8 +269,19 @@ func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
 		if err != nil {
 			return nil, fmt.Errorf("写出条目失败 %q: %w", name, err)
 		}
-		if _, err := io.Copy(f, tr); err != nil {
+		bw := &budgetWriter{
+			w:      f,
+			total:  &totalOut,
+			cr:     cr,
+			limits: limits,
+			entry:  name,
+		}
+		if _, err := io.Copy(bw, tr); err != nil {
 			_ = f.Close()
+			var le *unpackLimitError
+			if errors.As(err, &le) {
+				return nil, le
+			}
 			return nil, fmt.Errorf("写出条目失败 %q: %w", name, err)
 		}
 		_ = f.Close()
@@ -192,7 +295,87 @@ func (s *Service) unpack(r io.Reader, dir string) (*Manifest, error) {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return nil, fmt.Errorf("解析 %s 失败: %w", ManifestName, err)
 	}
+
+	// manifest 申报量对账：objects/ 实际字节数不得显著超过 ObjectBytes。
+	if manifest.ObjectBytes > 0 {
+		actual, err := dirRegularBytes(filepath.Join(dir, filepath.FromSlash(strings.TrimSuffix(ObjectDirName, "/"))))
+		if err != nil {
+			return nil, fmt.Errorf("统计包内对象字节数失败: %w", err)
+		}
+		slack := int64(1 << 20)
+		if extra := manifest.ObjectBytes / 10; extra > slack {
+			slack = extra
+		}
+		if actual > manifest.ObjectBytes+slack {
+			return nil, fmt.Errorf(
+				"备份包对象字节数超过 manifest 申报（实际 %d > 申报 %d + 容差 %d）⇒ 包内容与清单不符",
+				actual, manifest.ObjectBytes, slack)
+		}
+	}
 	return &manifest, nil
+}
+
+// countingReader 统计从底层读取的压缩字节数（压缩比分母）。
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// budgetWriter 边写边判解包总量与压缩比（core#221）。
+//
+// 判定发生在**写入前**：超限时本次 Write 一个字节都不落，磁盘占用以已写量为界
+// （≤ MaxTotalBytes），不会等整条/整个包写完才发现。
+type budgetWriter struct {
+	w      io.Writer
+	total  *int64
+	cr     *countingReader
+	limits UnpackLimits
+	entry  string
+}
+
+func (b *budgetWriter) Write(p []byte) (int, error) {
+	n := int64(len(p))
+	next := *b.total + n
+	if next > b.limits.MaxTotalBytes {
+		return 0, &unpackLimitError{msg: fmt.Sprintf(
+			"备份包解包总量超过上限（%d > %d，条目 %q）",
+			next, b.limits.MaxTotalBytes, b.entry)}
+	}
+	// 压缩比：累计输出达到最小判定量后，输出/已读压缩输入 > 上限即中止。
+	if b.cr != nil && next >= b.limits.CompressionRatioMinBytes && b.cr.n > 0 {
+		if next/b.cr.n > b.limits.MaxCompressionRatio {
+			return 0, &unpackLimitError{msg: fmt.Sprintf(
+				"备份包压缩比超过上限（%d:1 > %d:1，已解 %d 字节 / 已读压缩 %d 字节）",
+				next/b.cr.n, b.limits.MaxCompressionRatio, next, b.cr.n)}
+		}
+	}
+	written, err := b.w.Write(p)
+	*b.total += int64(written)
+	return written, err
+}
+
+// dirRegularBytes 统计目录下常规文件字节数（目录不存在 = 0）。
+func dirRegularBytes(root string) (int64, error) {
+	var total int64
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info != nil && info.Mode().IsRegular() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
 }
 
 // verifyObjects 逐对象校验 sha256（包损坏/被截断 ⇒ 立刻拒绝，不落盘）。
@@ -207,6 +390,19 @@ func (s *Service) verifyObjects(dir string, manifest *Manifest) error {
 			return fmt.Errorf("manifest 对象路径非法 %q: %w", entry.Path, err)
 		}
 		src := filepath.Join(dir, filepath.FromSlash(ObjectDirName+clean))
+		// 精确大小比对（core#221）：sha256 只读 entry.Size 字节 ⇒ 若文件尾部
+		// 被追加内容，摘要仍然匹配。先按磁盘真实大小与 manifest 声明比对。
+		st, err := os.Stat(src)
+		if err != nil {
+			return fmt.Errorf("备份包缺少对象 %q: %w", entry.Path, err)
+		}
+		if !st.Mode().IsRegular() {
+			return fmt.Errorf("备份包对象 %q 不是常规文件", entry.Path)
+		}
+		if st.Size() != entry.Size {
+			return fmt.Errorf("对象 %q 大小与 manifest 不符（磁盘 %d 声明 %d）",
+				entry.Path, st.Size(), entry.Size)
+		}
 		f, err := os.Open(src)
 		if err != nil {
 			return fmt.Errorf("备份包缺少对象 %q: %w", entry.Path, err)

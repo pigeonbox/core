@@ -195,6 +195,14 @@ func finishMultiCommon(ctx context.Context, c *app.RequestContext, expireValue i
 		})
 		return nil
 	}
+	// 次数型下界（core#220）：count+0 建完即死、count+负数变成无限次 ⇒ 入口拒绝。
+	if err := utils.CheckCountExpireValue(expireStyle, expireValue); err != nil {
+		c.JSON(consts.StatusBadRequest, map[string]interface{}{
+			"code":    errcode.CodeInvalidParam,
+			"message": err.Error(),
+		})
+		return nil
+	}
 	p := &multiCommonParams{
 		ExpireValue: expireValue,
 		ExpireStyle: expireStyle,

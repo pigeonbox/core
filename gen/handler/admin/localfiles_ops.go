@@ -6,8 +6,10 @@ package admin
 import (
 	"context"
 	"errors"
-	"github.com/pigeonbox/contracts/errcode"
+	"fmt"
 	"time"
+
+	"github.com/pigeonbox/contracts/errcode"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -75,11 +77,16 @@ func AdminDeleteLocalFile(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	if err := getOpsShareService().DeleteLocalFile(int(req.GetRoot()), req.Path); err != nil {
+		audit(ctx, "localfile.delete",
+			fmt.Sprintf("root=%d path=%s delete failed: %v", req.GetRoot(), req.Path, err), false)
 		c.JSON(consts.StatusBadRequest, &admin.AdminDeleteLocalFileResp{
 			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
+	// 删除服务器白名单内任意文件 ⇒ 必须可追溯（core#219）。
+	audit(ctx, "localfile.delete",
+		fmt.Sprintf("root=%d path=%s deleted", req.GetRoot(), req.Path), true)
 	// wire 增量：data 键不再下发（原恒 null）
 	c.JSON(consts.StatusOK, &admin.AdminDeleteLocalFileResp{
 		Code: 0, Message: "删除成功",
@@ -110,6 +117,13 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 		})
 		return
 	}
+	// 次数型下界（core#220）：count+0/负数不得落库。
+	if err := utils.CheckCountExpireValue(expireStyle, int(expireValue)); err != nil {
+		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
+		})
+		return
+	}
 	passwordHash, err := utils.ResolveSharePassword(req.GetRequireAuth(), req.GetPassword())
 	if err != nil {
 		if errors.Is(err, utils.ErrPasswordRequired) {
@@ -125,6 +139,8 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 	}
 	absPath, err := shareService.LocalImportAbsPath(int(req.GetRoot()), req.Path)
 	if err != nil {
+		audit(ctx, "localfile.import",
+			fmt.Sprintf("root=%d path=%s resolve failed: %v", req.GetRoot(), req.Path, err), false)
 		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
 			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
@@ -140,11 +156,16 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 		OwnerIP:      middleware.ClientIP(c),
 	})
 	if err != nil {
+		audit(ctx, "localfile.import",
+			fmt.Sprintf("root=%d path=%s import failed: %v", req.GetRoot(), req.Path, err), false)
 		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
 			Code: errcode.CodeInvalidParam, Message: err.Error(),
 		})
 		return
 	}
+	// 导入把本机文件变成可取件分享（数据外泄面）⇒ 审计含来源路径与产物分享码。
+	audit(ctx, "localfile.import",
+		fmt.Sprintf("root=%d path=%s imported as share %s", req.GetRoot(), req.Path, result.Code), true)
 
 	transfer.Record(transfer.Entry{
 		Operation: transfer.OpUpload, FileCodeID: result.ID, Code: result.Code,

@@ -37,3 +37,19 @@ func TestValidateAllowedExpireStyles(t *testing.T) {
 	require.Contains(t, err.Error(), "weeks")
 	require.Contains(t, err.Error(), "count")
 }
+
+// TestValidateSMTPTLSMode 钉住 notify.smtp.tls_mode 保存期白名单（core#222）：
+// 非法策略在保存时 400，不得运行时静默回落到某个默认值。
+func TestValidateSMTPTLSMode(t *testing.T) {
+	for _, mode := range []string{"", "required", "opportunistic", "implicit", "none"} {
+		require.NoErrorf(t, validateSystemConfig(&SystemConfig{
+			Notify: &conf.NotifyConfig{SMTP: conf.SMTPConfig{Host: "smtp.example.com", TLSMode: mode}},
+		}), "合法 tls_mode=%q", mode)
+	}
+	err := validateSystemConfig(&SystemConfig{
+		Notify: &conf.NotifyConfig{SMTP: conf.SMTPConfig{Host: "smtp.example.com", TLSMode: "ssl"}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tls_mode")
+	require.Contains(t, err.Error(), "required")
+}

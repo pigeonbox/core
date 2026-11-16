@@ -195,7 +195,8 @@ func (s *Service) ApplyPolicyTemplate(ctx context.Context, id string) error {
 		return err // 已包 ErrPolicyInvalid
 	}
 	// 走既有通道：nil 保留合并 / 掩码回填 / 校验 / 落库 / overlay / 钩子 / 审计
-	// 全部复用，本层不重复实现任何副作用。
+	// 全部复用，本层不重复实现任何副作用。审计细节记模板 ID（core#219）。
+	ctx = withAuditDetail(ctx, "policy_template="+tpl.ID)
 	return s.UpdateConfig(ctx, cfg)
 }
 

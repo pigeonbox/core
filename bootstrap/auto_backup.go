@@ -31,6 +31,7 @@ import (
 	contracsErrcode "github.com/pigeonbox/contracts/errcode"
 	adminApp "github.com/pigeonbox/core/app/admin"
 	"github.com/pigeonbox/core/app/backup"
+	"github.com/pigeonbox/core/pkg/audit"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/storage"
@@ -296,14 +297,17 @@ func listBackupsHandler(ctx context.Context, c *app.RequestContext) {
 func runBackupHandler(ctx context.Context, c *app.RequestContext) {
 	sch, err := autoBackupScheduler()
 	if err != nil {
+		audit.Record(ctx, "backup.run", "manual backup unavailable: "+err.Error(), false)
 		resp.NewErrorWithMessage(c, contracsErrcode.CodeUnavailable, err.Error())
 		return
 	}
 	if err := sch.Start(ctx); err != nil {
-		// 已在跑：这不是失败，如实告知即可。
+		// 已在跑：这不是失败，如实告知即可（仍留一条审计：谁在何时触发过）。
+		audit.Record(ctx, "backup.run", "manual backup skipped (already running)", true)
 		resp.Success(c, map[string]interface{}{"started": false, "running": true})
 		return
 	}
+	audit.Record(ctx, "backup.run", "manual backup started", true)
 	resp.Success(c, map[string]interface{}{"started": true, "running": true})
 }
 
@@ -331,9 +335,11 @@ func downloadBackupHandler(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 	found := false
+	var size int64
 	for _, f := range files {
 		if f.Name == name {
 			found = true
+			size = f.Size
 			break
 		}
 	}
@@ -341,6 +347,10 @@ func downloadBackupHandler(ctx context.Context, c *app.RequestContext) {
 		resp.NewErrorByCode(c, contracsErrcode.CodeNotFound)
 		return
 	}
+	// 备份包 = 全量 DB（含口令哈希）+ 对象 ⇒ 每次下载都要能回答「谁、何时、
+	// 下了哪份」（core#219）。
+	audit.Record(ctx, "backup.download",
+		fmt.Sprintf("backup %s downloaded (size=%d)", name, size), true)
 	c.Header("Content-Type", "application/gzip")
 	c.Header("Content-Disposition", "attachment; filename=\""+name+"\"")
 	c.File(filepath.Join(sch.Dir(), name))

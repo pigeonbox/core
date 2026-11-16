@@ -130,18 +130,55 @@ func EffectiveTransferDefaults() (maxPickupCount int, expireDefaultDays int) {
 
 // CheckPickupCountCap 「单分享可取件次数上限」校验（transfer.max_count，0 = 不限）。
 //
-// n = 分享允许的取件次数（expire_style=count 的 expire_value，或已换算的
-// ExpiredCount；<=0 表示不按次数过期/无限 ⇒ 不校验）。
+// n = 分享的 ExpiredCount 现值（-1=无限，>0=剩余，0=已耗尽）。
+// 合法**新建值**只有 -1 与正整数：0 是「已耗尽」状态（不是可创建的初值），
+// <-1 是历史脏值 —— 两者都必须拒绝（core#220：count+0 会建出「建完即死」的
+// 分享，count+负数会让 IsCountExhausted 的 ==0 判据失效、变成无限次）。
 // 超限**显式拒绝**——不静默钳制：用户要 50 次、静默改成上限值是撒谎。
 func CheckPickupCountCap(n int) error {
+	if n == -1 {
+		return nil // -1 = 无限（非 count 样式的唯一合法值）
+	}
 	if n <= 0 {
-		return nil
+		return fmt.Errorf("取件次数必须为正整数（-1 表示不限）")
 	}
 	maxCount, _ := EffectiveTransferDefaults()
 	if maxCount > 0 && n > maxCount {
 		return fmt.Errorf("取件次数超过站点上限（最多 %d 次）", maxCount)
 	}
 	return nil
+}
+
+// CheckCountExpireValue 次数型分享的 expire_value 下界/上限校验（core#220）。
+//
+// 语义（repo/db/model/filecode.go：ExpiredCount -1=无限，0=已耗尽，>0=剩余）：
+//   - count 样式必须 1 <= expire_value <= transfer.max_count（0 会被原样落库
+//     成「已耗尽」⇒ 建完即死；负数会被 IsCountExhausted 的 ==0 判据漏过 ⇒
+//     「按次数」变无限次）；
+//   - 其余样式（时间型 / forever / 空）不是次数语义，不在此校验。
+//
+// 调用点 = 分享创建入口（handler 400 点名）与各域服务漏斗（纵深防御）。
+func CheckCountExpireValue(expireStyle string, expireValue int) error {
+	if strings.ToLower(strings.TrimSpace(expireStyle)) != "count" {
+		return nil
+	}
+	if expireValue <= 0 {
+		return fmt.Errorf("取件次数（expire_value）必须是正整数：按次数分享至少 1 次%s",
+			countValueHint(expireValue))
+	}
+	return CheckPickupCountCap(expireValue)
+}
+
+// countValueHint 把 0/负数的后果写进错误文案（可操作，不只说「非法」）。
+func countValueHint(v int) string {
+	switch {
+	case v == 0:
+		return "（0 会建出「立刻已耗尽」的死链接）"
+	case v < 0:
+		return fmt.Sprintf("（%d 会让次数限制失效、变成无限次）", v)
+	default:
+		return ""
+	}
 }
 
 // CalculateExpireTime 计算过期时间。
@@ -198,9 +235,18 @@ func CalculateExpireTime(expireValue int, expireStyle string) *time.Time {
 	return &expireTime
 }
 
-// CalculateExpireCount 计算过期次数（-1 表示无限制）
+// CalculateExpireCount 计算过期次数（-1 表示无限制）。
+//
+// core#220 兜底：count 样式 <=0 **不再原样返回**。入口（handler + 各域服务）
+// 已用 CheckCountExpireValue 显式拒绝 0/负数；这里再归一为 -1（不限）保证任何
+// 漏校验的新调用方也不会写出 ExpiredCount=0（建完即死）或负数（次数限制失效）。
+// 正常路径永远走不到这个兜底——它的存在是 DB 不变量 `expired_count >= -1` 的
+// 最后一道防线（DAO Create 另有同口径拒绝）。
 func CalculateExpireCount(expireStyle string, expireValue int) int {
-	if expireStyle == "count" {
+	if strings.ToLower(strings.TrimSpace(expireStyle)) == "count" {
+		if expireValue <= 0 {
+			return -1
+		}
 		return expireValue
 	}
 	return -1 // 无限制次数

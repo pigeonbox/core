@@ -479,6 +479,10 @@ func (s *Service) ShareTextWithAuth(ctx context.Context, text string, expireValu
 	if requireAuth && passwordHash == "" {
 		return nil, errors.New("开启密码保护时必须提供密码")
 	}
+	// 次数型下界（core#220）：入口已拒绝，这里服务层再兜一层（防新调用方漏校验）。
+	if err := utils.CheckCountExpireValue(expireStyle, expireValue); err != nil {
+		return nil, err
+	}
 	// 文本大小上限（service 层兜底，handler 已先行校验）
 	if over, maxBytes := gate.ExceedsTextShare(int64(len(text))); over {
 		return nil, fmt.Errorf("%w（上限 %d 字节）", utils.ErrTextTooLarge, maxBytes)

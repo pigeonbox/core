@@ -109,6 +109,11 @@ func ShareText(ctx context.Context, c *app.RequestContext) {
 		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}
+	// 次数型下界（core#220）：count+0 建完即死、count+负数变成无限次 ⇒ 入口拒绝。
+	if err := utils.CheckCountExpireValue(req.ExpireStyle, int(req.ExpireValue)); err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+		return
+	}
 
 	// 空文本验证：拒绝空文本或只包含空白字符的文本
 	if strings.TrimSpace(req.Text) == "" {
@@ -250,6 +255,11 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 
 	// 过期样式白名单
 	if err := utils.CheckExpireStyleAllowed(expireStyle); err != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+		return
+	}
+	// 次数型下界（core#220）：count+0 建完即死、count+负数变成无限次 ⇒ 入口拒绝。
+	if err := utils.CheckCountExpireValue(expireStyle, expireValue); err != nil {
 		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
 		return
 	}

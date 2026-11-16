@@ -109,7 +109,7 @@ func TestCreateWithCode_RejectsPickupCodeCollision(t *testing.T) {
 		Where("code = ?", "AbCd1234").UpdateColumn("pickup_code", "WS9WHP").Error)
 
 	build := func(code string) *model.FileCode {
-		return &model.FileCode{Code: code, Status: model.StatusNormal}
+		return &model.FileCode{Code: code, Status: model.StatusNormal, ExpiredCount: -1}
 	}
 
 	// 跨列避让：自定义码不能占用取件码已在用的字符串（否则那个取件码会打开本分享）
