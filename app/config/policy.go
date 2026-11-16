@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/gate"
 )
 
 // ErrPolicyInvalid 策略模板类可操作错误（未知模板 / 模板组合违反不变量）。
@@ -131,7 +132,7 @@ func ValidateConfigInvariants(cfg *SystemConfig) error {
 	} else if g := conf.Snapshot(); g != nil {
 		perFile = g.Upload.MaxFileSize
 	}
-	if total > 0 && perFile > 0 && total < perFile {
+	if gate.BatchCapBelowFileCap(total, perFile) {
 		return fmt.Errorf(
 			"%w: 单次发送总量上限（%d 字节）低于单文件上限（%d 字节）——超过单文件上限的文件永远发不出去；请先把总量上限抬到 ≥ 单文件上限（管理台「上传与分享」分区有对齐按钮）",
 			ErrPolicyInvalid, total, perFile)

@@ -121,6 +121,18 @@ func HTTPBodyLimit() int64 {
 	return uploadSize
 }
 
+// ===== 容量不变量 =====
+
+// BatchCapBelowFileCap 「单次发送总量上限 < 单文件上限」的**反不变量**判定
+// （AGENTS 硬规则：总量 ≥ 单文件，否则超大文件永远发不出去——先被总量闸拒，
+// UI 却仍在宣称单文件上限有效；2026-10-30 出厂默认自相矛盾事故即此类）。
+//
+// 任一为 0（= 不限）不构成矛盾，与管理台告警/对齐按钮、前端 uploadCapMismatch
+// 同口径。判定收口在本执行点，错误文案归调用方（app/config 保存期校验）。
+func BatchCapBelowFileCap(total, perFile int64) bool {
+	return total > 0 && perFile > 0 && total < perFile
+}
+
 // ===== 后台任务预算 =====
 
 // MinTaskInterval 后台周期任务的周期地板（1 分钟）。
