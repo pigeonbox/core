@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/utils"
-	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
 	"github.com/pigeonbox/core/storage"

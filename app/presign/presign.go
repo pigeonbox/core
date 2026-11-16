@@ -28,10 +28,10 @@ import (
 	"github.com/oekit/kitx/uidgen"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/internal/uploadlock"
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/utils"
-	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"gorm.io/gorm"
 )
