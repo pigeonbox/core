@@ -503,9 +503,9 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	// 匿名取件/preview 面共享 (IP, code) 失败计数）
 	lock := middleware.GetDefaultLockout()
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
-	// 预检并入按 IP 的枚举维度（见 pkg/gate.PickupLockedRemain）
-	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), fileCode.Code); locked {
-		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain))
+	// 预检并入按 IP 的枚举维度（统一执行点 gate.PrecheckPickup，core#173 第二片）
+	if perr := gate.PrecheckPickup(ctx, middleware.ClientIP(c), fileCode.Code); perr != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, perr.Error())
 		return
 	}
 
@@ -706,8 +706,8 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 	// 维度（换码也命中）不依赖码本身；(IP, 码) 维度命中原始码入口。解析后的
 	// **规范码**预检保留在下方（2026-10-24 定位：6 位/8 位共享一把钥匙的
 	// 密码爆破面），两道预检语义互补、不互替。
-	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), code); locked {
-		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain))
+	if perr := gate.PrecheckPickup(ctx, middleware.ClientIP(c), code); perr != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, perr.Error())
 		return nil, "", false
 	}
 
@@ -747,9 +747,9 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 	// preview 面共享 (IP, code) 失败计数——此前独立 scope "download"）
 	lock := middleware.GetDefaultLockout()
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), fileCode.Code)
-	// 预检并入按 IP 的枚举维度（见 pkg/gate.PickupLockedRemain）
-	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), fileCode.Code); locked {
-		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", remain))
+	// 预检并入按 IP 的枚举维度（统一执行点 gate.PrecheckPickup，core#173 第二片）
+	if perr := gate.PrecheckPickup(ctx, middleware.ClientIP(c), fileCode.Code); perr != nil {
+		resp.NewErrorWithMessage(c, errcode.CodeTooManyAttempts, perr.Error())
 		return nil, "", false
 	}
 

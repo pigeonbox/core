@@ -878,6 +878,16 @@ type UpdateConfig struct {
 	// 允许自建镜像（企业内网），但**必须 https**（localhost 例外）。
 	// env: PB_UPDATE_ENDPOINT
 	Endpoint string `mapstructure:"endpoint"`
+	// ReportURL 可选的匿名安装分布上报地址（hub#385）。
+	//
+	// **默认空 = 关闭**。设为非空后，每次更新检查（默认 24h 一次）成功时，
+	// 向该地址 POST 一条**只含** {version, platform, arch, upgrade_from,
+	// schema_version, instance_id, checked_at} 的 JSON——用于聚合
+	// 「安全修复到达率」（维护者侧看到版本分布），不含站点域名、文件内容、
+	// 用户数据。instance_id 是数据目录下的随机标识（删文件即重置）。
+	// 字段清单与隐私边界见 docs/DIAGNOSTICS.md。
+	// env: PB_UPDATE_REPORT_URL
+	ReportURL string `mapstructure:"report_url"`
 }
 
 // BackupConfig 定时自动备份（2026-11-06，5.1.0）。

@@ -289,15 +289,18 @@ func TestFederationFollowsRedirect(t *testing.T) {
 	}
 }
 
-// TestOutboundClientExclusivity 机械守卫（core#87 判据）：整个模块里
-// `&http.Client{` 只允许出现在注册表内部与**显式豁免清单**，双向对账——
-//   - 新增裸构造 ⇒ 红（须走注册表，或连同理由登记豁免）；
+// TestOutboundClientExclusivity 机械守卫（core#87 判据，core#173 第二片扩面）：
+// 整个模块里出站客户端只允许经注册表构造，双向对账——
+//   - 新增裸 `&http.Client{` 构造 ⇒ 红（须走注册表，或连同理由登记豁免）；
+//   - 新增裸出站调用（http.Get/Post/Head、http.DefaultClient，剔除全行注释
+//     后匹配）⇒ 红——它们同样绕过注册表，超时/重定向/拨号守卫/观测全失效；
 //   - 豁免文件被收编/删除后仍留在清单 ⇒ 红（清单必须匹配现实，防陈旧）；
 //   - 注册表自身不再构造 ⇒ 红（守卫自身失效自检）。
 //
-// 豁免条目都是 issue 现状表未枚举、且各有不可机械套 15s 基准的 per-site 策略
-// 的构造点（一次性探测的自定义 TLS transport / 可配超时 / 驱动级长传超时），
-// 收编决策留步骤 1.5 或单独立项。
+// 豁免条目仅剩 OpenDAL 三家驱动（SDK 持有长传 transport，挂 outbound.New 会
+// 把 5min/15min 长传腰斩成客户端级超时——挂不上，理由随条目登记）。原豁免的
+// app/storage 探测（死代码已删）与 app/updatecheck（TargetUpdateCheck 收编）
+// 已于 core#173 第二片移出清单。
 func TestOutboundClientExclusivity(t *testing.T) {
 	root, err := moduleRoot()
 	if err != nil {
@@ -305,15 +308,17 @@ func TestOutboundClientExclusivity(t *testing.T) {
 	}
 
 	registryFile := "pkg/outbound/outbound.go"
+	// core#173 第二片后仅剩 OpenDAL 三家：SDK 持有长传 transport，挂
+	// outbound.New 会把 5min/15min 长传腰斩成客户端级超时——挂不上，理由随条目。
 	exempt := map[string]string{
-		"app/storage/service.go":      "probeHTTP/probeWebDAV 一次性管理面探测（自定义 TLS transport MinVersion TLS1.2）——步骤 1.5 候选",
-		"app/updatecheck/service.go":  "更新检查器（可配超时 + 禁重定向 + 自带 TTL 缓存）——步骤 1.5 候选",
 		"storage/opendal/azblob.go":   "OpenDAL 驱动 5min 长传（大文件语义，不适用 15s 基准）",
 		"storage/opendal/hdfs.go":     "OpenDAL 驱动 5min 长传（大文件语义，不适用 15s 基准）",
 		"storage/opendal/onedrive.go": "OpenDAL 驱动 15min 长传（大文件语义，不适用 15s 基准）",
 	}
 
 	found := map[string]bool{}
+	rawFound := map[string]string{}
+	rawPatterns := []string{"http.Get(", "http.Post(", "http.Head(", "http.DefaultClient"}
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -331,12 +336,27 @@ func TestOutboundClientExclusivity(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
 		if strings.Contains(string(data), "&http.Client{") {
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
+			found[rel] = true
+		}
+		// 裸出站调用扫描（core#173 第二片）：http.Get/Post/Head 与
+		// http.DefaultClient 同样绕过注册表。先剔除全行注释再匹配——
+		// 历史注释里多处写「原 http.DefaultClient」（不剔除必假红）。
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue
 			}
-			found[filepath.ToSlash(rel)] = true
+			for _, p := range rawPatterns {
+				if strings.Contains(line, p) {
+					rawFound[rel] = p
+					break
+				}
+			}
 		}
 		return nil
 	})
@@ -360,6 +380,10 @@ func TestOutboundClientExclusivity(t *testing.T) {
 		if !found[f] {
 			t.Errorf("豁免清单条目 %s 已不再含裸构造（文件被收编或删除）——请从清单移除该条目", f)
 		}
+	}
+	// 裸出站调用命中即红：注册表是唯一出站客户端构造点（core#173 第二片）。
+	for f, p := range rawFound {
+		t.Errorf("发现绕过注册表的裸出站调用 %s —— 命中标记 %q：请改走 outbound.New(Target*)（超时/重定向/拨号守卫/观测会同时失效）", f, p)
 	}
 }
 

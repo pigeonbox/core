@@ -17,6 +17,7 @@ package gate
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/utils"
@@ -84,6 +85,32 @@ func PickupLockedRemain(ctx context.Context, clientIP, code string) (int, bool) 
 		return enumRemain, true
 	}
 	return remain, locked
+}
+
+// PickupLockedError 统一取件入口预检失败形态（core#173 第二片收口）。
+// 文案单处生效：此前同一句「尝试过于频繁，已临时锁定，请 N 秒后重试」在
+// 8 个入口各抄一份（c.JSON / resp.NewErrorWithMessage 两种形态），改文案
+// 漏改即口径漂移。HTTP 适配层一律映射 429 + CodeTooManyAttempts。
+type PickupLockedError struct{ Remain int }
+
+// Error 剩余锁定秒数（与 middleware.LockedError 历史文案逐字一致）。
+func (e *PickupLockedError) Error() string {
+	return fmt.Sprintf("尝试过于频繁，已临时锁定，请 %d 秒后重试", e.Remain)
+}
+
+// PrecheckPickup 统一取件入口预检（执行点①：取件码枚举 / 防爆破锁定）。
+//
+// 所有公开取件入口在查询/交付前必须先过这里：锁定 ⇒ 返回 *PickupLockedError
+// （HTTP 层据此回 429）；放行 ⇒ nil。判定含两个维度（(IP,码) 与按 IP 的
+// 枚举维度，见 PickupLockedRemain），入口不再各自手搓 if-块。
+//
+// 守卫：bootstrap/pickup_entry_guard_test.go —— 交付面源文件不含
+// gate.PrecheckPickup( 调用 ⇒ 测试红（新入口未走收口点必红）。
+func PrecheckPickup(ctx context.Context, clientIP, code string) error {
+	if remain, locked := PickupLockedRemain(ctx, clientIP, code); locked {
+		return &PickupLockedError{Remain: remain}
+	}
+	return nil
 }
 
 // PickupState 取件目标分享的状态快照（域侧从 model.FileCode 映射；

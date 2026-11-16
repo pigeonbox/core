@@ -239,10 +239,10 @@ func Retrieve(ctx context.Context, c *app.RequestContext) {
 	lockKey := gate.PickupLockKey(middleware.ClientIP(c), req.Code)
 	// 预检并入**按 IP 的枚举维度**（2026-11-06）：只查 (IP, 码) 会漏掉「枚举已
 	// 把这个 IP 锁上」的情形——预检放行、域内闸门再拒，白跑一次业务查询。
-	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), req.Code); locked {
+	if perr := gate.PrecheckPickup(ctx, middleware.ClientIP(c), req.Code); perr != nil {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
-			"message": "尝试过于频繁，已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
+			"message": perr.Error(),
 		})
 		return
 	}
@@ -333,10 +333,10 @@ func Download(ctx context.Context, c *app.RequestContext) {
 	}
 	// 失败锁定预检（core#163：与 Retrieve 同口径——本面此前无预检无记账，
 	// 枚举只剩 QPS 桶；预检含按 IP 的枚举维度，见 gate.PickupLockedRemain）
-	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), code); locked {
+	if perr := gate.PrecheckPickup(ctx, middleware.ClientIP(c), code); perr != nil {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
-			"message": "尝试过于频繁，已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
+			"message": perr.Error(),
 		})
 		return
 	}
@@ -414,10 +414,10 @@ func SearchByCode(ctx context.Context, c *app.RequestContext) {
 	}
 	// 失败锁定预检（core#163：与 Retrieve 同口径——本面此前无预检无记账，
 	// 枚举只剩 QPS 桶；预检含按 IP 的枚举维度，见 gate.PickupLockedRemain）
-	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), code); locked {
+	if perr := gate.PrecheckPickup(ctx, middleware.ClientIP(c), code); perr != nil {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
-			"message": "尝试过于频繁，已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
+			"message": perr.Error(),
 		})
 		return
 	}

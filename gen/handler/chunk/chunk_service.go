@@ -623,6 +623,19 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	}
 	defer release()
 
+	// 跨副本互斥（core#191）：uploadlock 只在进程内，多副本部署（public × N）
+	// 下两个 Pod 各自加各自的进程锁、互不可见 ⇒ 同一 upload_id 可被并发
+	// Complete。DB 级命名闸（MySQL GET_LOCK / PG advisory lock / sqlite 进程
+	// 条纹的方言分派）收口正确性；进程锁降级为减少 DB 往返的性能层。
+	// 失败（等待超时/ctx 取消）= 有并发方正在完成同一会话 ⇒ 返回错误让客户端
+	// 重试（重试进入时幂等回读必命中）。
+	dRelease, dErr := getChunkService().LockCompletion(ctx, uploadID)
+	if dErr != nil {
+		resp.NewInternalError(c, errcode.CodeInternal, "获取上传会话跨副本互斥权（可能有并发完成，请重试）", dErr)
+		return
+	}
+	defer dRelease()
+
 	// 幂等：同一 upload_id 已建过分享 ⇒ **复用**（不新建行、不重复扣次、
 	// 不重复计配额，**也不再合并出第二份物理文件**）。
 	//

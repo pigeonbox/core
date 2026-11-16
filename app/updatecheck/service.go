@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pigeonbox/core/pkg/outbound"
 )
 
 // 结果来源（Result.Source）。
@@ -81,6 +83,16 @@ type Config struct {
 	Timeout time.Duration
 	// UserAgent 出站 UA（只允许公开信息）。
 	UserAgent string
+	// ReportURL 可选匿名安装分布上报地址（hub#385）。**空 = 关闭（默认）**。
+	// 设为非空时，每次成功检查（默认 24h 一次）向该地址 POST 一条只含
+	// reportPayload 字段的 JSON——用于聚合「安全修复到达率」。
+	ReportURL string
+	// InstanceID 安装实例随机标识（bootstrap 生成并持久化；仅用于上报去重）。
+	InstanceID string
+	// UpgradeFrom 上一次运行的构建版本（全新安装为空；hub#385）。
+	UpgradeFrom string
+	// SchemaVersion 已应用的迁移版本（未启用版本化迁移时为空；hub#385）。
+	SchemaVersion string
 }
 
 // Result 一次检查的结论（可直接序列化进 /admin/diagnostics）。
@@ -151,14 +163,12 @@ func New(cfg Config) *Checker {
 	}
 	return &Checker{
 		cfg: cfg,
-		client: &http.Client{
-			Timeout: cfg.Timeout,
-			// 不跟随跳转：GitHub API 正常不跳；跟随会让「配置被改成任意 URL」的
-			// 影响面变大（跳转目标不受 https 校验约束）。
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		// 出站统一走注册表（core#173 第二片收编）：禁跳转与超时策略迁入
+		// pkg/outbound 策略表（TargetUpdateCheck），出站观测（metrics）同族生效。
+		// 禁跳转语义不变：GitHub API 正常不跳；跟随会让「配置被改成任意 URL」的
+		// 影响面变大（跳转目标不受 https 校验约束）。请求级超时不变：
+		// fetch 恒带 context.WithTimeout(cfg.Timeout)（策略表 timeout=0 由其治理）。
+		client: outbound.New(outbound.TargetUpdateCheck),
 	}
 }
 
@@ -275,6 +285,7 @@ func (c *Checker) fetch(ctx context.Context) Result {
 
 	cf := &cacheFile{Latest: rel.TagName, URL: rel.HTMLURL, CheckedAt: time.Now().UTC()}
 	c.storeCache(cf)
+	c.reportInstall(cf.CheckedAt)
 	return resultFromCache(c.cfg.Current, cf, false, "")
 }
 

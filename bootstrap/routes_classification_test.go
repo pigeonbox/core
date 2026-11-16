@@ -106,6 +106,10 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 		Reason:  "平台面：部署自检快照（2026-10-30），供官方 CLI `pb doctor` 消费——只读的运行事实集合（DB/存储/Redis/版本/部署模式/首启状态），不是业务 API；管理面鉴权（AdminOrAdminKey）",
 		Pending: false,
 	},
+	"POST /admin/storage/gc-jobs/replay": {
+		Reason:  "运维面：对象 GC 死信重放（core#192）——dead ⇒ pending 的人工排障动作（远端恢复后重给机会），不是业务实体 API；管理面鉴权（AdminOrAdminKey），与 /admin/diagnostics 同面",
+		Pending: false,
+	},
 	// （core#122 通知渠道测试发送已于 2026-11-13 收敛进 IDL：admin.thrift ⇒
 	// gen/router/admin 生成路由，本表的 Pending 条目随之移除——测试里的 ⑥「IDL
 	// 集与手写集互斥」即它的回归锁：手写注册加回即红。）
