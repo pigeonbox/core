@@ -958,6 +958,8 @@ type SecurityConfig struct {
 	// RequireAdminWebAuthn 管理员 Passkey 强制闸（core#160；env
 	// PB_SECURITY_REQUIRE_ADMIN_WEBAUTHN；**默认 false = 不影响存量登录**）。
 	// 开闸语义见 app/admin/webauthn.go：已登记 passkey 的管理员不再放行纯口令。
+	// 删除最后一把 passkey（core#209）后计数归零 ⇒ 该管理员自动回到未登记态，
+	// 纯口令重新放行（避免管理员把自己锁死）。
 	RequireAdminWebAuthn bool `mapstructure:"require_admin_webauthn"`
 	// WebAuthn 依赖方（RP）参数（core#160）。
 	WebAuthn WebAuthnConfig `mapstructure:"webauthn"`
