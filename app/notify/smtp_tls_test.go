@@ -119,7 +119,7 @@ func startSMTPTestServer(t *testing.T, opts smtpServerOpts) (string, int, *smtpS
 	require.NoError(t, err)
 	st := &smtpServerState{}
 
-	var serveLn net.Listener = ln
+	serveLn := net.Listener(ln)
 	if opts.implicitTLS {
 		serveLn = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{cert}})
 	}
