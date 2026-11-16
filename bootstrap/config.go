@@ -142,6 +142,7 @@ func setDefaults(v *viper.Viper) {
 	// ⇒ 依赖 24h 缓存（updatecheck 包），不能每次打开后台都查。
 	v.SetDefault("update.check_enabled", true)
 	v.SetDefault("update.endpoint", "https://api.github.com/repos/pigeonbox/pigeonbox/releases/latest")
+	v.SetDefault("update.report_url", "")
 	// 定时自动备份（2026-11-06，5.1.0）默认**关闭**：它写盘且写在哪由部署形态
 	// 决定，默认开一个新的大写入源会让升级变成风险动作。
 	// keep 默认 7；`<=0 = 不限`（安全方向：误配 0 不该删光备份）。
@@ -206,6 +207,7 @@ var envBindings = map[string][]string{
 	// update（更新检查）
 	"update.check_enabled": {"PB_UPDATE_CHECK_ENABLED"},
 	"update.endpoint":      {"PB_UPDATE_ENDPOINT"},
+	"update.report_url":    {"PB_UPDATE_REPORT_URL"},
 	// backup（定时自动备份，5.1.0）
 	"backup.enabled": {"PB_BACKUP_ENABLED"},
 	"backup.dir":     {"PB_BACKUP_DIR"},
