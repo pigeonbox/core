@@ -33,6 +33,7 @@ import (
 	"github.com/pigeonbox/core/pkg/baseurl"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
+	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 )
 
@@ -95,6 +96,9 @@ type Service struct {
 	objects ObjectStore
 	// fileCodeRepo 秒传检索用（此前 CheckQuickUpload 方法体内联现建）
 	fileCodeRepo *dao.FileCodeRepository
+	// blobRepo 会话账本（core#172 第三片：Pending→Uploading→Committed 生产流转；
+	// 接点见 blobstate.go。nil 守卫同首片口径，best-effort 不阻断主链）
+	blobRepo *dao.BlobRepository
 	// nowFn 过期判定的时钟注入点（缺省真实墙钟；测试可控推进——签名时效的
 	// 生效与否是「传输期跨越过期时刻」类缺陷的判据量，必须可被测试测量）。
 	nowFn func() time.Time
@@ -233,6 +237,7 @@ func NewService(gormDB *gorm.DB, rdb *redis.Client, baseURL string, signingKey s
 		signingKey:    []byte(signingKey),
 		baseURL:       baseURL,
 		fileCodeRepo:  dao.NewFileCodeRepository(gormDB),
+		blobRepo:      dao.NewBlobRepository(gormDB),
 	}
 }
 
@@ -396,6 +401,9 @@ func (s *Service) Init(ctx context.Context, meta InitMeta) (*InitResult, error) 
 		return nil, err
 	}
 
+	// 账本 pending 落行（core#172 第三片）：会话已建、写未开始。best-effort。
+	s.blobEnsurePending(ctx, &meta)
+
 	return &InitResult{
 		UploadID:      uploadID,
 		UploadURL:     uploadURL,
@@ -473,6 +481,8 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 	// URL 时效承担，完成面以 3.5 的对象存在性核实为真闸门 ⇒ 同样不在此拒。
 	if s.nowTime().After(meta.ExpireAt) && !meta.Transferred && meta.Scheme != SchemeS3 {
 		s.rdb.Del(ctx, fmt.Sprintf(keyUploadMeta, uploadID))
+		// 会话死亡：账本转 aborted（core#172 第三片；行不存在则 noop）。
+		s.blobAdvance(ctx, meta.ObjectKey, model.BlobAborted)
 		return nil, ErrUploadExpired
 	}
 
@@ -535,6 +545,8 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 				if cerr := utils.CheckUploadContent(meta.FileName, buf[:n]); cerr != nil {
 					_ = s.storage.DeleteFile(ctx, meta.ObjectKey)
 					s.rdb.Del(ctx, fmt.Sprintf(keyUploadMeta, uploadID))
+					// 对象已删、会话已清：账本转 aborted（core#172 第三片）。
+					s.blobAdvance(ctx, meta.ObjectKey, model.BlobAborted)
 					return nil, cerr
 				}
 			}
@@ -573,6 +585,11 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 		}
 		return nil, ErrAlreadyComplete
 	}
+
+	// 4.5 账本推进到 committed（core#172 第三片）：对象存在性已核实（3.5/3.6），
+	// 分享即将发布。self 方案在 UploadDirect 已推进（此处 noop）；s3 方案在此沿
+	// pending→uploading→committed 逐跳走（服务端不见流量，HeadObject 为据）。
+	s.blobAdvance(ctx, meta.ObjectKey, model.BlobCommitted)
 
 	// 5. 调 share service 写分享表
 	shareCode, shareURL, fullShareURL, pickupCode, shareErr := s.createShareRecord(ctx, &meta, ownerIP)
@@ -703,7 +720,12 @@ func (s *Service) Abort(ctx context.Context, uploadID, token string) error {
 	if !hmac.Equal([]byte(expected), []byte(token)) {
 		return ErrTokenInvalid
 	}
-	return s.rdb.Del(ctx, fmt.Sprintf(keyUploadMeta, uploadID)).Err()
+	if err := s.rdb.Del(ctx, fmt.Sprintf(keyUploadMeta, uploadID)).Err(); err != nil {
+		return err
+	}
+	// 会话显式中止：账本转 aborted（core#172 第三片；best-effort，行不存在 noop）。
+	s.blobAdvance(ctx, meta.ObjectKey, model.BlobAborted)
+	return nil
 }
 
 // GetMeta 查询（管理后台用）
@@ -763,6 +785,8 @@ func (s *Service) UploadDirect(ctx context.Context, uploadID, token string, body
 		}
 	}
 	body = br
+	// 3.7 账本 pending → uploading（core#172 第三片）：写入即将开始。best-effort。
+	s.blobAdvance(ctx, meta.ObjectKey, model.BlobUploading)
 	// 4. 流式写入 + 内容哈希：超出申报大小立即截断报错（防多传绕过大小校验）
 	hasher := sha256.New()
 	limited := io.LimitReader(body, meta.FileSize+1)
@@ -814,6 +838,9 @@ func (s *Service) UploadDirect(ctx context.Context, uploadID, token string, body
 		}
 		return fmt.Errorf("文件大小与申报不符（实际 %d / 申报 %d）", written, meta.FileSize)
 	}
+	// 3.8 账本 uploading → committed（core#172 第三片）：字节已落盘且大小复核通过。
+	// meta 回写失败也不回退状态——对象确实在盘上，重放 PUT 幂等（advance noop）。
+	s.blobAdvance(ctx, meta.ObjectKey, model.BlobCommitted)
 	// 5. 内容 SHA-256 回写 meta（Complete 时写入 file_codes.file_hash）+
 	//    置位 Transferred（数据面完成标记，见 InitMeta.Transferred）。
 	//    ⚠️ 这次回写必须**无条件**落盘且带 completeGrace：此前按
