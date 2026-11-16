@@ -201,6 +201,12 @@ func startMaintenanceJanitor() {
 		} else if n > 0 {
 			logger.Info("blobs reclaimed", zap.Int("count", n))
 		}
+		// 三方引用对账扫描（core#172 尾项）：账本↔路径↔存储四类漂移，
+		// 只报告不修（gauge pb_blob_reconcile_drift 由扫描自刷新；
+		// 失败仅告警不阻断后续清理——扫描是观测面不是主链）
+		if _, err := j.ScanBlobDrift(ctx); err != nil {
+			logger.Warn("blob drift scan failed", zap.Error(err))
+		}
 		if n, err := j.CleanupLogs(ctx); err != nil {
 			logger.Warn("log retention cleanup failed", zap.Error(err))
 		} else if n > 0 {
