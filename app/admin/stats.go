@@ -27,6 +27,11 @@ type AdminStats struct {
 	ExpiringSoonFiles int64 `json:"expiring_soon_files"`
 	NeverPickedFiles  int64 `json:"never_picked_files"`
 	ForeverFiles      int64 `json:"forever_files"`
+	// 物理对象占用（core#193）：按存储路径去重后的字节合计（含回收站软删）。
+	// 与 TotalSize/StorageUsed（逻辑分享容量，未去重）并列——秒传/多分享复用
+	// 同一 blob 时逻辑口径显著高于物理口径，两个数分列可解释
+	// 「配额为什么满」与「磁盘真实占用」。
+	TotalSizePhysical int64 `json:"total_size_physical"`
 }
 
 // GetStats 获取管理员统计信息。
@@ -45,12 +50,20 @@ func (s *Service) GetStats(ctx context.Context) (*AdminStats, error) {
 	}
 	stats.TotalFiles = totalFiles
 
-	// 物理口径含回收站（评审 D01）：与站点配额闸同源，purge 前软删仍占盘。
-	totalSize, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx)
+	// 逻辑分享容量（core#193 正名）：SUM 分享行，含回收站软删、未去重——
+	// 与站点配额闸同源，purge 前软删仍占盘。
+	totalSize, err := s.fileCodeRepo.GetLogicalShareSizeIncludingDeleted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("统计 total_size: %w", err)
 	}
 	stats.TotalSize = totalSize
+
+	// 物理对象占用（core#193）：按存储路径去重，管理台与逻辑口径分列展示。
+	physicalSize, err := s.fileCodeRepo.GetPhysicalObjectUsage(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("统计 total_size_physical: %w", err)
+	}
+	stats.TotalSizePhysical = physicalSize
 
 	todayUploads, err := s.fileCodeRepo.CountTodayUploads(ctx)
 	if err != nil {
@@ -123,9 +136,12 @@ type EnhancedStats struct {
 	AnonymousFiles   int64             `json:"anonymous_files"`
 	PresignFiles     int64             `json:"presign_files"`
 	TopSuffixes      []*dao.SuffixStat `json:"top_suffixes"`
-	// 站点级存储配额（storage.quota，0=不限）与当前用量（物理口径，含回收站软删）
-	StorageUsed  int64 `json:"storage_used"`
-	StorageQuota int64 `json:"storage_quota"`
+	// 站点级存储配额（storage.quota，0=不限）与当前用量。
+	// StorageUsed=逻辑分享容量（含回收站、未去重；与配额闸同口径——core#193
+	// 正名，不再宣称「物理口径」）；StorageUsedPhysical=物理对象占用（去重）。
+	StorageUsed         int64 `json:"storage_used"`
+	StorageUsedPhysical int64 `json:"storage_used_physical"`
+	StorageQuota        int64 `json:"storage_quota"`
 }
 
 // EnhancedStats 汇总富指标。
@@ -190,12 +206,18 @@ func (s *Service) EnhancedStats(ctx context.Context) (*EnhancedStats, error) {
 	}
 	stats.TopSuffixes = topSuffixes
 
-	// 物理口径含回收站（评审 D01）：StorageUsed 与站点配额闸同源。
-	storageUsed, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx)
+	// 逻辑分享容量（core#193 正名）：与站点配额闸同口径（含回收站、未去重）。
+	storageUsed, err := s.fileCodeRepo.GetLogicalShareSizeIncludingDeleted(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("统计 storage_used: %w", err)
 	}
 	stats.StorageUsed = storageUsed
+	// 物理对象占用（core#193）：按存储路径去重，与逻辑口径分列。
+	storageUsedPhysical, err := s.fileCodeRepo.GetPhysicalObjectUsage(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("统计 storage_used_physical: %w", err)
+	}
+	stats.StorageUsedPhysical = storageUsedPhysical
 	if cfg := conf.GetGlobalConfig(); cfg != nil {
 		stats.StorageQuota = cfg.Storage.Quota
 	}

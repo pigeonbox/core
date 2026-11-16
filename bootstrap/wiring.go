@@ -43,6 +43,7 @@ import (
 	anonHandler "github.com/pigeonbox/core/gen/handler/share_anonymous"
 	storageHandler "github.com/pigeonbox/core/gen/handler/storage"
 	userHandler "github.com/pigeonbox/core/gen/handler/user"
+	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/pkg/auth"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/middleware"
@@ -106,6 +107,9 @@ func initThriftIDLServices(database *gorm.DB) {
 		baseURL,
 		signingKey)
 	presignSvc.SetBaseURLProvider(publicBaseURL)
+	// 跨副本完成面互斥闸（core#191）：多副本部署下同一 upload_id 的并发
+	// Complete 由 DB 级命名闸串行化（chunk 通道闸随 app/chunk.Service 自建）。
+	presignSvc.SetCrossReplicaGate(dblock.NewDLock(database))
 	presignHandler.SetService(presignSvc)
 	// 2.1 注入 share service（Complete 时写分享表）
 	shareSvc := shareService.NewService(database, baseURL, getBootstrapStorageService())
@@ -212,6 +216,9 @@ func initThriftIDLServices(database *gorm.DB) {
 	userSvc.SetBaseURL(bootstrapBaseURL())
 	shareSvc.SetUserService(userSvc)
 	shareSvc.SetQuotaChecker(userSvc)
+	// 用户级配额上限解析（core#169 闸内权威复核）：插入时的串行段内按
+	// user 域同源规则（MaxStorageQuota > 系统默认）重读上限并合计判定。
+	shareSvc.SetQuotaChecker(userSvc)
 	// user 面 handler 同实例注入：注册开关/配额默认值经 DefaultsProvider 桥到
 	// admin 持久化配置（此前 handler 直连 admin 包级单例，跨面依赖绕过装配点）
 	userHandler.SetUserService(userSvc)
@@ -304,7 +311,19 @@ func initThriftIDLServices(database *gorm.DB) {
 	p2pGenHandler.SetAuditWriter(adminApp.Default().LogOperation)
 
 	// 3. anonymous service（需要 Redis）
-	anonHandler.SetService(anonymousApp.NewService(redis.GetClient(), database))
+	anonSvcInstance := anonymousApp.NewService(redis.GetClient(), database)
+	// 站点配额读点（core#169 占位回填闸用）：构造注入，anonymous 域不直读全局
+	// 配置（规则 8）。
+	anonSvcInstance.SetSiteQuotaSource(func() int64 {
+		// 读装配层生效配置快照（config = conf.AppConfiguration 别名，
+		// Bootstrap overlay 后整体重指向——与 GetGlobalConfig 同一活指针）；
+		// 直读会撞规则 8 棘轮（wiring 基线 0）。
+		if config != nil {
+			return config.Storage.Quota
+		}
+		return 0
+	})
+	anonHandler.SetService(anonSvcInstance)
 
 	// 4.5 取件码铸造接线（2026-10-07）：share 域经窄接口调用 anonymous 域，
 	// 文件分享出码时同步铸 6 位取件码（须共用同一 anon 实例，Redis/内存 KV 才一致）
@@ -421,6 +440,8 @@ func initThriftIDLServices(database *gorm.DB) {
 		async.GoSafe(startAPIKeyExpiryNotify)
 		// 存储对账 + 日志保留（治理 2026-10-03）：24h 周期，启动 10 分钟后首跑
 		async.GoSafe(startMaintenanceJanitor)
+		// 对象 GC 任务面消费（core#192）：1 分钟周期（purge outbox 的异步执行段）
+		async.GoSafe(startGCJobsWorker)
 		async.GoSafe(startAccountTrustCleanup)
 		// 定时自动备份（5.1.0）：默认关闭（backup.enabled=false ⇒ 函数内自检
 		// 直接返回）；开启后「目标时刻已过 + 当天无包」才导出，一天一份。

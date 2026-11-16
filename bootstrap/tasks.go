@@ -100,6 +100,29 @@ func startExpiredFileCleanup(svc *adminApp.Service) {
 	}))
 }
 
+// startGCJobsWorker 对象 GC 任务面消费（core#192）：1 分钟周期。认领（行级
+// CAS 抢占 + 租约）→ 删前引用复核 → 删对象 → 终态/退避；attempts 耗尽进
+// dead（诊断一屏 + /admin/storage/gc-jobs/replay 重放）。与 purge outbox
+// 共用 admin service 的同一 GCService 实例（purge 在业务事务里登记任务，
+// 本循环只消费）。多副本部署仅 admin 面装配（与 janitor 同守卫）；
+// 即使误配多 worker，CAS 抢占也保证任务不被并发执行。
+func startGCJobsWorker() {
+	adminSvc := adminApp.Default()
+	gc := adminSvc.GC()
+	trackBackgroundLoop(loop.Run(backgroundContext(), loop.Config{
+		Name:       "gc-jobs-worker",
+		Interval:   time.Minute,
+		FirstDelay: time.Minute,
+	}, func(ctx context.Context) {
+		n, err := gc.RunOnce(ctx)
+		if err != nil {
+			logger.Warn("gc jobs run failed", zap.Error(err))
+		} else if n > 0 {
+			logger.Info("gc jobs processed", zap.Int("count", n))
+		}
+	}))
+}
+
 // tasksDB 后台任务取的全局 DB 句柄（装配层显式句柄，棘轮规则 10 的唯一访问点）。
 //
 // 收成一个函数而不是各处直取：规则 10 按**访问点**计数且只许减不许增

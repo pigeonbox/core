@@ -2,8 +2,11 @@ package dao
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/repo/db/model"
 	"gorm.io/gorm"
 )
@@ -243,15 +246,96 @@ func (r *FileCodeRepository) GetTotalSize(ctx context.Context) (int64, error) {
 	return totalSize, err
 }
 
-// GetTotalSizeIncludingDeleted 物理口径合计（评审 D01）：含回收站软删行——
-// purge 前对象仍占盘，站点配额/「已用存储」展示必须按此口径；
-// 与 InsightStats（filecode_runtime.go，core#107）的 Unscoped 口径一致。
-// 用户配额（GetTotalSizeByUserID）是逻辑口径，不走此方法。
-func (r *FileCodeRepository) GetTotalSizeIncludingDeleted(ctx context.Context) (int64, error) {
+// ── 配额闸（core#169）─────────────────────────────────────────────────────
+
+// quotaGateWait 配额闸取锁等待上限（本仓多把闸共用一个量级；持有者是毫秒级
+// 的「合计+判定+插入」，2 分钟上限只是防僵死的兜底，正常永远到不了）。
+const quotaGateWait = 2 * time.Minute
+
+// UnderQuotaGateTx 在**配额闸**串行段内执行 mutate（core#169）。
+//
+// 缺陷背景：checkUploadCaps / CheckQuota 是「读合计 → 比上限 → 放行」，插入
+// 发生在之后（CreateShare/chunk/presign 完成链）——check-then-act 无原子性，
+// N 个并发上传各自读到同一 used、全部通过判定后各自 insert ⇒ 实际占用可达
+// quota + (N-1)×size。这是「绕过上传配额 + 打满磁盘」的直接通道。
+//
+// 修法（issue 方案「收进同一事务并串行化」）：mutate 在拿到**跨副本命名互斥**
+// （db.QuotaGateKey，MySQL GET_LOCK / PG advisory lock / sqlite 进程条纹）之后
+// 的单事务里执行——后到者读到的合计必然包含先到者的插入。站点配额与用户配额
+// 的权威复核都应在 mutate 内做（见 app/share 的 quotaGateGuard；dao 不持配额
+// 上限语义，只提供串行段）。
+//
+// 方言纪律：sqlite 层是进程内条纹互斥（standalone 单进程部署形态下与 DB 级
+// 互斥等价）；MySQL/PG 是真会话锁，多副本部署下同样串行。持锁期间不要做慢
+// IO——mutate 只做「合计 + 判定 + 写行」。
+func (r *FileCodeRepository) UnderQuotaGateTx(ctx context.Context, mutate func(tx *gorm.DB) error) error {
+	if mutate == nil {
+		return errors.New("quota gate: nil mutate")
+	}
+	lock := dblock.NewDLock(r.conn)
+	release, err := lock.Lock(ctx, dblock.QuotaGateKey())
+	if err != nil {
+		return fmt.Errorf("配额闸互斥获取失败: %w", err)
+	}
+	defer release()
+	return r.conn.WithContext(ctx).Transaction(mutate)
+}
+
+// SumShareSizeIncludingDeletedTx 闸内**站点口径**合计（含回收站软删行、未去重
+// ——与 GetLogicalShareSizeIncludingDeleted 同口径，tx 作用域保证读到本事务
+// 可见的最新写入）。配额复核用；裸调用（闸外）等于回到 check-then-act。
+func SumShareSizeIncludingDeletedTx(tx *gorm.DB) (int64, error) {
+	var total int64
+	err := tx.Unscoped().Model(&model.FileCode{}).
+		Select("COALESCE(SUM(size), 0)").Scan(&total).Error
+	return total, err
+}
+
+// SumShareSizeByUserTx 闸内**用户口径**合计（仅存活行——用户配额是逻辑口径，
+// 与 GetTotalSizeByUserID 同域）。
+func SumShareSizeByUserTx(tx *gorm.DB, userID uint) (int64, error) {
+	var total int64
+	err := tx.Model(&model.FileCode{}).
+		Where("user_id = ?", userID).
+		Select("COALESCE(SUM(size), 0)").Scan(&total).Error
+	return total, err
+}
+
+// GetLogicalShareSizeIncludingDeleted 逻辑分享容量合计（core#193 正名，原名
+// GetTotalSizeIncludingDeleted 的「物理口径」名不副实）：SUM(file_codes.size)。
+// 含回收站软删行——purge 前分享行仍在，逻辑用量不回退（评审 D01 的本意）；
+// **未按物理对象去重**：秒传/多分享复用同一 blob 时每个分享各计一次。
+// ⇒ 这是「保守口径」：站点配额闸用它宁可高估也不低估；真实磁盘占用看
+// GetPhysicalObjectUsage。用户配额（GetTotalSizeByUserID）是存活口径，不走此方法。
+func (r *FileCodeRepository) GetLogicalShareSizeIncludingDeleted(ctx context.Context) (int64, error) {
 	var totalSize int64
 	err := r.db().WithContext(ctx).Unscoped().Model(&model.FileCode{}).
 		Select("COALESCE(SUM(size), 0)").Scan(&totalSize).Error
 	return totalSize, err
+}
+
+// GetPhysicalObjectUsage 物理对象占用（core#193 补口径）：按存储相对路径
+// **去重**后的字节合计。数据面=file_codes 主表 ∪ file_code_files 子表的
+// 非空 file_path（主表记首文件、子表记全部文件；秒传共享的同一物理路径
+// 无论出现在哪张表都只计一次）。同路径出现尺寸漂移（脏数据）时取 MAX 的
+// 确定值，不放大。含回收站软删行——purge 前对象仍占盘。
+// 口径外：预览缩略图（janitor 对账管）、分片临时区（会话清理管）、
+// uploads/ 之外的存储内部结构。
+//
+// SQL 三方言（sqlite/mysql/pg）通用：纯派生表 + UNION ALL + GROUP BY。
+func (r *FileCodeRepository) GetPhysicalObjectUsage(ctx context.Context) (int64, error) {
+	var usage int64
+	err := r.db().WithContext(ctx).Raw(`
+		SELECT COALESCE(SUM(sz), 0) FROM (
+			SELECT file_path, MAX(sz) AS sz FROM (
+				SELECT file_path, MAX(size) AS sz FROM file_codes
+					WHERE file_path IS NOT NULL AND file_path <> '' GROUP BY file_path
+				UNION ALL
+				SELECT file_path, MAX(size) AS sz FROM file_code_files
+					WHERE file_path IS NOT NULL AND file_path <> '' GROUP BY file_path
+			) u GROUP BY file_path
+		) t`).Scan(&usage).Error
+	return usage, err
 }
 
 func (r *FileCodeRepository) CountTodayUploads(ctx context.Context) (int64, error) {

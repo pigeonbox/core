@@ -59,6 +59,7 @@ GET /admin/stats/trend | admin | global | admin
 GET /admin/storage | admin | global | storage
 POST /admin/storage/clean-presign-orphans | admin | global | storage
 PUT /admin/storage/config | admin | global | storage
+POST /admin/storage/gc-jobs/replay | admin | global | custom
 GET /admin/storage/insights | admin | global | storage
 POST /admin/storage/migrate | admin | global | storage
 POST /admin/storage/switch | admin | global | storage

@@ -22,6 +22,7 @@ import (
 
 	"github.com/oekit/concurrency/singleflight"
 	"github.com/oekit/kitx/uidgen"
+	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
 	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
@@ -90,7 +91,14 @@ type Service struct {
 	// KV 双未命中到负标记落定之间是击穿窗口，枚举/重试风暴下 N 个相同码
 	// 会放大成 N 轮 DB 查询，Flight 合并为 1 轮（见 lookupShareCode）。
 	flights *singleflight.Flight[string]
+
+	// siteQuotaOf 站点配额（storage.quota）来源（core#169 闸内复核用；
+	// bootstrap 构造注入——规则 8：本文件不直读全局配置）。nil=不限。
+	siteQuotaOf func() int64
 }
+
+// SetSiteQuotaSource 注入站点配额解析（bootstrap 接线；0=不限）。
+func (s *Service) SetSiteQuotaSource(fn func() int64) { s.siteQuotaOf = fn }
 
 // NewService 创建 service（repo 构造注入，去全局化终态）。
 // rdb nil 归一化：typed-nil 接口会骗过"Redis 可用"守卫（!= nil 判真）。
@@ -535,6 +543,16 @@ func (s *Service) ResolvePlaceholder(ctx context.Context, pickupCode string) (st
 	return shareCode, nil
 }
 
+// QuotaExceededError 站点配额超限（占位回填路径；handler 侧按业务码透传
+// CodeStorageQuota，与 share 域配额错误同码）。
+type QuotaExceededError struct{ Used, Quota int64 }
+
+func (e *QuotaExceededError) Error() string {
+	return fmt.Sprintf("站点存储空间已满（已用 %d / 上限 %d 字节；口径：全部分享含回收站、未去重），无法完成上传绑定", e.Used, e.Quota)
+}
+
+func (e *QuotaExceededError) ErrCode() int { return errcode.CodeStorageQuota }
+
 // BindFilePath 把直传完成的对象回填到占位分享（匿名取件码直传通道的最后一公里）。
 // 以实际落盘对象为准更新 file_path 与 size；完成标记由调用方（presign Complete）保证。
 // note 非空时一并写入（先出码会话随 init 携带的文件备注）。
@@ -547,6 +565,11 @@ func (s *Service) ResolvePlaceholder(ctx context.Context, pickupCode string) (st
 // 用户列表/MCP/传输日志**全部**显示 UUID。
 // ⇒ 绑定时把原始名**转写进 text**（此时 file_path 已非空 ⇒ 不再误判文本分享），
 // `uuid_file_name` 回归本义（存储名 = 路径末段），一列只担一种语义。
+//
+// ⚠️ core#169：size 从占位期的 0 抬到实际大小 = 这条通道的一次配额扣减。
+// 此前回填完全绕过站点配额闸（checkUploadCaps 只在 CreateShare/CreateMultiFileShare
+// 入口）⇒ 匿名取件码直传是不经配额的免费通道。现把「合计重读 → 判定 → 改列」
+// 收进配额闸串行段（与文件插入同一把闸）。
 func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, size int64, note string) error {
 	fc, err := s.fileCodeRepo.GetByCode(ctx, shareCode)
 	if err != nil || fc == nil {
@@ -566,7 +589,26 @@ func (s *Service) BindFilePath(ctx context.Context, shareCode, filePath string, 
 	if note != "" {
 		cols["note"] = note
 	}
-	return s.fileCodeRepo.UpdateColumns(ctx, fc.ID, cols)
+	return s.fileCodeRepo.UnderQuotaGateTx(ctx, func(tx *gorm.DB) error {
+		// 闸内权威复核（core#169）：重读行内旧尺寸算增量——占位行并发绑定的
+		// 窗口由「同码完成标记 + 闸串行」收口；合计与判定在同一事务里。
+		var old model.FileCode
+		if err := tx.First(&old, fc.ID).Error; err != nil {
+			return err
+		}
+		if s.siteQuotaOf != nil {
+			if quota := s.siteQuotaOf(); quota > 0 {
+				if used, serr := dao.SumShareSizeIncludingDeletedTx(tx); serr == nil {
+					if used+size-old.Size > quota {
+						return &QuotaExceededError{Used: used, Quota: quota}
+					}
+				} else {
+					logger.CtxWarn(ctx, "全局存储配额闸内统计失败，跳过复核（fail-open）", "err", serr)
+				}
+			}
+		}
+		return tx.Model(&model.FileCode{}).Where("id = ?", fc.ID).Updates(cols).Error
+	})
 }
 
 // storageBaseName 取存储相对路径的末段（存储名；无路径时返回空串）。

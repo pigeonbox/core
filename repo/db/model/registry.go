@@ -78,6 +78,8 @@ var tables = []TableSpec{
 	{Name: "password_reset_tokens", Model: &PasswordResetToken{}, AutoIncrement: true},
 	// 管理员 Passkey（core#160）：以 users.id 为归属键 ⇒ 必须排在 users 之后。
 	{Name: "webauthn_credentials", Model: &WebAuthnCredential{}, AutoIncrement: true},
+	// 对象 GC 持久化任务（core#192）：独立任务表，无外键归属 ⇒ 排末尾。
+	{Name: "gc_jobs", Model: &GCJob{}, AutoIncrement: true},
 }
 
 // Tables 返回全部领域模型的登记清单（**副本**，调用方改不动内部状态）。

@@ -159,6 +159,8 @@ func TestRegisteredRoutesMatchContract(t *testing.T) {
 		"POST /api/v1/user/shares/import-local",
 		// ===== 部署自检快照（2026-10-30 手写；管理面，供官方 CLI pb doctor 消费）=====
 		"GET /admin/diagnostics",
+		// ===== 对象 GC 死信重放（core#192 手写；管理面）=====
+		"POST /admin/storage/gc-jobs/replay",
 		// ===== 账号与信任（5.2.0；user 域生成路由）=====
 		// 二次验证三端点 + 登录设备三端点（登录后可用）+ 找回密码两端点（匿名）
 		"POST /user/totp/setup", "POST /user/totp/enable", "POST /user/totp/disable",

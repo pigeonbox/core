@@ -45,14 +45,22 @@ func (s *Service) GetSystemInfo(ctx context.Context) (*SystemInfo, error) {
 	}, nil
 }
 
-// StorageStatus 存储状态
+// StorageStatus 存储状态。
+//
+// 两个「已用」口径分列（core#193）：UsedSpace=物理对象占用（按存储路径去重，
+// 接近真实磁盘占用）；LogicalUsedSpace=逻辑分享容量（SUM 分享行，含回收站、
+// 未去重——站点配额闸的保守口径）。秒传/多分享复用同一 blob 时后者显著高于
+// 前者，两个数都要能对上「配额为什么满了」与「磁盘还剩多少」两个问题。
 type StorageStatus struct {
-	StorageType  string  `json:"storage_type"`
-	TotalSpace   int64   `json:"total_space"`
-	UsedSpace    int64   `json:"used_space"`
-	FreeSpace    int64   `json:"free_space"`
-	FileCount    int64   `json:"file_count"`
-	UsagePercent float64 `json:"usage_percent"`
+	StorageType string `json:"storage_type"`
+	TotalSpace  int64  `json:"total_space"`
+	// UsedSpace 物理对象占用（去重后；含回收站软删——purge 前仍占盘）。
+	UsedSpace int64 `json:"used_space"`
+	// LogicalUsedSpace 逻辑分享容量（含回收站、未去重；与站点配额闸同口径）。
+	LogicalUsedSpace int64   `json:"logical_used_space"`
+	FreeSpace        int64   `json:"free_space"`
+	FileCount        int64   `json:"file_count"`
+	UsagePercent     float64 `json:"usage_percent"`
 }
 
 // GetStorageStatus 获取存储状态（真实数据）。
@@ -61,16 +69,22 @@ type StorageStatus struct {
 //   - 容量：仅本地后端有磁盘容量语义（Statfs 实测总/可用）；对象存储等远端
 //     后端容量弹性无上限，Total/Free 如实置 0，不虚构数字（此前恒报
 //     local+100GB 假容量，管理面板展示的是虚构信息）。
-//   - UsedSpace：物理口径尺寸合计（含回收站软删——purge 前仍占盘，评审
-//     D01，与站点配额闸同源）；FileCount：存活分享条数。本地模式下不等于
-//     磁盘已用（磁盘还含分片临时区等）。
+//   - UsedSpace：物理对象占用（GetPhysicalObjectUsage，按存储路径去重——
+//     core#193；含回收站软删，purge 前仍占盘）；LogicalUsedSpace：逻辑分享
+//     容量（站点配额闸同口径，未去重）；FileCount：存活分享条数。本地模式下
+//     UsedSpace 不等于磁盘已用（磁盘还含分片临时区等）。
 func (s *Service) GetStorageStatus(ctx context.Context) (*StorageStatus, error) {
 	totalFiles, err := s.fileCodeRepo.Count(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// 物理口径含回收站（评审 D01）。
-	totalSize, err := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx)
+	// 物理口径：按存储路径去重（core#193），含回收站软删（purge 前仍占盘）。
+	physicalUsage, err := s.fileCodeRepo.GetPhysicalObjectUsage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// 逻辑口径：与站点配额闸同源（含回收站、未去重）。
+	logicalUsage, err := s.fileCodeRepo.GetLogicalShareSizeIncludingDeleted(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -83,16 +97,17 @@ func (s *Service) GetStorageStatus(ctx context.Context) (*StorageStatus, error) 
 	}
 
 	st := &StorageStatus{
-		StorageType: storageType,
-		UsedSpace:   totalSize,
-		FileCount:   totalFiles,
+		StorageType:      storageType,
+		UsedSpace:        physicalUsage,
+		LogicalUsedSpace: logicalUsage,
+		FileCount:        totalFiles,
 	}
 	if storageType == string(storage.StorageTypeLocal) && dataPath != "" {
 		if total, free, derr := storage.DiskUsage(dataPath); derr == nil {
 			st.TotalSpace = int64(total)
 			st.FreeSpace = int64(free)
 			if total > 0 {
-				st.UsagePercent = float64(totalSize) / float64(total) * 100
+				st.UsagePercent = float64(physicalUsage) / float64(total) * 100
 			}
 		}
 		// Statfs 失败（路径不可达等）保持 0 值如实呈现，不虚构

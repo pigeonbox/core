@@ -81,8 +81,18 @@ func (s *Service) RestoreFiles(ctx context.Context, ids []uint) (int64, error) {
 	return n, nil
 }
 
-// PurgeFiles 彻底删除（回收站 → 物理删除）：DB 行硬删 + COS/本地对象删除。
-// 对象删除失败不阻断 DB 硬删（孤儿由桶生命周期/对账兜底）；返回成功数。
+// PurgeFiles 彻底删除（回收站 → 物理删除）。
+//
+// core#192 起：对象删除改为 **Transactional Outbox**——DB 行硬删与 gc_jobs
+// 登记**同事务**提交，对象删除由 GC worker（租约 + 退避 + 删前引用复核）异步
+// 执行。此前是「同步删对象 → 硬删行」两段式：删库成功、删对象失败/进程崩溃
+// 的窗口里对象永久失联（远端后端无对账删除 ⇒ 永久泄漏；5xx/限流无重试）。
+//
+// 秒传共享对象保护（2026-10-12）语义不变，改为 worker 的**删前引用复核**：
+// 同一 blob 仍被其他分享引用 ⇒ 任务落 skipped 终态、对象保留（允许延迟，
+// 绝不误删）。多文件分享的子行对象仍逐个登记（2026-10-26 审计修复口径：
+// Unscoped 子行列举，软删子行的对象也要 purge）。
+// 返回成功硬删的行数。
 func (s *Service) PurgeFiles(ctx context.Context, ids []uint) (int64, error) {
 	var purged int64
 	for _, id := range ids {
@@ -90,23 +100,25 @@ func (s *Service) PurgeFiles(ctx context.Context, ids []uint) (int64, error) {
 		if err != nil {
 			continue
 		}
-		// 秒传共享对象保护（2026-10-12）：删前查引用，被其他分享共享时保留物理文件
-		//
-		// ⚠️ 2026-10-26 审计修复：原实现只删**主表那一个**对象 ⇒ 多文件分享的
-		// 非首个文件（只在 file_code_files 子表里）在硬删 DB 行后**彻底失去引用**
-		// ⇒ 本地 24h 后被对账清，远端**永久残留**。⇒ 遍历子行逐个删
-		// （与 BatchDeleteFiles 同口径）。
+		// 收集本分享的全部对象路径：主表路径 + 子表路径（**含软删子行**）。
+		// 子行列举失败 ⇒ 跳过本条（宁可延迟删除也不硬删行——行硬删后子对象
+		// 彻底失去引用登记机会 ⇒ 远端永久泄漏）。
+		paths := make([]string, 0, 4)
 		if fp := file.GetFilePath(); fp != "" {
-			s.deletePhysicalIfUnreferenced(ctx, fp, id)
+			paths = append(paths, fp)
 		}
-		if children, cerr := s.fileFileRepo.ListByFileCodeIDIncludingDeleted(ctx, id); cerr == nil {
-			for _, c := range children {
-				if c.FilePath != "" {
-					s.deletePhysicalIfUnreferenced(ctx, c.FilePath, id)
-				}
+		children, cerr := s.fileFileRepo.ListByFileCodeIDIncludingDeleted(ctx, id)
+		if cerr != nil {
+			logger.CtxWarn(ctx, "purge: list child rows failed, skip this id", "id", id, "err", cerr)
+			continue
+		}
+		for _, c := range children {
+			if c.FilePath != "" {
+				paths = append(paths, c.FilePath)
 			}
 		}
-		if _, err := s.fileCodeRepo.HardDeleteByIDs(ctx, []uint{id}); err != nil {
+
+		if _, err := s.gcSvc.EnqueuePurge(ctx, []uint{id}, paths); err != nil {
 			logger.CtxWarn(ctx, "purge db row failed", "id", id, "err", err)
 			continue
 		}

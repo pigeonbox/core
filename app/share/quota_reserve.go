@@ -53,7 +53,7 @@ func (s *Service) reserveUploadCaps(ctx context.Context, userID *uint, totalSize
 	// 漏计软删 ⇒ 站点配额虚低。未完成分片会话暂不计入。统计故障时 fail-open
 	// （配额是治理项而非安全项，不因统计异常拒绝所有上传）。
 	if quota := s.storageQuota(); quota > 0 {
-		if used, serr := s.fileCodeRepo.GetTotalSizeIncludingDeleted(ctx); serr == nil {
+		if used, serr := s.fileCodeRepo.GetPhysicalObjectUsage(ctx); serr == nil {
 			if used+quotaReserve.site+totalSize > quota {
 				metrics.RecordRejected(metrics.RejectQuota)
 				return nil, &GlobalQuotaExceededError{Used: used, Quota: quota}

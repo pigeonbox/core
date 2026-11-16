@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"io"
 	"mime/multipart"
 	"sync"
@@ -20,6 +21,8 @@ import (
 type mockStorage struct {
 	mu      sync.Mutex
 	deleted []string
+	// failNext 删除可编程失败（GC 退避/死信用例；0=恒成功，既有用例不受影响）
+	failNext int
 }
 
 func (m *mockStorage) SaveFile(_ context.Context, _ *multipart.FileHeader, _ string) (*storage.FileOperationResult, error) {
@@ -28,6 +31,10 @@ func (m *mockStorage) SaveFile(_ context.Context, _ *multipart.FileHeader, _ str
 func (m *mockStorage) DeleteFile(_ context.Context, path string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failNext > 0 {
+		m.failNext--
+		return errors.New("remote 500")
+	}
 	m.deleted = append(m.deleted, path)
 	return nil
 }

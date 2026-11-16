@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"sync"
 	"testing"
 	"time"
 
@@ -114,6 +115,7 @@ func (m *mockStorage) CleanChunks(_ context.Context, _ string) error { return ni
 // ===== mock: UserServiceInterface =====
 
 type mockUserService struct {
+	mu           sync.Mutex
 	uploadsCalls int64
 	storageDelta int64
 	uploadCap    int64
@@ -122,6 +124,9 @@ type mockUserService struct {
 func newMockUserService() *mockUserService { return &mockUserService{} }
 
 func (m *mockUserService) UpdateUserStats(_ uint, statsType string, value int64) error {
+	// 并发上传回归（core#169）会从多个 goroutine 打进来 ⇒ mock 自身也要并发安全
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	switch statsType {
 	case "uploads":
 		m.uploadsCalls += value
@@ -132,6 +137,8 @@ func (m *mockUserService) UpdateUserStats(_ uint, statsType string, value int64)
 }
 
 func (m *mockUserService) GetUploadSizeCap(_ context.Context, _ uint) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.uploadCap
 }
 
