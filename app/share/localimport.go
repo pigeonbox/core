@@ -33,6 +33,10 @@ type ImportLocalOpts struct {
 // 校验链：功能开关 → 路径落在白名单目录内（EvalSymlinks 防穿越）→ 普通文件 →
 // 大小上限 → 服务端拷贝入存储 → 复用 CreateShare（配额/审核/自定义码）。
 func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*ShareResp, error) {
+	// 次数型下界（core#220）：在读文件/拷贝入存储之前拒绝（零副作用）。
+	if err := utils.CheckCountExpireValue(opts.ExpireStyle, opts.ExpireValue); err != nil {
+		return nil, err
+	}
 	cfg := conf.GetGlobalConfig()
 	if cfg == nil || !cfg.Upload.LocalImport.Enabled {
 		return nil, errors.New("本地文件导入功能未启用")

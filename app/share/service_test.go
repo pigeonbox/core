@@ -194,13 +194,14 @@ func TestShareText_Success(t *testing.T) {
 func TestGetFileByCode_CountExhausted_NotExpired(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 
-	resp, err := svc.ShareText(context.Background(), &ShareTextReq{
-		Text:         "expiring",
+	// core#220：0 是「已耗尽」状态，不是可创建的初值（入口拒绝 count+0）；
+	// 本用例要读一条**已耗尽**的历史行，故直接落库构造（绕过创建漏斗）。
+	require.NoError(t, svc.fileCodeRepo.Create(context.Background(), &model.FileCode{
+		Code: "EXH00001", Text: "expiring", Status: model.StatusNormal,
 		ExpiredCount: 0, // 次数耗尽（不是时间过期）
-	})
-	require.NoError(t, err)
+	}))
 
-	fc, err := svc.GetFileByCode(context.Background(), resp.Code)
+	fc, err := svc.GetFileByCode(context.Background(), "EXH00001")
 	require.NoError(t, err, "次数耗尽不应被判成「已过期」（否则末次取件拿不到文件）")
 	assert.True(t, fc.IsCountExhausted(), "但次数确实已耗尽")
 	assert.False(t, fc.IsExpired())

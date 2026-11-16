@@ -356,6 +356,10 @@ func (s *Service) Init(ctx context.Context, meta InitMeta) (*InitResult, error) 
 	if err := utils.CheckExpireStyleAllowed(meta.ExpireStyle); err != nil {
 		return nil, err
 	}
+	// 次数型下界（core#220）：会话初始化时即拒绝 count+0/负数。
+	if err := utils.CheckCountExpireValue(meta.ExpireStyle, int(meta.ExpireValue)); err != nil {
+		return nil, err
+	}
 	// 文件名消毒（展示/落库用原始名；磁盘路径与 ObjectKey 均服务端生成）
 	meta.FileName = utils.SanitizeFileName(meta.FileName)
 
@@ -670,6 +674,10 @@ func (s *Service) createShareRecord(ctx context.Context, meta *InitMeta, ownerIP
 			"", nil
 	}
 
+	// 次数型下界（core#220）：落库前最后一道（Init 已拒绝；历史会话/新调用方兜底）。
+	if err := utils.CheckCountExpireValue(meta.ExpireStyle, int(meta.ExpireValue)); err != nil {
+		return "", "", "", "", err
+	}
 	// 计算过期时间（与 share.ShareTextWithAuth 行为一致）
 	expireTime := utils.CalculateExpireTime(int(meta.ExpireValue), meta.ExpireStyle)
 	expireCount := utils.CalculateExpireCount(meta.ExpireStyle, int(meta.ExpireValue))
@@ -898,6 +906,10 @@ type QuickShareMeta struct {
 // 存在性 oracle（撞库探测谁传过什么）；借来的分享生命周期/密码/过期全归
 // 原主，本次请求的元数据被静默丢弃。现改为同用户 + 建新分享。
 func (s *Service) CheckQuickUpload(ctx context.Context, userID uint, meta QuickShareMeta) (*QuickUploadResult, error) {
+	// 次数型下界（core#220）：秒传建分享同样受 count 取值约束。
+	if err := utils.CheckCountExpireValue(meta.ExpireStyle, meta.ExpireValue); err != nil {
+		return nil, err
+	}
 	if userID == 0 || meta.FileHash == "" || meta.FileSize <= 0 || s.shareService == nil {
 		return nil, errors.New("no quick upload candidate")
 	}

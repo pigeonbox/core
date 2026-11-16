@@ -22,7 +22,7 @@ func TestCreateWithCode_RecycleBinCodeGhost(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	ctx := context.Background()
 	build := func(code string) *model.FileCode {
-		return &model.FileCode{Code: code, Status: model.StatusNormal}
+		return &model.FileCode{Code: code, Status: model.StatusNormal, ExpiredCount: -1}
 	}
 
 	// 建码 → 软删（进回收站）
@@ -60,7 +60,7 @@ func TestCreateWithCode_RecycleBinCodeGhost_Folded(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	ctx := context.Background()
 	build := func(code string) *model.FileCode {
-		return &model.FileCode{Code: code, Status: model.StatusNormal}
+		return &model.FileCode{Code: code, Status: model.StatusNormal, ExpiredCount: -1}
 	}
 	setCodeFold(t, true)
 

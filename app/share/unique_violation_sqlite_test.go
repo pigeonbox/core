@@ -25,19 +25,21 @@ func TestCustomCodeDuplicateOnSQLiteMapsToBusinessError(t *testing.T) {
 	const custom = "DUPCODE123"
 	// 第一次：正常创建
 	_, err := svc.CreateShare(ctx, &ShareFileReq{
-		FilePath:   "/tmp/a.txt",
-		Size:       3,
-		Text:       "a",
-		CustomCode: custom,
+		FilePath:     "/tmp/a.txt",
+		Size:         3,
+		Text:         "a",
+		CustomCode:   custom,
+		ExpiredCount: -1,
 	})
 	require.NoError(t, err)
 
 	// 第二次：同一自定义码 ⇒ 撞 file_codes 唯一索引（sqlite 路径）
 	_, err = svc.CreateShare(ctx, &ShareFileReq{
-		FilePath:   "/tmp/b.txt",
-		Size:       3,
-		Text:       "b",
-		CustomCode: custom,
+		FilePath:     "/tmp/b.txt",
+		Size:         3,
+		Text:         "b",
+		CustomCode:   custom,
+		ExpiredCount: -1,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "自定义取件码已被占用",

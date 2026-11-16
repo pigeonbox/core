@@ -154,7 +154,8 @@ func TestEffectiveTransferDefaults(t *testing.T) {
 }
 
 // TestCheckPickupCountCap 「单分享可取件次数上限」：超限**显式拒绝**（不静默
-// 钳制——用户要 50 次、静默改成上限值是撒谎）；<=0（不按次数过期/无限）不校验。
+// 钳制——用户要 50 次、静默改成上限值是撒谎）；-1=无限放行，0/<-1 拒绝
+// （core#220：0=已耗尽不是可创建初值，<-1 是历史脏值）。
 func TestCheckPickupCountCap(t *testing.T) {
 	t.Run("超限拒绝、恰等上限放行", func(t *testing.T) {
 		withTransferConfig(t, conf.TransferConfig{MaxCount: 3, ExpireDefault: 7})
@@ -163,10 +164,11 @@ func TestCheckPickupCountCap(t *testing.T) {
 		require.Error(t, err, "超限必须显式拒绝")
 		assert.Contains(t, err.Error(), "取件次数超过站点上限")
 	})
-	t.Run("<=0 不校验（不按次数过期/无限）", func(t *testing.T) {
+	t.Run("-1=无限放行；0/<-1 拒绝", func(t *testing.T) {
 		withTransferConfig(t, conf.TransferConfig{MaxCount: 3, ExpireDefault: 7})
-		assert.NoError(t, CheckPickupCountCap(0))
 		assert.NoError(t, CheckPickupCountCap(-1))
+		assert.Error(t, CheckPickupCountCap(0), "0 = 已耗尽，不是可创建的新值")
+		assert.Error(t, CheckPickupCountCap(-5), "<-1 是历史脏值，必须拒绝")
 	})
 	t.Run("上限 0=显式不限", func(t *testing.T) {
 		withTransferConfig(t, conf.TransferConfig{MaxCount: 0, ExpireDefault: 7})

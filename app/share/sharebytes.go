@@ -29,6 +29,10 @@ type ShareBytesOpts struct {
 // ShareBytes 把内存中的文件内容登记为文件分享。
 // 校验链：文件名消毒 → 扩展名白名单 → 大小上限 → SaveBytes 落存储 → CreateShare。
 func (s *Service) ShareBytes(ctx context.Context, opts ShareBytesOpts) (*ShareResp, error) {
+	// 次数型下界（core#220）：在落存储之前拒绝（零副作用）。
+	if err := utils.CheckCountExpireValue(opts.ExpireStyle, opts.ExpireValue); err != nil {
+		return nil, err
+	}
 	name := utils.SanitizeFileName(opts.FileName)
 	if name == "" {
 		return nil, errors.New("文件名无效")

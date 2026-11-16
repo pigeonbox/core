@@ -69,10 +69,11 @@ func TestCreateMultiFileShare_UserStatsAndQuota(t *testing.T) {
 	ctx := context.Background()
 
 	resp, err := svc.CreateMultiFileShare(ctx, &MultiShareReq{
-		Entries:    multiEntries(2, 500),
-		UserID:     &uid,
-		UploadType: "authenticated",
-		OwnerIP:    "1.2.3.4",
+		Entries:      multiEntries(2, 500),
+		UserID:       &uid,
+		UploadType:   "authenticated",
+		OwnerIP:      "1.2.3.4",
+		ExpiredCount: -1,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), usr.uploadsCalls)
@@ -100,9 +101,9 @@ func TestGetShareChild_Ownership(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	ctx := context.Background()
 
-	r1, err := svc.CreateMultiFileShare(ctx, &MultiShareReq{Entries: multiEntries(2, 10), OwnerIP: "1.1.1.1"})
+	r1, err := svc.CreateMultiFileShare(ctx, &MultiShareReq{Entries: multiEntries(2, 10), OwnerIP: "1.1.1.1", ExpiredCount: -1})
 	require.NoError(t, err)
-	r2, err := svc.CreateMultiFileShare(ctx, &MultiShareReq{Entries: multiEntries(2, 10), OwnerIP: "2.2.2.2"})
+	r2, err := svc.CreateMultiFileShare(ctx, &MultiShareReq{Entries: multiEntries(2, 10), OwnerIP: "2.2.2.2", ExpiredCount: -1})
 	require.NoError(t, err)
 
 	items1, err := svc.ListShareFiles(ctx, r1.Code)
@@ -130,10 +131,11 @@ func TestDeleteFileByCode_RemovesChildren(t *testing.T) {
 	uid := uint(9)
 
 	resp, err := svc.CreateMultiFileShare(ctx, &MultiShareReq{
-		Entries:    multiEntries(3, 100),
-		UserID:     &uid,
-		UploadType: "authenticated",
-		OwnerIP:    "1.2.3.4",
+		Entries:      multiEntries(3, 100),
+		UserID:       &uid,
+		UploadType:   "authenticated",
+		OwnerIP:      "1.2.3.4",
+		ExpiredCount: -1,
 	})
 	require.NoError(t, err)
 

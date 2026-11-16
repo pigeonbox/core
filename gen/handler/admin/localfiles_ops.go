@@ -110,6 +110,13 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 		})
 		return
 	}
+	// 次数型下界（core#220）：count+0/负数不得落库。
+	if err := utils.CheckCountExpireValue(expireStyle, int(expireValue)); err != nil {
+		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
+			Code: errcode.CodeInvalidParam, Message: err.Error(),
+		})
+		return
+	}
 	passwordHash, err := utils.ResolveSharePassword(req.GetRequireAuth(), req.GetPassword())
 	if err != nil {
 		if errors.Is(err, utils.ErrPasswordRequired) {
