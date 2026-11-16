@@ -71,6 +71,8 @@ PUT /admin/users/:id | admin | global | admin
 POST /admin/users/:id/reset-password | admin | global | admin
 PUT /admin/users/:id/status | admin | global | admin
 GET /admin/users/filter | admin | global | admin
+GET /admin/webauthn/credentials | admin | global | custom
+DELETE /admin/webauthn/credentials/:id | admin | global | custom
 POST /admin/webauthn/login/options | public | login | custom
 POST /admin/webauthn/login/verify | public | login | custom
 POST /admin/webauthn/register/options | admin | global | custom

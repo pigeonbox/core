@@ -64,3 +64,26 @@ func (r *WebAuthnCredentialRepository) UpdateAfterLogin(ctx context.Context, cre
 			"last_used_at": &usedAt,
 		}).Error
 }
+
+// DeleteByUserAndID 硬删当前管理员自己的某把凭证（core#209）。
+//
+// 归属条件与主键同句：跨用户 / 不存在都落到 RowsAffected == 0，统一返回
+// gorm.ErrRecordNotFound（调用方映射 404，不泄露「这条 id 是否存在」）。
+//
+// 必须是**硬删**（Unscoped）：
+//   - 软删行仍占着 credential_id 唯一索引 ⇒ 同一张 passkey 撤销后重新登记
+//     会撞唯一约束，落库失败（凭证管理的核心可用性）；
+//   - 「凭据行消失 ⇒ 该 passkey 不能再参与登录」要求查询面（ListByUser /
+//     CountByUser / 登录装配）彻底看不到它，硬删最无歧义。
+func (r *WebAuthnCredentialRepository) DeleteByUserAndID(ctx context.Context, userID, id uint) error {
+	res := r.db().WithContext(ctx).Unscoped().
+		Where("user_id = ? AND id = ?", userID, id).
+		Delete(&model.WebAuthnCredential{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}

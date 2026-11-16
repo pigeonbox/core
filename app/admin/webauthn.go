@@ -1,12 +1,15 @@
 package admin
 
-// 管理员 Passkey（WebAuthn，core#160）：登记 / 登录两条流的后端实现。
+// 管理员 Passkey（WebAuthn，core#160 / core#209）：登记 / 登录 / 凭证管理。
 //
 // # 形态（issue #160 拍板：最小可交付 = 核心后端流，前端 UI 留后续）
 //
 //	登记（需管理员 JWT）：POST /admin/webauthn/register/options → /verify
 //	登录（公开面）      ：POST /admin/webauthn/login/options → /verify
 //	                    （签发与 /admin/login 同形的管理员 JWT + 会话 Cookie）
+//	凭证管理（管理员 JWT，core#209）：
+//	                    GET    /admin/webauthn/credentials
+//	                    DELETE /admin/webauthn/credentials/:id
 //
 // # 与既有登录的关系（默认不影响存量）
 //
@@ -16,6 +19,17 @@ package admin
 //	（TOTP/恢复码兜底——issue「已有恢复码可复用为兜底」口径）。
 //	未登记 passkey 的管理员不受影响 ⇒ 开闸不会锁死存量账号；
 //	极端兜底（passkey 丢失且未开 TOTP）= 运维关闸重进。
+//
+// # 凭证撤销的语义边界（core#209）
+//
+//   - 删除后该 passkey 不能再参与 webauthn.get 登录：凭据行（硬删）从登录
+//     装配中消失 ⇒ 无论是删除后新领的挑战，还是删除前已签好的断言，验证都拒；
+//   - 口令 / TOTP / 恢复码路径不受影响：撤销只动 webauthn_credentials 行，
+//     不碰 users 的口令/二验列；
+//   - 删除**最后一把** passkey 后，该管理员回到「未登记态」：
+//     CountByUser = 0 ⇒ PB_SECURITY_REQUIRE_ADMIN_WEBAUTHN 的纯口令闸不再
+//     命中该账号（与「开闸不锁死未登记管理员」同一判据）⇒ 不会把管理员
+//     锁在门外。UI 的前置提示（「删完最后一把只能走口令/TOTP」）由前端负责。
 //
 // # 依赖
 //
@@ -65,6 +79,9 @@ var (
 	ErrWebAuthnInvalid = errors.New("Passkey 验证失败")
 	// ErrWebAuthnInternal 登录链路内部故障（DB/签发）标记，handler 走脱敏出网。
 	ErrWebAuthnInternal = errors.New("Passkey 内部错误")
+	// ErrWebAuthnCredentialNotFound 凭证不存在 / 不属于当前管理员（core#209）。
+	// 两种情况共用同一错误 ⇒ handler 统一 404，不泄露跨用户的存在性。
+	ErrWebAuthnCredentialNotFound = errors.New("Passkey 凭证不存在或已删除")
 )
 
 // WebAuthnRP 依赖方参数：handler 从配置 + 请求头解析后注入，service 只消费。
@@ -517,6 +534,70 @@ func (s *Service) WebAuthnLoginVerify(ctx context.Context, rp WebAuthnRP, challe
 	_ = s.userRepo.Update(ctx, u)
 	logger.CtxInfo(ctx, "webauthn admin login ok", "user_id", u.ID, "cred_id", cred.ID)
 	return token, nil
+}
+
+// ===== 凭证管理（core#209：管理台 list/delete）=====
+
+// WebAuthnCredentialView 管理台凭证列表项。
+//
+// 只暴露「展示 + 按行 id 撤销」所需字段：credential_id / 公钥 / 签名计数 /
+// 归属用户都是服务端内部字段，出网即扩大枚举与伪造面（issue #209 明确要求）。
+type WebAuthnCredentialView struct {
+	ID         uint       `json:"id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	Transports []string   `json:"transports"`
+	AAGUID     string     `json:"aaguid"`
+}
+
+// webAuthnCredentialViewOf 落库行 → 管理台展示形状（transports 逗号串拆数组）。
+func webAuthnCredentialViewOf(row *model.WebAuthnCredential) WebAuthnCredentialView {
+	transports := make([]string, 0)
+	if row.Transports != "" {
+		for _, t := range strings.Split(row.Transports, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				transports = append(transports, t)
+			}
+		}
+	}
+	return WebAuthnCredentialView{
+		ID:         row.ID,
+		Name:       row.Name,
+		CreatedAt:  row.CreatedAt,
+		LastUsedAt: row.LastUsedAt,
+		Transports: transports,
+		AAGUID:     row.AAGUID,
+	}
+}
+
+// ListWebAuthnCredentials 当前管理员的全部 passkey（按登记时间正序）。
+func (s *Service) ListWebAuthnCredentials(ctx context.Context, userID uint) ([]WebAuthnCredentialView, error) {
+	rows, err := s.webauthnRepo.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: 凭证查询失败: %w", ErrWebAuthnInternal, err)
+	}
+	out := make([]WebAuthnCredentialView, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, webAuthnCredentialViewOf(row))
+	}
+	return out, nil
+}
+
+// DeleteWebAuthnCredential 撤销当前管理员自己的某把 passkey（按行 id）。
+//
+// 归属校验下推到 DAO 的 WHERE user_id AND id：跨用户与不存在都返回
+// ErrWebAuthnCredentialNotFound（handler 404，不泄露存在性）。
+// 硬删语义见 dao.WebAuthnCredentialRepository.DeleteByUserAndID 注释。
+func (s *Service) DeleteWebAuthnCredential(ctx context.Context, userID, id uint) error {
+	if err := s.webauthnRepo.DeleteByUserAndID(ctx, userID, id); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrWebAuthnCredentialNotFound
+		}
+		return fmt.Errorf("%w: 凭证删除失败: %w", ErrWebAuthnInternal, err)
+	}
+	logger.CtxInfo(ctx, "webauthn credential deleted", "user_id", userID, "credential_row_id", id)
+	return nil
 }
 
 // ===== 登录闸（挂接 /admin/login） =====

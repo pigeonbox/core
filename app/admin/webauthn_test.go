@@ -306,6 +306,129 @@ func TestAdminLoginWebAuthnGate(t *testing.T) {
 	})
 }
 
+// ===== 凭证管理（core#209：管理台 list/delete）=====
+
+func TestWebAuthnCredentialListAndDelete(t *testing.T) {
+	svc := newWebAuthnTestService(t)
+	ctx := context.Background()
+	u, _ := seedTotpAdmin(t, svc, "wa_cred_svc", false)
+	other, _ := seedTotpAdmin(t, svc, "wa_cred_svc_other", false)
+	sim := registerPasskey(t, svc, u)
+
+	views, err := svc.ListWebAuthnCredentials(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	v := views[0]
+	assert.NotZero(t, v.ID)
+	assert.Equal(t, "测试钥匙", v.Name)
+	assert.False(t, v.CreatedAt.IsZero(), "created_at 必须来自落库行")
+	assert.Nil(t, v.LastUsedAt, "未登录过 ⇒ last_used_at 为空")
+	assert.Equal(t, []string{"internal"}, v.Transports)
+	assert.Len(t, v.AAGUID, 32, "AAGUID 按 hex 编码（全零 = 32 个 0）")
+
+	// 只回自己：另一个管理员看不到
+	otherViews, err := svc.ListWebAuthnCredentials(ctx, other.ID)
+	require.NoError(t, err)
+	assert.Empty(t, otherViews)
+
+	// 跨用户删除：not-found 语义（handler 映射 404，不泄露存在性）且不生效
+	err = svc.DeleteWebAuthnCredential(ctx, other.ID, v.ID)
+	require.ErrorIs(t, err, ErrWebAuthnCredentialNotFound)
+	views, err = svc.ListWebAuthnCredentials(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, views, 1, "跨用户删除不得生效")
+
+	// 本人删除：行消失；重复删除稳定 not-found（幂等效果）
+	require.NoError(t, svc.DeleteWebAuthnCredential(ctx, u.ID, v.ID))
+	views, err = svc.ListWebAuthnCredentials(ctx, u.ID)
+	require.NoError(t, err)
+	assert.Empty(t, views)
+	err = svc.DeleteWebAuthnCredential(ctx, u.ID, v.ID)
+	require.ErrorIs(t, err, ErrWebAuthnCredentialNotFound)
+
+	// 硬删后同一张 passkey 可以重新登记（软删会占住 credential_id 唯一索引）
+	creation, err := svc.WebAuthnRegisterOptions(ctx, u.ID, testWebAuthnRP)
+	require.NoError(t, err)
+	body := sim.createResponse(t, creation.Response.Challenge.String(),
+		testWebAuthnRP.RPID, testWebAuthnOrigin)
+	_, err = svc.WebAuthnRegisterVerify(ctx, u.ID, testWebAuthnRP,
+		creation.Response.Challenge.String(), body, "重新登记")
+	require.NoError(t, err, "撤销后同一张 passkey 必须能重新登记")
+}
+
+func TestWebAuthnLoginRejectedAfterCredentialDelete(t *testing.T) {
+	svc := newWebAuthnTestService(t)
+	ctx := context.Background()
+	u, _ := seedTotpAdmin(t, svc, "wa_cred_del_login", false)
+	sim := registerPasskey(t, svc, u)
+	userHandle := []byte(strconv.FormatUint(uint64(u.ID), 10))
+
+	// 删除前领挑战并完成签名：模拟「删除发生在 ceremony 中途」
+	assertion, err := svc.WebAuthnLoginOptions(ctx, u.Username, testWebAuthnRP)
+	require.NoError(t, err)
+	challenge := assertion.Response.Challenge.String()
+	body := sim.getResponse(t, challenge, testWebAuthnRP.RPID, testWebAuthnOrigin, userHandle)
+
+	rows, err := svc.webauthnRepo.ListByUser(ctx, u.ID)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, svc.DeleteWebAuthnCredential(ctx, u.ID, rows[0].ID))
+
+	_, err = svc.WebAuthnLoginVerify(ctx, testWebAuthnRP, challenge, body)
+	require.ErrorIs(t, err, ErrWebAuthnInvalid, "凭据行已消失，删除前签好的断言不得再登录")
+
+	// 删除后重新领挑战（因无凭证已是诱饵）：真钥匙签名也过不了
+	assertion, err = svc.WebAuthnLoginOptions(ctx, u.Username, testWebAuthnRP)
+	require.NoError(t, err, "无凭证时仍返回同形挑战（防枚举）")
+	body = sim.getResponse(t, assertion.Response.Challenge.String(),
+		testWebAuthnRP.RPID, testWebAuthnOrigin, userHandle)
+	_, err = svc.WebAuthnLoginVerify(ctx, testWebAuthnRP,
+		assertion.Response.Challenge.String(), body)
+	require.ErrorIs(t, err, ErrWebAuthnInvalid, "删除后该 passkey 不得再参与登录")
+}
+
+func TestWebAuthnGateResetsAfterLastCredentialDeleted(t *testing.T) {
+	svc := newWebAuthnTestService(t)
+	ctx := context.Background()
+
+	prev := conf.Snapshot()
+	t.Cleanup(func() { conf.SetGlobalConfig(prev) })
+	conf.SetGlobalConfig(&conf.AppConfiguration{
+		Security: conf.SecurityConfig{RequireAdminWebAuthn: true},
+	})
+
+	deleteAll := func(userID uint) {
+		t.Helper()
+		rows, err := svc.webauthnRepo.ListByUser(ctx, userID)
+		require.NoError(t, err)
+		require.NotEmpty(t, rows)
+		for _, row := range rows {
+			require.NoError(t, svc.DeleteWebAuthnCredential(ctx, userID, row.ID))
+		}
+	}
+
+	u, pw := seedTotpAdmin(t, svc, "wa_cred_gate", false)
+	registerPasskey(t, svc, u)
+	_, err := svc.GenerateTokenForAdmin(ctx, u.Username, pw, "")
+	require.ErrorIs(t, err, ErrWebAuthnRequired, "开闸 + 已登记 ⇒ 纯口令被拦")
+
+	deleteAll(u.ID)
+
+	token, err := svc.GenerateTokenForAdmin(ctx, u.Username, pw, "")
+	require.NoError(t, err, "删除最后一把 passkey 后必须回到未登记态，避免管理员自锁")
+	assert.NotEmpty(t, token)
+
+	// TOTP 路径不受凭证撤销影响
+	u2, pw2 := seedTotpAdmin(t, svc, "wa_cred_gate_totp", true)
+	registerPasskey(t, svc, u2)
+	deleteAll(u2.ID)
+	code, err := totp.Code(u2.TotpSecret, time.Now())
+	require.NoError(t, err)
+	token, err = svc.GenerateTokenForAdmin(ctx, u2.Username, pw2, code)
+	require.NoError(t, err)
+	assert.NotEmpty(t, token)
+}
+
 // ===== RP 推导 =====
 
 func TestResolveWebAuthnRP(t *testing.T) {

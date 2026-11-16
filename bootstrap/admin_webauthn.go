@@ -1,19 +1,24 @@
 package bootstrap
 
-// 管理员 Passkey 四端点（core#160，手写路由——contracts 冻结不进 IDL）：
+// 管理员 Passkey 端点（core#160 四端点 + core#209 凭证管理，手写路由——
+// contracts 冻结不进 IDL）：
 //
-//	POST /admin/webauthn/register/options  登记挑战（管理员 JWT）
-//	POST /admin/webauthn/register/verify   登记校验（管理员 JWT）
-//	POST /admin/webauthn/login/options     登录挑战（公开面）
-//	POST /admin/webauthn/login/verify      登录校验（公开面，签发管理员 JWT）
+//	POST   /admin/webauthn/register/options  登记挑战（管理员 JWT）
+//	POST   /admin/webauthn/register/verify   登记校验（管理员 JWT）
+//	POST   /admin/webauthn/login/options     登录挑战（公开面）
+//	POST   /admin/webauthn/login/verify      登录校验（公开面，签发管理员 JWT）
+//	GET    /admin/webauthn/credentials       凭证列表（管理员 JWT，仅自己）
+//	DELETE /admin/webauthn/credentials/:id   撤销凭证（管理员 JWT，按行 id）
 //
-// 鉴权接线在 bootstrap/routes_custom.go（register 组挂 AdminMiddleware，
-// login 组挂 login 限流桶）；本文件只做参数搬运、RP 解析与错误映射。
+// 鉴权接线在 bootstrap/routes_custom.go（register/credentials 组挂
+// AdminMiddleware，login 组挂 login 限流桶）；本文件只做参数搬运、RP 解析
+// 与错误映射。
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/cloudwego/hertz/pkg/app"
@@ -57,6 +62,7 @@ func adminWebAuthnRP(c *app.RequestContext) adminsvc.WebAuthnRP {
 
 // adminWebAuthnError 统一错误映射：
 // 40012=流程信号（口令已对只缺第二步，不计失败）；400=挑战/断言问题；
+// 404=凭证不存在/不属于当前管理员（core#209，跨用户不泄露存在性）；
 // 其余内部故障走脱敏出网（core#114 A6b）。
 func adminWebAuthnError(c *app.RequestContext, op string, err error) {
 	switch {
@@ -64,6 +70,8 @@ func adminWebAuthnError(c *app.RequestContext, op string, err error) {
 		resp.NewErrorWithMessage(c, errcode.CodeTotpRequired, err.Error())
 	case errors.Is(err, adminsvc.ErrWebAuthnInvalid):
 		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+	case errors.Is(err, adminsvc.ErrWebAuthnCredentialNotFound):
+		resp.NewErrorWithMessage(c, errcode.CodeNotFound, err.Error())
 	default:
 		resp.NewInternalError(c, errcode.CodeInternal, op, err)
 	}
@@ -159,4 +167,45 @@ func adminWebAuthnLoginVerify(ctx context.Context, c *app.RequestContext) {
 		"token_type": "Bearer",
 		"expires_in": 24 * 60 * 60, // 与 /admin/login 的 AdminLoginData 同值
 	})
+}
+
+// AdminWebAuthnCredentialList GET /admin/webauthn/credentials（core#209）。
+//
+// 只回当前登录管理员的凭证；形状由 adminsvc.WebAuthnCredentialView 钉死
+// （id/name/created_at/last_used_at/transports/aaguid，不含 credential_id/公钥）。
+func adminWebAuthnCredentialList(ctx context.Context, c *app.RequestContext) {
+	uid, ok := middleware.UserIDFromContext(ctx)
+	if !ok || uid == 0 {
+		resp.NewErrorByCode(c, errcode.CodeUnauthorized)
+		return
+	}
+	rows, err := getAdminWebAuthnService().ListWebAuthnCredentials(ctx, uid)
+	if err != nil {
+		adminWebAuthnError(c, "Passkey 凭证列表", err)
+		return
+	}
+	resp.Success(c, rows)
+}
+
+// AdminWebAuthnCredentialDelete DELETE /admin/webauthn/credentials/:id（core#209）。
+//
+// id 是**服务端行 id**（credential_id 不出网）；归属校验在 service/dao，
+// 跨用户与不存在统一 404。重复删除稳定 404：行保持不存在，无其他副作用
+// （幂等效果），与 DELETE /user/api-keys/:id 的「不存在或已撤销」同口径。
+func adminWebAuthnCredentialDelete(ctx context.Context, c *app.RequestContext) {
+	uid, ok := middleware.UserIDFromContext(ctx)
+	if !ok || uid == 0 {
+		resp.NewErrorByCode(c, errcode.CodeUnauthorized)
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "请求参数错误: id 必须是正整数")
+		return
+	}
+	if err := getAdminWebAuthnService().DeleteWebAuthnCredential(ctx, uid, uint(id)); err != nil {
+		adminWebAuthnError(c, "Passkey 凭证删除", err)
+		return
+	}
+	resp.SuccessWithMessage(c, "Passkey 已删除", nil)
 }

@@ -133,6 +133,14 @@ var handwrittenRouteExemptions = map[string]handwrittenExemption{
 		Reason:  "登录面：Passkey 登录校验并签发 JWT（core#160）——响应需与 AdminLoginData 同形但 contracts 冻结不能引用新模型 ⇒ 手写过渡（Pending 债务）",
 		Pending: true,
 	},
+	"GET /admin/webauthn/credentials": {
+		Reason:  "管理面：管理员 Passkey 凭证列表（core#209）——字段形状（transports/aaguid）与新响应模型 contracts 冻结无法表达 ⇒ 手写过渡；AdminMiddleware，按 JWT 归属过滤",
+		Pending: true,
+	},
+	"DELETE /admin/webauthn/credentials/:id": {
+		Reason:  "管理面：管理员 Passkey 凭证撤销（core#209）——按行 id + 归属校验（跨用户 404），contracts 冻结无法新增路径/错误模型 ⇒ 手写过渡；AdminMiddleware",
+		Pending: true,
+	},
 	"POST /api/v1/mcp": {
 		Reason:  "协议面：MCP（Streamable HTTP）JSON-RPC 流，**不是** REST/JSON 包络 ⇒ thrift IDL 模型表达不了",
 		Pending: false,
