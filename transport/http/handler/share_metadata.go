@@ -6,7 +6,6 @@ package handler
 import (
 	"context"
 	"errors"
-	"strconv"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/protocol/consts"
@@ -32,10 +31,10 @@ func ShareMetadata(ctx context.Context, c *app.RequestContext) {
 	// 入口预检（与 /anonymous/retrieve 同口径，core#163）：本面此前无预检无记账
 	// ⇒ 枚举只剩 QPS 限流桶（50/s vs 锁定 10 次/300s，~4500× 吞吐差）。
 	// 预检含按 IP 的枚举维度（见 gate.PickupLockedRemain）。
-	if remain, locked := gate.PickupLockedRemain(ctx, middleware.ClientIP(c), code); locked {
+	if perr := gate.PrecheckPickup(ctx, middleware.ClientIP(c), code); perr != nil {
 		c.JSON(consts.StatusTooManyRequests, map[string]interface{}{
 			"code":    errcode.CodeTooManyAttempts,
-			"message": "尝试过于频繁，已临时锁定，请 " + strconv.Itoa(remain) + " 秒后重试",
+			"message": perr.Error(),
 		})
 		return
 	}
