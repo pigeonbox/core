@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/utils"
 )
 
@@ -35,8 +36,8 @@ func (s *Service) ShareBytes(ctx context.Context, opts ShareBytesOpts) (*ShareRe
 	if !utils.IsAllowedExtension(name) {
 		return nil, errors.New("该文件类型禁止上传")
 	}
-	if err := utils.CheckUploadSize(int64(len(opts.Content)), utils.GetMaxFileSize()); err != nil {
-		return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
+	if err := gate.CheckFileSize(int64(len(opts.Content))); err != nil {
+		return nil, err
 	}
 
 	_, rel := utils.NewUploadRelPath(name)

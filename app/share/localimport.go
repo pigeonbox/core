@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/pigeonbox/core/conf"
+	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/utils"
 )
@@ -58,8 +59,8 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("仅支持导入普通文件")
 	}
-	if err := utils.CheckUploadSize(info.Size(), utils.GetMaxFileSize()); err != nil {
-		return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
+	if err := gate.CheckFileSize(info.Size()); err != nil {
+		return nil, err
 	}
 
 	name := utils.SanitizeFileName(filepath.Base(real))

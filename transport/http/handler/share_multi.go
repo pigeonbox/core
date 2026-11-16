@@ -633,7 +633,7 @@ func bindChunkEntry(ctx context.Context, c *app.RequestContext, chunkSvc *chunk.
 		}
 	}
 	if actualSize > 0 {
-		if maxFile := utils.GetMaxFileSize(); maxFile > 0 && actualSize > maxFile {
+		if over, maxFile := gate.ExceedsFileSize(actualSize); over {
 			_ = st.DeleteFile(ctx, rel)
 			// 对象已删：账本转 aborted（core#172 第三片；行不存在 noop）
 			chunkSvc.BlobAbort(ctx, uploadID, rel)

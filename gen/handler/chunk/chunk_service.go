@@ -745,7 +745,7 @@ func ChunkUploadComplete(ctx context.Context, c *app.RequestContext) {
 	// 完整性复查：合并后实际大小 vs 上限/申报（修复：init 自报 FileSize 从未被复核，
 	// 可申报 1KB 实传任意大文件绕过 max_file_size；申报不符说明分片丢失或被篡改）
 	if actualSize > 0 {
-		if maxFile := utils.GetMaxFileSize(); maxFile > 0 && actualSize > maxFile {
+		if over, maxFile := gate.ExceedsFileSize(actualSize); over {
 			getChunkService().DeleteMergedFile(ctx, relativePath)
 			_ = getChunkService().DeleteUpload(ctx, uploadID)
 			// 对象已删：账本转 aborted（core#172 第三片；行不存在 noop）

@@ -156,10 +156,10 @@ func (s *Service) InitiateUpload(ctx context.Context, req *InitiateUploadReq) (*
 	// 类型 + 整文件大小校验（应用层）。
 	// 回归：此前误用 GetMaxUploadSize（单请求体上限 10MB）拦截整个文件，
 	// 分片通道被单请求限制误伤。整文件上限走 upload.max_file_size（0=不限）。
-	if err := utils.CheckWholeFileSize(req.FileSize); err != nil {
-		// typed error（带 CodeTooLarge 业务码）⇒ handler 透传 413，
-		// 而非落 500「初始化上传失败」（见 utils.FileTooLargeError 注释）
-		return nil, utils.NewFileTooLargeError(utils.GetMaxFileSize())
+	// typed error（带 CodeTooLarge 业务码）⇒ handler 透传 413，而非落 500
+	//「初始化上传失败」（见 utils.FileTooLargeError 注释）；判定收口 pkg/gate。
+	if err := gate.CheckFileSize(req.FileSize); err != nil {
+		return nil, err
 	}
 	if !utils.IsAllowedExtension(req.FileName) {
 		return nil, fmt.Errorf("该文件类型禁止上传")

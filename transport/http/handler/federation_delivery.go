@@ -38,7 +38,6 @@ import (
 	"github.com/pigeonbox/core/pkg/middleware"
 	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/security"
-	"github.com/pigeonbox/core/pkg/utils"
 )
 
 // maxDeliveryFiles 单次跨站投递的文件数上限（与站内多文件直传同款）。
@@ -193,7 +192,7 @@ func FederationDeliver(ctx context.Context, c *app.RequestContext) {
 	var totalDeclared int64
 	for _, f := range files {
 		totalDeclared += f.Size
-		if maxFile := utils.GetMaxFileSize(); maxFile > 0 && f.Size > maxFile {
+		if over, _ := gate.ExceedsFileSize(f.Size); over {
 			c.JSON(consts.StatusRequestEntityTooLarge, map[string]interface{}{
 				"code": errcode.CodeTooLarge, "message": "文件 " + f.Filename + " 超过单文件大小上限",
 			})

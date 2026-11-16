@@ -102,11 +102,11 @@ func GenerateCode(ctx context.Context, c *app.RequestContext) {
 		resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, "文件大小必须大于0")
 		return
 	}
-	if err := utils.CheckUploadSize(req.FileSize, utils.GetMaxFileSize()); err != nil {
-		// 超限走 typed error（业务码 10010 + HTTP 413 + 动态文案「最大允许 N 字节」），
-		// 与 presign/chunk/localimport 同一口径（此前此处落 400 CodeInvalidParam
-		// 且文案无上限值 ⇒ 同一语义多种口径）。
-		resp.NewTypedError(c, utils.NewFileTooLargeError(utils.GetMaxFileSize()))
+	// 超限走 typed error（业务码 10010 + HTTP 413 + 动态文案「最大允许 N 字节」），
+	// 与 presign/chunk/localimport 同一口径（此前此处落 400 CodeInvalidParam
+	// 且文案无上限值 ⇒ 同一语义多种口径）；判定收口 pkg/gate。
+	if err := gate.CheckFileSize(req.FileSize); err != nil {
+		resp.NewTypedError(c, err)
 		return
 	}
 	if !utils.IsAllowedExtension(req.FileName) {

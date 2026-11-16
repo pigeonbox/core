@@ -8,11 +8,7 @@ import (
 
 	"github.com/pigeonbox/contracts/errcode"
 	"github.com/pigeonbox/core/conf"
-	"github.com/pigeonbox/core/pkg/metrics"
 )
-
-// ErrFileTooLarge 文件超过允许大小
-var ErrFileTooLarge = errors.New("file size exceeds limit")
 
 // FileTooLargeError 文件超过整文件大小上限（upload.max_file_size）。
 //
@@ -171,20 +167,4 @@ func IsBlockedExtension(filename string, blacklist []string) bool {
 		}
 	}
 	return false
-}
-
-// CheckUploadSize 校验文件大小是否超限。
-// maxSize <= 0 表示不限制。
-func CheckUploadSize(fileSize, maxSize int64) error {
-	if maxSize > 0 && fileSize > maxSize {
-		metrics.RecordRejected(metrics.RejectSize)
-		return ErrFileTooLarge
-	}
-	return nil
-}
-
-// CheckWholeFileSize 整文件大小上限校验（upload.max_file_size，0=不限）。
-// 分片/presign 直传等"整文件"通道用本函数；与单请求体上限 GetMaxUploadSize 区分。
-func CheckWholeFileSize(fileSize int64) error {
-	return CheckUploadSize(fileSize, GetMaxFileSize())
 }
