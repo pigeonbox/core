@@ -412,6 +412,10 @@ func (s *Service) UpdateConfig(ctx context.Context, newConfig *SystemConfig) err
 	if newConfig.APIToken == nil && s.config != nil {
 		newConfig.APIToken = s.config.APIToken
 	}
+	// share 段同规则（core#159）：请求未携带该段 ⇒ 保留现状（段缺省 ≠ 清空）。
+	if newConfig.Share == nil && s.config != nil {
+		newConfig.Share = s.config.Share
+	}
 	// P2P 段同规则（2026-10-14 对称节点 P1：局部保存不冲掉联邦配置）。
 	// 子段 nil 保留下沉一层（Wave B' 后 p2p 下只剩联邦子段）。
 	if newConfig.P2P == nil && s.config != nil {
@@ -562,6 +566,13 @@ func (s *Service) applySystemConfigOverlayLocked(sc *SystemConfig) {
 		if sc.APIToken != nil {
 			next.Security.APIToken = *sc.APIToken
 		}
+		// share 段（core#159 目录策略）：管理台已配置 ⇒ 整段覆盖全局 conf 的
+		// Share；未配置（nil）⇒ **不写这一段** ⇒ 全局 conf 保留 yaml 的值。
+		// ⇒ 全局 conf 的 Share 恒是**生效值**（app/share 的执行点与
+		// app/admin 的管理台读侧读的都是它 ⇒ 单一真相源）。
+		if sc.Share != nil {
+			next.Share = *sc.Share
+		}
 		if sc.P2P.Federation != nil {
 			next.Federation = *sc.P2P.Federation
 			// ⚠️ **部署模式派生的硬约束**：多副本拓扑（public/admin）下联邦
@@ -637,10 +648,34 @@ func (s *Service) syncMirrorFromGlobalLocked(g *conf.AppConfiguration, sc *Syste
 		a := g.Security.APIToken
 		sc.APIToken = &a
 	}
+	if sc.Share != nil {
+		sh := g.Share
+		sc.Share = &sh
+	}
 	if sc.P2P != nil && sc.P2P.Federation != nil {
 		f := g.Federation
 		sc.P2P.Federation = &f
 	}
+}
+
+// EffectiveShareSegment 返回**生效**的目录策略段（core#159）。
+//
+// 生效口径（管理台 vs yaml 的优先级，单一真相源）：
+//   - 管理台已配置（SystemConfig.Share 非 nil）⇒ overlay 已把管理台的值写进
+//     全局 conf ⇒ 这里返回管理台的值；
+//   - 管理台未配置 ⇒ overlay **不写这一段** ⇒ 全局 conf 保留 yaml 的值 ⇒
+//     这里返回 yaml 的值。
+//
+// ⇒ 全局 conf 的 Share 字段恒是生效值：app/share 的执行点（本地导入闸口/
+// 配额判定）与 app/admin 的管理台读侧读的都是它 ⇒ 不存在「后台显示一套、
+// 实际拦另一套」的两套口径。
+func EffectiveShareSegment() *conf.ShareConfig {
+	g := conf.Snapshot()
+	if g == nil {
+		return nil
+	}
+	s := g.Share
+	return &s
 }
 
 // RestoreAdminSettings 启动时把持久化的新段 overlay 回全局 conf（DB 先于服务启动就绪）。

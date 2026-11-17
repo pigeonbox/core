@@ -47,7 +47,18 @@ func (s *Service) GetConfig(ctx context.Context) (*SystemConfig, error) {
 	if lerr := s.cfg.LoadError(); lerr != nil {
 		return nil, fmt.Errorf("系统配置尚未成功装载: %w", lerr)
 	}
-	return appconfig.SanitizeForAdmin(cfg), nil
+	out := appconfig.SanitizeForAdmin(cfg)
+	// share 段（core#159）：回填**生效值**——管理台已配置 ⇒ 管理台的值；
+	// 未配置 ⇒ yaml 的值（回落）⇒ 后台看到的就是当前真正生效的策略清单，
+	// 而不是「管理台从没配过 ⇒ 显示空白 ⇒ 误以为策略没生效」。
+	//
+	// ⚠️ 只改副本（SanitizeForAdmin 已返回顶层副本）⇒ 不污染内存里的活配置；
+	// 也不回写 s.config.Share（那会把 yaml 的值固化成 DB 值，让"未配置 ⇒ 用
+	// yaml"的口径随第一次保存而失真）。
+	if eff := appconfig.EffectiveShareSegment(); eff != nil {
+		out.Share = eff
+	}
+	return out, nil
 }
 
 // UpdateConfig 更新系统配置（委派 config 域；写穿 DB + 全局 conf overlay + 热重建钩子）。

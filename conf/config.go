@@ -602,41 +602,69 @@ type LocalImportConfig struct {
 	Roots   []string `mapstructure:"roots" json:"roots"`     // 允许导入的绝对目录白名单；env: PB_LOCAL_IMPORT_ROOTS（逗号分隔）
 }
 
-// ShareConfig 分享域配置（core#159 目录策略地基）。
+// ShareConfig 分享域配置（core#159 目录策略）。
 //
-// 为什么是独立顶层段、且只走 yaml/env 直配（不经管理台 SystemConfig overlay）：
-// upload.local_import 段是管理台**整段替换**式 overlay（app/config 的
-// sc.LocalImport 覆盖），把目录策略挂在那里会在管理员保存 enabled/roots 时被
-// 零值冲掉（同 2026-10-05 UploadEx 冲掉 roots 的事故形态）；本段尚无管理台
-// 分区 ⇒ 无此风险，管理台分区与前端能力位见下方 TODO。
-// 结构体列表无法走 envBindings（env 只有标量/CSV 字符串）⇒ 仅 yaml，与
-// transfer.* 等既有 yaml-only 段同口径。
+// 独立顶层段（不复用 upload.* 段）：upload.local_import 段是管理台**整段替换**
+// 式 overlay（app/config 的 sc.LocalImport 覆盖），把目录策略挂在那里会在
+// 管理员保存 enabled/roots 时被零值冲掉（同 2026-10-05 UploadEx 冲掉 roots
+// 的事故形态）。本段自成一段 ⇒ 互不牵连。
+//
+// **生效优先级（管理台 vs yaml）**：管理台已配置 ⇒ 以管理台为准；管理台未配置
+// ⇒ 用 yaml 的值。
+//   - 管理台已配置 = SystemConfig.Share 段非 nil（DB 里有 share 段）；
+//   - 未配置时 overlay 不写这一段 ⇒ 全局 conf 保留 yaml 的值。
+//
+// ⇒ 全局 conf 的 Share 字段恒是**生效值**（app/config 的 overlay 与
+// app/share 的执行点读的是同一个字段 ⇒ 单一真相源，不存在两套口径）。
+//   - 管理台读侧（GET /admin/config）回填生效值（app/admin 的 GetConfig），
+//     所以后台看到的就是当前真正生效的策略清单。
+//   - 段缺省 ≠ 清空：PUT 不带 share 段时该段原样保留（app/config 的
+//     UpdateConfigJSON）；带了 share 段 ⇒ 整段替换（列表整体替换，不逐条 merge）。
+//
+// 结构体列表无法走 envBindings（env 只有标量/CSV 字符串）⇒ 仅 yaml 直配，
+// 与 transfer.* 等既有 yaml-only 段同口径。
 type ShareConfig struct {
 	// DirectoryPolicies 按目录（路径前缀）的配额与分享策略（issue #159）。
 	// 空 = 不启用（现状不变）。目录层是站点/用户配额**之上的策略层**，
-	// 不触碰 reserveUploadCaps 的原子预留账本（那是 core#196/#169 的地盘）。
+	// 不改动 reserveUploadCaps 的原子预留账本本体（那是 core#196/#169 的地盘），
+	// 而是在**同一把账本锁**上追加第三个维度（目录维度，见
+	// app/share/quota_reserve.go 的 reserveDirectoryQuota）。
 	DirectoryPolicies []DirectoryPolicyConfig `mapstructure:"directory_policies" json:"directory_policies"`
 }
 
 // DirectoryPolicyConfig 单条目录策略。
 //
-// 范围（core#159 地基，issue 正文按「开跟踪」提报、范围需拍板）：
+// 范围（core#159）：
 //   - 已接线：ShareMode=deny ⇒ 本地导入（NAS 免上传导入）时按目录前缀拒收；
-//   - ⚠️ QuotaBytes **尚未接线**（配置骨架先行）：分享行不记录来源目录
-//     （file_codes.file_path 是存储相对路径，与本地绝对目录无关联），用量归因
-//     方案待拍板——候选：①存储相对路径带目录段（imports/<root>/，需评估孤儿
-//     扫描/秒传去重影响）②file_codes 增加来源目录列（迁移）③导入时登记映射表。
-//     接线时还须定义与 core#196 原子预留账本的关系（目录配额在其上做策略层，
-//     不改账本本身）与并发预留语义。当前设置本字段**不生效**，接线后语义为：
-//     该目录下存活分享总字节超限 ⇒ 拒绝（≠过期，文案定位到具体目录）。
+//   - 已接线：QuotaBytes ⇒ 本地导入时按目录判配额，**超限在落盘前拒绝**
+//     （不落文件、不建行），返回 typed error（errcode.CodeStorageQuota/30002
+//     ⇒ HTTP 507），错误文案点名具体目录与限额。
+//
+// 用量归因（QuotaBytes 的口径，core#159 拍板）：
+//   - 归因靠 file_codes.dir_root 列（新增，带索引）：**只记命中的策略 root**，
+//     **不记用户原始绝对路径**（少泄露面）。只有本地导入且命中策略时才写；
+//     其它上传通道恒为空串 ⇒ 不计入任何目录。
+//   - 落库的是**解析后**（EvalSymlinks）的 root ⇒ 同一策略的多次导入聚合到
+//     同一个目录，软链目录不分裂成两份用量。
+//   - 统计口径 = **存活**分享（未软删、未过期）：SUM(size) WHERE dir_root = ?
+//     且行仍存活（见 dao.GetDirectoryUsage）。
+//     ⚠️ 与**站点级物理配额刻意不同**：站点配额量的是物理占用（含回收站软删，
+//     回答「盘上还占多少」），目录配额量的是存活分享的逻辑字节（回答「这个
+//     目录对外分享出去多少」）——两者回答不同问题，勿「顺手对齐」。
+//   - 并发语义：判定与在途预留发生在**与站点/用户维度同一把账本锁**的临界区内
+//     ⇒ 同进程并发导入不超放（core#169 的预留-提交-回滚同款机制）。
+//     覆盖面与既有账本同款：进程内互斥；**跨副本同刻并发不在此原语覆盖内**
+//     （与 core#151 uploadlock 同一边界，勿吹成跨副本安全）。
+//   - 边界：QuotaBytes=0 ⇒ 该目录不限额（只受 share_mode 约束）。
 //   - TODO：share_mode 扩展 internal_only（仅站内/强制登录取件，对应 issue 的
-//     「只许站内分享、不许生成公网取件码」）待拍板；管理台配额分区 + 前端能力位。
+//     「只许站内分享、不许生成公网取件码」）待拍板。
 type DirectoryPolicyConfig struct {
 	// Root 目录前缀（绝对路径，与 upload.local_import.roots 同形态）。
 	// 分隔符感知的前缀匹配：/data/music 匹配其自身与子路径，不匹配 /data/music2；
 	// 多条重叠时取最长前缀（与配置顺序无关）。
 	Root string `mapstructure:"root" json:"root"`
-	// QuotaBytes 目录配额（字节，0=不限）。⚠️ 尚未接线，见类型注释。
+	// QuotaBytes 目录配额（字节，0=不限）。语义见类型注释（core#159 已接线）：
+	// 该目录下**存活**分享总字节超限 ⇒ 本地导入在落盘前被拒（30002/507）。
 	QuotaBytes int64 `mapstructure:"quota_bytes" json:"quota_bytes"`
 	// ShareMode 分享策略：""/allow（默认，放行）| deny（该目录禁止生成分享）。
 	// 其余取值 fail-closed（配置拼错不得静默放行）。

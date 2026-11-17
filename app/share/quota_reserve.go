@@ -2,7 +2,10 @@ package share
 
 import (
 	"context"
+	"fmt"
 	"sync"
+
+	"github.com/pigeonbox/contracts/errcode"
 
 	"github.com/pigeonbox/core/pkg/gate"
 	"github.com/pigeonbox/core/pkg/logger"
@@ -37,7 +40,11 @@ var quotaReserve = struct {
 	mu   sync.Mutex
 	site int64
 	user map[uint]int64
-}{user: make(map[uint]int64)}
+	// dir 目录维度（core#159）：key = 目录策略 root（EvalSymlinks 解析后的形态），
+	// value = 该目录的**在途预留**字节。与 site/user 维度**共用同一把锁** ⇒
+	// 目录维度的「读存活合计 → 比限额 → 占位」是原子判定。
+	dir map[string]int64
+}{user: make(map[uint]int64), dir: make(map[string]int64)}
 
 // reserveUploadCaps 配额判定 + 预留：通过则返回幂等 release（调用方 defer）。
 //
@@ -97,6 +104,90 @@ func (s *Service) reserveUploadCaps(ctx context.Context, userID *uint, totalSize
 				if quotaReserve.user[*userID] <= 0 {
 					delete(quotaReserve.user, *userID)
 				}
+			}
+		})
+	}, nil
+}
+
+// DirectoryQuotaExceededError 目录配额超限（core#159）。
+//
+// typed error 约定：实现 ErrCode() int ⇒ handler 侧透传业务码
+// errcode.CodeStorageQuota（30002，HTTP 507 Insufficient Storage）——与站点级
+// 存储配额超限（GlobalQuotaExceededError）同码同族：两者都是「存储额度用完」，
+// 前端可共用一条提示文案与重试路径。
+//
+// 文案必须**点名具体目录与限额**：运维要能直接定位到是哪条目录策略挡下的，
+// 不必再去翻配置（core#159 的运维可定位性要求）。
+type DirectoryQuotaExceededError struct {
+	// DirRoot 命中的目录策略 root（已解析形态）
+	DirRoot string
+	// Used 该目录当前存活分享合计字节
+	Used int64
+	// Quota 该目录的配额上限字节
+	Quota int64
+	// Size 本次请求的字节数
+	Size int64
+}
+
+func (e *DirectoryQuotaExceededError) Error() string {
+	return fmt.Sprintf(
+		"目录 %s 的分享配额已满（该目录存活分享 %d 字节 + 本次 %d 字节，上限 %d 字节），请清理该目录的过期分享或调整目录配额",
+		e.DirRoot, e.Used, e.Size, e.Quota)
+}
+
+func (e *DirectoryQuotaExceededError) ErrCode() int { return errcode.CodeStorageQuota }
+
+// reserveDirectoryQuota 目录配额判定 + 预留（core#159）：通过则返回幂等 release
+// （调用方 defer），超限返回 *DirectoryQuotaExceededError。
+//
+// 与 site/user 维度**同一把锁**（quotaReserve.mu）⇒ 目录维度的
+// 「读存活合计 → 比限额 → 占位」是**原子判定**：在途字节对后续判定可见 ⇒
+// 并发导入不会超放（与 core#169 的预留-提交-回滚同款机制、同款边界）。
+//
+// 为什么必须在临界区内读合计：合计读到临界区外 ⇒ 读到的 used 可能是别的请求
+// 提交前的陈旧值，而它的在途预留可能已释放 ⇒ 双双漏判（必须 SUM 与占位原子复合）。
+//
+// 用量口径 = **存活**分享（未软删、未过期），与站点级物理占用口径**故意不同**
+// （见 dao.GetDirectoryUsage 的口径说明：站点量「盘上还占多少」、目录量
+// 「这个目录对外分享出去多少」）。
+//
+// 覆盖面与 site/user 维度**同款**：**进程内互斥**（单机 standalone 的全部形态，
+// 以及多副本各自的同刻并发）——与 core#151 uploadlock 同一边界；跨副本
+// （deployment.mode=public×N）同刻并发**不在**此原语覆盖内，彻底收口需
+// DB 侧序列化点（守卫行/顾问锁，方言各异），见本仓 uploadlock 注释同款说明。
+// 本函数不承诺跨副本安全。
+//
+// 统计故障 ⇒ fail-open（配额是治理项而非安全项，与站点级口径一致：不因统计
+// 异常拒绝所有导入），但**绝不静默**：告警留痕。
+func (s *Service) reserveDirectoryQuota(ctx context.Context, dirRoot string, quota int64, size int64) (func(), error) {
+	if quota <= 0 {
+		return func() {}, nil
+	}
+	quotaReserve.mu.Lock()
+	defer quotaReserve.mu.Unlock()
+
+	used, err := s.fileCodeRepo.GetDirectoryUsage(ctx, dirRoot)
+	if err != nil {
+		logger.CtxWarn(ctx, "directory usage query failed, skip directory quota check",
+			"dir_root", dirRoot, "err", err)
+		return func() {}, nil
+	}
+	inflight := quotaReserve.dir[dirRoot]
+	if used+inflight+size > quota {
+		metrics.RecordRejected(metrics.RejectQuota)
+		return nil, &DirectoryQuotaExceededError{DirRoot: dirRoot, Used: used, Quota: quota, Size: size}
+	}
+
+	// 预留占位：自此到 release 之间，本笔字节对后续判定可见
+	quotaReserve.dir[dirRoot] = inflight + size
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			quotaReserve.mu.Lock()
+			defer quotaReserve.mu.Unlock()
+			quotaReserve.dir[dirRoot] -= size
+			if quotaReserve.dir[dirRoot] <= 0 {
+				delete(quotaReserve.dir, dirRoot)
 			}
 		})
 	}, nil

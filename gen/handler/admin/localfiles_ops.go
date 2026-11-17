@@ -17,6 +17,7 @@ import (
 	shareService "github.com/pigeonbox/core/app/share"
 	"github.com/pigeonbox/core/internal/paging"
 	"github.com/pigeonbox/core/pkg/middleware"
+	"github.com/pigeonbox/core/pkg/resp"
 	"github.com/pigeonbox/core/pkg/transfer"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -158,9 +159,9 @@ func AdminImportLocalFile(ctx context.Context, c *app.RequestContext) {
 	if err != nil {
 		audit(ctx, "localfile.import",
 			fmt.Sprintf("root=%d path=%s import failed: %v", req.GetRoot(), req.Path, err), false)
-		c.JSON(consts.StatusBadRequest, &admin.AdminImportLocalFileResp{
-			Code: errcode.CodeInvalidParam, Message: err.Error(),
-		})
+		// typed error（目录配额超限 ⇒ errcode.CodeStorageQuota/30002 ⇒ HTTP 507）
+		// 透传业务码与状态码；非 typed error 维持既有的 400 + 10001 口径。
+		resp.NewTypedErrorOr(c, err, errcode.CodeInvalidParam)
 		return
 	}
 	// 导入把本机文件变成可取件分享（数据外泄面）⇒ 审计含来源路径与产物分享码。

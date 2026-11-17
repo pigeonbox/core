@@ -69,6 +69,12 @@ type ShareFileReq struct {
 	WrappedKey string
 	CustomCode string // 自定义取件码（P3；登录用户专属，handler 把关）
 	Note       string // 文件备注（可空，取件页展示；2026-10-12 #489）
+	// DirRoot 命中目录策略的 root（core#159 目录配额用量归因）。
+	//
+	// 只有本地导入（app/share/localimport.go）会填：填的是**解析后**的策略
+	// root（EvalSymlinks 形态）⇒ 同一策略的多次导入聚合到同一个目录。
+	// 其它通道恒为空串 ⇒ 不计入任何目录的用量。
+	DirRoot string
 }
 
 type ShareResp struct {
@@ -725,6 +731,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 			Encrypted:    req.Encrypted,
 			WrappedKey:   req.WrappedKey,
 			Note:         req.Note,
+			DirRoot:      req.DirRoot,
 		}
 	})
 	if err != nil {

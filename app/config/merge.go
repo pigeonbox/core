@@ -72,7 +72,27 @@ func (s *Service) UpdateConfigJSON(ctx context.Context, raw []byte) error {
 	}
 
 	// ③ 字段级合并（incoming 覆盖 base；两侧都是对象时递归；显式 null 覆盖）
-	merged, err := json.Marshal(mergeJSONObjects(base, incoming))
+	mergedMap := mergeJSONObjects(base, incoming)
+
+	// ③.5 share 段（core#159 目录策略）：**整段替换**语义（不做逐条 merge）。
+	//
+	// 为什么单独处理：通用字段级合并对「两侧都是对象」会**递归**合并 ⇒ 段内
+	// 未提及的子键保留底座旧值。目录策略段的语义是「一份完整的策略清单」⇒
+	// 提交了就是提交的那份（directory_policies 列表整体替换）。
+	//
+	// 段缺省（提交体里没有 share 键）⇒ 底座的值**原样保留**（**不是清空**）：
+	// 管理员保存别的分区不得把目录策略冲掉（2026-10-05 UploadEx 冲掉
+	// local_import.roots 的事故形态——本段独立成段正是为了避开它）。
+	//
+	// ⚠️ share 显式 null 与缺省同义（不改该段）：本仓各段的 nil 保留规则
+	// （UpdateConfig 的 nil 保留）本就使整段 null 落回现状。清空策略清单请提交
+	// 空列表 {"share":{"directory_policies":[]}}（= 管理台已配置、清单为空 ⇒
+	// yaml 值不再生效）。
+	if raw, ok := incoming["share"]; ok {
+		mergedMap["share"] = raw
+	}
+
+	merged, err := json.Marshal(mergedMap)
 	if err != nil {
 		return err
 	}

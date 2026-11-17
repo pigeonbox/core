@@ -30,8 +30,15 @@ type ImportLocalOpts struct {
 }
 
 // ImportLocalFile 把本地文件导入为分享。
-// 校验链：功能开关 → 路径落在白名单目录内（EvalSymlinks 防穿越）→ 普通文件 →
-// 大小上限 → 服务端拷贝入存储 → 复用 CreateShare（配额/审核/自定义码）。
+// 校验链：功能开关 → 路径落在白名单目录内（EvalSymlinks 防穿越）→ 目录策略闸口
+// （share_mode=deny 拒收；quota_bytes 超限亦拒收，两者都**在落盘前**、零副作用）
+// → 普通文件 → 大小上限 → 服务端拷贝入存储 → 复用 CreateShare（站点/用户配额、
+// 审核、自定义码）。
+//
+// 目录配额（core#159）：命中目录策略时，判定与在途预留发生在
+// reserveDirectoryQuota 的临界区内（与站点/用户维度同一把锁 ⇒ 并发不超放），
+// 预留持有到建行提交之后才释放。超限返回 *DirectoryQuotaExceededError
+// （typed ⇒ errcode.CodeStorageQuota/30002 ⇒ HTTP 507）。
 func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*ShareResp, error) {
 	// 次数型下界（core#220）：在读文件/拷贝入存储之前拒绝（零副作用）。
 	if err := utils.CheckCountExpireValue(opts.ExpireStyle, opts.ExpireValue); err != nil {
@@ -51,8 +58,10 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 		return nil, errors.New("路径不在允许导入的目录内")
 	}
 	// 目录策略（core#159）：share_mode=deny 在此拒收（在落盘/拷贝之前，零副作用）。
-	// quota_bytes 尚未接线（用量归因待拍板，见 conf.DirectoryPolicyConfig TODO）。
-	if err := checkDirectoryPolicy(cfg.Share.DirectoryPolicies, real); err != nil {
+	// 命中条目只解析一次：既用于 share_mode 闸口，也用于下面的目录配额归因
+	// （命中条目的 Root 是**解析后**形态 ⇒ 归因 key 与文案里的目录一致）。
+	matched := resolveDirectoryPolicyMatch(cfg.Share.DirectoryPolicies, real)
+	if err := checkDirectoryPolicyMatch(matched); err != nil {
 		return nil, err
 	}
 	opts.AbsPath = real
@@ -65,6 +74,22 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 	}
 	if err := gate.CheckFileSize(info.Size()); err != nil {
 		return nil, err
+	}
+	// 目录配额（core#159）：命中策略且 quota_bytes>0 ⇒ 在**落盘前**判定。
+	// 超限 ⇒ 不落文件、不建行（typed error ⇒ errcode.CodeStorageQuota/30002）。
+	//
+	// 预留必须**持有到建行提交之后**才释放（defer 在函数出口）：先释放再落行
+	// 会留下「行还没建、额度已还」的窗口 ⇒ 并发导入可超放。释放后该目录的
+	// 用量由 DB 里的存活行承担，与在途预留口径一致（提交前双计，保守方向）。
+	var releaseDirQuota func()
+	if matched != nil && matched.QuotaBytes > 0 {
+		releaseDirQuota, err = s.reserveDirectoryQuota(ctx, matched.Root, matched.QuotaBytes, info.Size())
+		if err != nil {
+			return nil, err
+		}
+	}
+	if releaseDirQuota != nil {
+		defer releaseDirQuota()
 	}
 
 	name := utils.SanitizeFileName(filepath.Base(real))
@@ -86,17 +111,26 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 	}
 
 	// 整文件哈希（秒传；读已落盘副本）
+	// ⚠️ rc 必须判空：存储实现返回 (nil, nil)（读不到对象）时，HashReader(nil)
+	// 会 panic ⇒ 整个导入通道被打挂。读不到就当没有哈希（不参与秒传）。
 	fileHash := ""
-	if rc, _, rerr := s.storage.GetFileReader(ctx, rel); rerr == nil {
+	if rc, _, rerr := s.storage.GetFileReader(ctx, rel); rerr == nil && rc != nil {
 		fileHash, _ = utils.HashReader(rc)
 		_ = rc.Close()
 	}
 	channel := "local_import"
+	// DirRoot：命中目录策略时写**解析后的策略 root**（用量归因 + 运维可定位）；
+	// 未命中任何策略 ⇒ 空串（该行不计入任何目录的用量）。
+	dirRoot := ""
+	if matched != nil {
+		dirRoot = matched.Root
+	}
 	share, serr := s.CreateShare(ctx, &ShareFileReq{
 		Channel:      channel,
 		FilePath:     rel,
 		Size:         written,
 		Text:         name,
+		DirRoot:      dirRoot,
 		ExpiredAt:    utils.CalculateExpireTime(opts.ExpireValue, opts.ExpireStyle),
 		ExpiredCount: utils.CalculateExpireCount(opts.ExpireStyle, opts.ExpireValue),
 		RequireAuth:  opts.RequireAuth,

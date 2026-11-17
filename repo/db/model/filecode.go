@@ -32,8 +32,22 @@ type FileCode struct {
 	Code         string `gorm:"uniqueIndex;size:255" json:"code"`
 	UUIDFileName string `gorm:"size:255" json:"uuid_file_name"`
 	FilePath     string `gorm:"size:255" json:"file_path"`
-	Size         int64  `gorm:"default:0" json:"size"`
-	Text         string `gorm:"type:text" json:"text"`
+	// DirRoot 命中目录策略的 root（core#159 目录配额用量归因）。
+	//
+	// **只记命中的策略 root，不记用户原始绝对路径**（少泄露面）：本地导入的
+	// 源文件绝对路径不进库，落库的只有策略 root ⇒ 既能按目录归因用量，又不必
+	// 在库里沉淀用户的文件路径。
+	//
+	// 只有「本地导入且命中某条策略」时才写；其它上传通道（直传/分片/预签名/
+	// 多文件/文本）恒为空串——它们没有「来源目录」这个概念，空串行不匹配
+	// 任何真实 root ⇒ 不计入任何目录的用量。
+	//
+	// 取值是 **EvalSymlinks 解析后的** root（与匹配时同一形态）⇒ 同一策略的
+	// 多次导入落同一个值，用量才能按 dir_root 精确聚合（macOS 上 /var →
+	// /private/var 这类软链目录不归因分裂）。
+	DirRoot string `gorm:"size:255;index" json:"dir_root"`
+	Size    int64  `gorm:"default:0" json:"size"`
+	Text    string `gorm:"type:text" json:"text"`
 	// Note 文件备注（可空）：随分享展示给取件人（2026-10-12，文件+文本一并投递）
 	Note         string     `gorm:"type:text" json:"note"`
 	ExpiredAt    *time.Time `gorm:"index:idx_file_codes_status_expired,priority:2" json:"expired_at"`
