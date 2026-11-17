@@ -730,6 +730,17 @@
         "bootstrap/resource_entry_guard_test.go::TestResourceEntryGuardCoverage",
         "bootstrap/resource_entry_guard_test.go::TestResourceEntryGuardNegativeControl"
       ]
+    },
+    {
+      "id": "RE-08",
+      "class": "resource_exhaustion",
+      "title": "配额闸在 Redis 故障下的降级语义：故障期不落计数、恢复后计数不丢不虚增、他人配额不受牵连",
+      "verdict": "Redis 宕机期间配额面 fail-open 但**不落计数**（故障期不凭空放行额度）；恢复后计数从故障前的值继续（不丢、不虚增），计数键真写进 Redis，且超限仍被拒（宕机不会把配额闸永久放开）；故障只影响当期的本 IP 计数，别的来源 IP 的配额状态不受牵连",
+      "tests": [
+        "pkg/gate/quota_redis_fault_test.go::TestQuotaRedis_OutageDegradesAndRecovers",
+        "pkg/gate/quota_redis_fault_test.go::TestQuotaRedis_OutageDoesNotCorruptByteCounter",
+        "pkg/gate/quota_redis_fault_test.go::TestQuotaRedis_OutageKeepsOtherIPsCounting"
+      ]
     }
   ],
   "exemptions": [
