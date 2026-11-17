@@ -164,6 +164,38 @@ jobs:
         if: always()
         run: bash scripts/live-storage-gate.sh
 
+      # ── L3 集成层：远端存储真后端验收（S3 兼容）──
+      #
+      # 生态质量矩阵 L1–L8 里 L3 是集成层。本仓现状：
+      #   · **WebDAV**：进程内真 WebDAV 服务（golang.org/x/net/webdav），
+      #     已在普通 `go test ./...` 里真跑（storage/webdav_integration_test.go）；
+      #   · **S3 兼容驱动（minio-go）**：此前只有单测级覆盖 + 管理端 probe，
+      #     而 probe 只验「桶在不在、凭据对不对」，**从不读写对象** ⇒
+      #     真后端的 PUT/GET/DELETE/覆盖写/分片合并/预签名直传直下**从未跑过**。
+      # 2026-11-02 Azure Blob + HDFS 真机联调实测出 4 个「单测全绿、真机不可用」
+      # 的缺陷（core#36 族）⇒ 同族后端必须有常态化真后端用例。
+      #
+      # # 真后端选型：RustFS（MinIO 兼容的 S3 服务端），不是 MinIO 容器
+      #
+      # 2026-11-18 实测（不是猜测）：MinIO 官方三条分发路径现已**不可匿名获取**
+      #   · Docker Hub `minio/minio:<tag>` ⇒ 「pull access denied ... repository does not exist」；
+      #   · quay.io/minio/minio:<tag>      ⇒ 匿名取 manifest 401 UNAUTHORIZED
+      #     （连 `latest` 与 2024 年旧 tag 也一样 ⇒ 仓库级鉴权，非 tag 缺失）；
+      #   · dl.min.io/server/minio/...     ⇒ 410 Gone（官方归档已清空）。
+      # ⇒ 继续钉在 MinIO 容器上，这一步只会恒红；而恒红等于没有门禁。
+      # RustFS 是 MinIO 兼容的**真实** S3 服务端（Rust 实现），其 GitHub Release
+      # 资产带**官方 sha256**（GitHub API asset.digest）⇒ 可完全钉版、不碰镜像仓库、
+      # 不依赖匿名拉取权限。**被测面不变**：core 的 S3 驱动走 minio-go（S3 协议面）。
+      #
+      # 门禁逻辑（起服务 → 跑用例 → 判红 → 负对照自检）全在仓内脚本：
+      # scripts/l3-s3-backend.sh（`--selfcheck` 跑 8 项负对照，纯本地不联网）。
+      # 为什么并进 test job 而不是另开一个 job：本仓既有结论（见上面
+      # 「换库真库验收」步注释）——独立 job 连续多次在「Set up job」阶段就红，
+      # 而 test job 解析稳定 ⇒ 不新增一条 action 解析路径。
+      - name: L3 远端存储真后端验收（S3 兼容真后端）
+        if: always()
+        run: bash scripts/l3-s3-backend.sh
+
   # 生成物对账（CHECK=1）：沙箱里从 IDL 再生成 gen/ 并与提交物比对，IDL 改了没跑
   # gen-router.sh（或生成物被手改/多出杂散文件）即红。IDL 真相源=contracts，按
   # core go.mod 钉版检出（不用 main，避免 contracts 领先造成假红）；目录布局对齐
