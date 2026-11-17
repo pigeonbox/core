@@ -200,10 +200,16 @@ jobs:
       # `docker save` 出来的 tar 摘要随 docker 版本/平台漂移 ⇒ 用 registry
       # manifest digest 比对（与 gitleaks 段「固定期望值比对」的纪律同款；
       # docker pull 本身也按摘要校验过内容）。
-      # digest 取自四个独立镜像归档站交叉核验（jcometki/minio 归档用 buildx
-      # 复核过、mexiaow/minio、l33tlamer/minio-backup、渡渡鸟镜像同步站
-      # docker.aityp.com 的上游同步页）——两个值分别是多架构 index 与
-      # linux/amd64 单平台 manifest，任一命中即通过（tag 的两种口径都认）。
+      #
+      # **镜像源 = quay.io/minio/minio**（MinIO 官方主仓）。2026-11-17 实录：
+      # Docker Hub 的 `minio/minio` 已不再提供该 release tag，runner 拉取直接报
+      # 「pull access denied for minio/minio, repository does not exist or may
+      # require 'docker login'」⇒ 钉在 Docker Hub 上等于这步恒红。
+      #
+      # **摘要 bootstrap 纪律**：MINIO_SHA_INDEX / MINIO_SHA_AMD64 是**仓内钉版值**；
+      # 两者皆空 ⇒ 本步打印实际摘要并**判红**（「没钉版」不许看起来像「钉过了」）
+      # ⇒ 首次换镜像源时据此回填，回填后即为逐字比对（供应链门禁）。
+      # 两个值分别是多架构 index 与 linux/amd64 单平台 manifest，任一命中即通过。
       - name: L3 远端存储真后端验收（MinIO）
         if: always()
         env:
@@ -216,21 +222,29 @@ jobs:
           set -uo pipefail
           echo "拉 MinIO 镜像（钉版 tag）…"
           docker rm -f pb-minio >/dev/null 2>&1 || true
-          MINIO_IMAGE="minio/minio:RELEASE.2025-04-22T22-12-26Z"
-          MINIO_SHA_INDEX="a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"
-          MINIO_SHA_AMD64="3f97c5651cb6662b880c787a232b6b34fec8d8922e08d6617b25d241a21164bb"
+          MINIO_IMAGE="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+          MINIO_SHA_INDEX=""
+          MINIO_SHA_AMD64=""
           if ! docker pull "$MINIO_IMAGE"; then
             echo "✗ MinIO 镜像拉取失败：$MINIO_IMAGE"; exit 1
           fi
           actual_sha="$(docker image inspect --format '{{index .RepoDigests 0}}' "$MINIO_IMAGE" | sed 's/.*@sha256://')"
-          case "$actual_sha" in
-            "$MINIO_SHA_INDEX"|"$MINIO_SHA_AMD64")
-              echo "✓ 镜像摘要核对通过：sha256:$actual_sha" ;;
-            *)
+          ok_pin=0
+          for pin in "$MINIO_SHA_INDEX" "$MINIO_SHA_AMD64"; do
+            [ -n "$pin" ] || continue
+            [ "$actual_sha" = "$pin" ] && ok_pin=1
+          done
+          if [ "$ok_pin" != "1" ]; then
+            if [ -z "$MINIO_SHA_INDEX" ] && [ -z "$MINIO_SHA_AMD64" ]; then
+              echo "✗ 镜像摘要尚未钉版（bootstrap）：实际=sha256:$actual_sha"
+              echo "  请把该值填回本步的 MINIO_SHA_INDEX（多架构 index 口径）后重跑——钉版即供应链门禁"
+            else
               echo "✗ 镜像摘要与钉版不符：实际=sha256:$actual_sha"
               echo "  （期望 多架构 index=$MINIO_SHA_INDEX 或 linux/amd64 manifest=$MINIO_SHA_AMD64）"
-              exit 1 ;;
-          esac
+            fi
+            exit 1
+          fi
+          echo "✓ 镜像摘要核对通过：sha256:$actual_sha"
 
           echo "起 MinIO 容器…"
           docker run -d --name pb-minio \
