@@ -413,6 +413,11 @@ func ShareFile(ctx context.Context, c *app.RequestContext) {
 	// 12. 调用 service 创建分享记录
 	shareResult, err := getShareService().ShareFile(ctx, shareReq)
 	if err != nil {
+		// 失败回滚：删除本次刚落盘的文件（配额超限 / 审核拒绝 / 落库失败）。
+		// ⚠️ 2026-11-18：此前单文件直传通道缺这一环（同位置的多文件通道有
+		// cleanupStored）⇒ 每次配额拒绝都留一份孤儿文件；且孤儿**不计入配额账本**
+		// （物理用量按 file_codes 行的路径合计）⇒ 磁盘占用可无限超出 storage.quota。
+		getShareService().RollbackUploadedFile(ctx, filePath)
 		resp.NewTypedError(c, err) // 配额/审核等 typed error 按业务码透传
 		return
 	}
