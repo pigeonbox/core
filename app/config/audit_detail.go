@@ -16,10 +16,29 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/pigeonbox/core/repo/db/model"
 )
 
 // maxAuditKeyPaths 单条审计 target 里最多列出的字段键数。
 const maxAuditKeyPaths = 50
+
+// auditTargetBase 配置写入审计的固定文案（target 的前缀）。
+const auditTargetBase = "system config persisted to database"
+
+// maxAuditTargetLen 审计 target 的字符上限 = 审计表的列宽
+// （model.AdminOperationLogTargetMaxLen）。
+//
+// 为什么 target 有硬上限：target 是**人拼的字符串**（键名清单，长度随本次改动
+// 字段数增长）⇒ 列宽是硬约束：PG/MySQL 严格模式超长写不进；换库导入按
+// 「数据最长 vs 模型声明」逐列预检 ⇒ 超长即拒导（2026-11-17 实录：50 个键名
+// 拼出 555 字符 > 255 ⇒ 换库导入红；SQLite 不校验 varchar 长度 ⇒ 只有换库才炸）。
+//
+// ⇒ 口径：**在源头按列宽预算选键**——装不下的键不逐个截断（会切出半个键名），
+// 而是少列几个，末尾用「…(+N)」标注还剩多少个 ⇒ 既不超长，也不丢
+// 「本次改了很多开关」这一事实。
+const maxAuditTargetLen = model.AdminOperationLogTargetMaxLen
 
 type auditDetailCtxKey struct{}
 
@@ -44,11 +63,10 @@ func auditDetailOf(ctx context.Context) string {
 
 // configAuditTarget 配置写入的审计 target：固定文案 + 本次改动的键名摘要。
 func configAuditTarget(ctx context.Context) string {
-	const base = "system config persisted to database"
 	if d := auditDetailOf(ctx); d != "" {
-		return base + " (" + d + ")"
+		return auditTargetBase + " (" + d + ")"
 	}
-	return base
+	return auditTargetBase
 }
 
 // configChangeKeys 从字段级提交体抽取排序后的叶子键路径（不含值）。
@@ -90,9 +108,64 @@ func collectJSONKeyPaths(prefix string, raw json.RawMessage, out *[]string) {
 }
 
 // auditKeysDetail 把键路径切片拼成 target 里的摘要（空切片返回空串）。
+//
+// 长度预算 = 审计 target 的列宽（maxAuditTargetLen）减去固定文案与括号、再减去
+// 本摘要的前缀 ⇒ 摘要装得下 ⇒ 整条 target 装得下。
+//
+// 装不下的键**不逐个截断**（会切出半个键名，事后无法判断改的是哪个开关），
+// 而是少列几个，末尾用「…(+N)」标注还剩多少个 ⇒ 既不超长，也不丢
+// 「本次改了很多开关」这一事实。
 func auditKeysDetail(prefix string, keys []string) string {
 	if len(keys) == 0 {
 		return ""
 	}
-	return prefix + strings.Join(keys, ",")
+	budget := maxAuditTargetLen - len(auditTargetBase) - len(" ()") - len(prefix)
+	if budget <= 0 {
+		return truncateAuditText(prefix+omittedAuditKeys(len(keys)), budget)
+	}
+	var b strings.Builder
+	b.WriteString(prefix)
+	used := 0
+	kept := 0
+	for _, k := range keys {
+		seg := k
+		if kept > 0 {
+			seg = "," + k
+		}
+		// 装下这个键之后，剩下的键数决定「…(+N)」标注的长度 ⇒ 先把它预留出来。
+		reserve := len(omittedAuditKeys(len(keys) - kept - 1))
+		if used+len(seg)+reserve > budget {
+			break
+		}
+		b.WriteString(seg)
+		used += len(seg)
+		kept++
+	}
+	if kept < len(keys) {
+		b.WriteString(omittedAuditKeys(len(keys) - kept))
+	}
+	return truncateAuditText(b.String(), budget)
+}
+
+// omittedAuditKeys 被省略键数的标注（…(+N)）。
+func omittedAuditKeys(n int) string {
+	return fmt.Sprintf("…(+%d)", n)
+}
+
+// truncateAuditText 按字节上限截断（不切碎多字节字符）。
+//
+// 列宽判据用的是**字节**长度（换库导入的列宽预检同口径）⇒ 截断也按字节；
+// 但切点落在多字节字符中间会产生非法 UTF-8 ⇒ 回退到字符边界。
+func truncateAuditText(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
