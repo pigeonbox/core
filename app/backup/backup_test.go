@@ -50,6 +50,12 @@ func (f *fakeStore) FileExists(ctx context.Context, p string) bool {
 	return ok
 }
 
+// ObjectExists 错误可见的存在性探测（内存替身：只有「在 / 不在」，没有故障）。
+func (f *fakeStore) ObjectExists(_ context.Context, p string) (bool, error) {
+	_, ok := f.data[p]
+	return ok, nil
+}
+
 func (f *fakeStore) SaveStream(ctx context.Context, p string, r io.Reader, size int64) (int64, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {

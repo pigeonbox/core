@@ -88,6 +88,19 @@ func (s *downBackendStore) FileExists(_ context.Context, p string) bool {
 	return ok
 }
 
+// ObjectExists 错误可见的存在性探测（**修复后**的存储层形态）：
+// 后端不可达 ⇒ **如实报错**（不吞成「对象不存在」）；对象真不在 ⇒ (false, nil)；
+// 在 ⇒ (true, nil)。
+//
+// 这正是本次修复新增的能力：存储层的 FileExists 吞错、ObjectExists 不吞。
+func (s *downBackendStore) ObjectExists(_ context.Context, p string) (bool, error) {
+	if s.down {
+		return false, errors.New("backend unavailable: 503 Service Unavailable")
+	}
+	_, ok := s.data[p]
+	return ok, nil
+}
+
 // TestExport_BackendDown_MustFailNotSilentlyOmitObjects 后端不可达 ⇒ 导出
 // 必须失败（不得产出「看起来成功、实际缺对象」的包）。
 func TestExport_BackendDown_MustFailNotSilentlyOmitObjects(t *testing.T) {
