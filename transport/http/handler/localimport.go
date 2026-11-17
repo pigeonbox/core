@@ -74,7 +74,9 @@ func UserImportLocal(ctx context.Context, c *app.RequestContext) {
 		OwnerIP:      middleware.ClientIP(c),
 	})
 	if err != nil {
-		c.JSON(consts.StatusBadRequest, map[string]interface{}{"code": errcode.CodeInvalidParam, "message": err.Error()})
+		// typed error（目录配额超限 ⇒ errcode.CodeStorageQuota/30002 ⇒ HTTP 507）
+		// 透传业务码与状态码；非 typed error 维持既有的 400 + 10001 口径。
+		resp.NewTypedErrorOr(c, err, errcode.CodeInvalidParam)
 		return
 	}
 

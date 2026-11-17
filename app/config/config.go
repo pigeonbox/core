@@ -14,6 +14,13 @@ import (
 	"github.com/pigeonbox/core/pkg/utils"
 )
 
+// ErrSharePolicyInvalid 目录策略段（share.directory_policies）的可操作错误。
+//
+// handler 据此回 400 + CodeInvalidParam + 具体文案（点名是哪个下标、哪个字段
+// 非法）——运维能直接改，不必翻日志。与 ErrPolicyInvalid（策略模板）同款：
+// 「管理员写错了」不是服务端故障，不该走 500 脱敏出口。
+var ErrSharePolicyInvalid = errors.New("目录策略配置被拒绝")
+
 // BaseConfig 站点基础信息段。指针语义与其余段一致：nil = 本次未提交，
 // UpdateConfig 保留现状（值类型无法表达"未提交"，局部保存曾把整段清零）。
 type BaseConfig struct {
@@ -91,6 +98,21 @@ type SystemConfig struct {
 	// P2P P2P 能力段（2026-10-14 对称节点 spec §5）：Federation 控制面在线开关；
 	// 直传数据面参数（enabled/send_roots/…）随 P2a 落地。nil = 未在线设置。
 	P2P *P2PSection `json:"p2p,omitempty"`
+
+	// Share 目录策略段（core#159）：按目录前缀的分享模式与配额。
+	//
+	// nil = **管理台从未配置过** ⇒ 生效值回落 yaml 的 share 段（见
+	// conf.ShareConfig 的优先级说明）；非 nil = 管理台已配置 ⇒ 以管理台为准
+	// （overlay 整段覆盖全局 conf 的 Share）。
+	//
+	// 语义（PUT /admin/config）：
+	//   - 段缺省（提交体里没有 share 键）⇒ **不改该段**（不是清空！）。
+	//     本段独立于 upload_ex/local_import ⇒ 管理员保存别的分区不会把目录
+	//     策略冲掉（2026-10-05 UploadEx 冲掉 local_import.roots 的事故形态）。
+	//   - 段存在 ⇒ **整段替换**（directory_policies 列表整体替换，不逐条 merge）。
+	//   - 段存在但列表为空（[]）⇒ 清空该段的策略清单（回到"管理台已配置但无
+	//     策略"的状态 ⇒ yaml 值不再生效）。
+	Share *conf.ShareConfig `json:"share,omitempty"`
 
 	// 新段是否发生变化的标记由「非 nil」即涵盖；保存走 UpdateConfig 既有持久化通道
 }
@@ -228,6 +250,33 @@ func validateSystemConfig(cfg *SystemConfig) error {
 			}
 			if filepath.Clean(root) == "/" {
 				return errors.New("local_import.roots 禁止配置根目录 /")
+			}
+		}
+	}
+	// share 段校验（core#159 目录策略）：
+	//   - root 必须是绝对路径（相对路径会按 CWD 解析成错误的绝对路径 ⇒ 策略
+	//     永不命中 ⇒ 静默失效——策略面最典型的坏法）；
+	//   - quota_bytes 不能为负（负数没有语义，且会让"超限"判定恒真）；
+	//   - share_mode 只允许 allow/deny（空串=allow）——与运行期闸口同款
+	//     fail-closed：拼错的新模式在**保存时**就被拒，不等到导入时才炸。
+	// 校验失败 ⇒ ErrSharePolicyInvalid（handler 回 400 + 10001 + 点名字段）。
+	if cfg.Share != nil {
+		for i, p := range cfg.Share.DirectoryPolicies {
+			root := strings.TrimSpace(p.Root)
+			if root == "" {
+				return fmt.Errorf("%w: share.directory_policies[%d].root 不能为空", ErrSharePolicyInvalid, i)
+			}
+			if !filepath.IsAbs(root) {
+				return fmt.Errorf("%w: share.directory_policies[%d].root 需为绝对路径: %s", ErrSharePolicyInvalid, i, root)
+			}
+			if p.QuotaBytes < 0 {
+				return fmt.Errorf("%w: share.directory_policies[%d].quota_bytes 不能为负（0=不限）", ErrSharePolicyInvalid, i)
+			}
+			switch strings.ToLower(strings.TrimSpace(p.ShareMode)) {
+			case "", "allow", "deny":
+			default:
+				return fmt.Errorf("%w: share.directory_policies[%d].share_mode 非法: %q（只允许 allow/deny）",
+					ErrSharePolicyInvalid, i, p.ShareMode)
 			}
 		}
 	}

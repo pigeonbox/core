@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +73,9 @@ type mockStorage struct {
 	deletedPaths []string
 	// readerBytes GetFileReader 返回内容（zip 流测试用；每次调用返回新流）
 	readerBytes []byte
+	// saveStreamCalls SaveStream 调用次数（落盘前拒绝 ⇒ 计数必须为 0）。
+	// 原子计数：并发导入用例在 -race 下跑，普通 int 会被报数据竞争。
+	saveStreamCalls atomic.Int64
 }
 
 func newMockStorage() *mockStorage { return &mockStorage{} }
@@ -101,8 +105,11 @@ func (m *mockStorage) GetFileReader(_ context.Context, _ string) (io.ReadCloser,
 	}
 	return io.NopCloser(bytes.NewReader(m.readerBytes)), int64(len(m.readerBytes)), nil
 }
-func (m *mockStorage) SaveStream(_ context.Context, _ string, _ io.Reader, _ int64) (int64, error) {
-	return 0, nil
+func (m *mockStorage) SaveStream(_ context.Context, _ string, _ io.Reader, size int64) (int64, error) {
+	// 回写真实写入字节数（与真实存储一致）：目录配额按「行上的 size」归因，
+	// mock 若恒回 0 ⇒ 落库 size=0 ⇒ 用量永远不涨 ⇒ 配额用例测不出东西。
+	m.saveStreamCalls.Add(1)
+	return size, nil
 }
 func (m *mockStorage) SaveChunk(_ context.Context, _ string, _ int, _ []byte) error {
 	return nil

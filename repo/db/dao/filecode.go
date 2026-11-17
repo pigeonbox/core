@@ -348,6 +348,36 @@ func (r *FileCodeRepository) GetPhysicalObjectUsage(ctx context.Context) (int64,
 	return usage, err
 }
 
+// GetDirectoryUsage 目录配额口径的**存活**用量（core#159）：SUM(size)，限定
+// dir_root = ? 且该行仍存活（未软删、未过期）。
+//
+// ⚠️ **与站点级物理配额（GetPhysicalObjectUsage）刻意不同口径**，后人
+// 「顺手对齐」成同一口径会同时毁掉两者的语义——它们回答的是**不同问题**：
+//
+//   - 站点配额量的是**物理占用**（按存储相对路径去重、**含回收站软删行**）
+//     ⇒ 回答「盘上还占多少」。软删对象 purge 前仍在占盘，所以必须计入；
+//   - 目录配额量的是**存活分享的逻辑字节** ⇒ 回答「这个目录对外分享出去
+//     （且仍然有效）多少」。已软删（进回收站）与**已过期**（超过 expired_at）
+//     的分享都不再计入 ⇒ 目录额度随过期/删除释放。
+//
+// 混用的后果是双向的：站点配额若改用本口径 ⇒ 漏算回收站占盘 ⇒ 站点配额
+// 虚低、可把盘写爆；目录配额若改用物理口径 ⇒ 过期分享仍永久占着目录额度
+// ⇒ 目录配额虚高、目录很快被「看不见的旧份额」锁死。
+//
+// 与**用户级**配额（GetTotalSizeByUserID）也不同：用户口径只排除软删行、
+// 仍计入已过期未清理的分享；目录口径额外排除已过期行——目录策略是运营侧的
+// 「这个目录还能对外发多少」治理项，过期分享不再消耗该目录的额度。
+func (r *FileCodeRepository) GetDirectoryUsage(ctx context.Context, dirRoot string) (int64, error) {
+	var usage int64
+	err := r.db().WithContext(ctx).Model(&model.FileCode{}).
+		Where("dir_root = ?", dirRoot).
+		// 过期行不计：expired_at 为空 = 永久分享（计入）；非空则须仍在未来。
+		Where("expired_at IS NULL OR expired_at > ?", time.Now()).
+		Select("COALESCE(SUM(size), 0)").Scan(&usage).Error
+	// Model 查询自带软删作用域（deleted_at IS NULL）⇒ 已删行天然不计。
+	return usage, err
+}
+
 func (r *FileCodeRepository) CountTodayUploads(ctx context.Context) (int64, error) {
 	var count int64
 	today := time.Now().Format("2006-01-02")

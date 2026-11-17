@@ -402,6 +402,12 @@ func AdminUpdateConfig(ctx context.Context, c *app.RequestContext) {
 		}
 	}
 	if err := getAdminService().UpdateConfigJSON(ctx, body); err != nil {
+		// 目录策略段（core#159）的可操作错误 ⇒ 400 + 具体文案（点名是哪个
+		// 下标、哪个字段非法）——管理员写错了不是服务端故障，不该走 500 脱敏。
+		if errors.Is(err, appconfig.ErrSharePolicyInvalid) {
+			resp.NewErrorWithMessage(c, errcode.CodeInvalidParam, err.Error())
+			return
+		}
 		resp.NewInternalError(c, errcode.CodeInternal, "保存配置", err)
 		return
 	}

@@ -4,8 +4,12 @@
 // 不改 reserveUploadCaps 的原子预留账本（core#196/#169 的地盘）。
 //
 // 当前接线面：本地导入（ImportLocalFile）——NAS 场景里目录概念唯一可归因的
-// 入口（分享行本身不记录来源目录）。通用上传通道的「分享路径前缀」维度与
-// quota_bytes 用量归因见 conf.DirectoryPolicyConfig 的 TODO。
+// 入口（分享行本身不记录来源目录）。通用上传通道（直传/分片/预签名/多文件）
+// 没有「来源目录」概念 ⇒ 不参与目录策略与目录配额。
+//
+// quota_bytes 已接线（core#159）：本地导入命中某条策略时，用量按
+// file_codes.dir_root 归因到该策略的 root，判定在**落盘前**做（见
+// app/share/quota_reserve.go 的 reserveDirectoryQuota）。
 package share
 
 import (
@@ -86,13 +90,23 @@ func resolveRealPath(p string) string {
 	return c
 }
 
-// checkDirectoryPolicy 目录策略闸口：nil = 放行；非 nil = 拒绝（错误文案定位到目录）。
-// 入口即解析（策略 root 与待判定路径都走 EvalSymlinks），调用方不会漏解析。
+// resolveDirectoryPolicyMatch 解析并匹配命中的策略条目：两侧同口径解析
+// （策略 root 与待判定路径都走 EvalSymlinks）⇒ 调用方不会漏解析。
+//
+// 返回的条目里的 Root 是**解析后**的形态 ⇒ 它同时是：
+//   - 目录配额用量归因的 key（file_codes.dir_root 落的就是它 ⇒ 同一策略的
+//     多次导入聚合到同一个目录，软链目录不分裂成两份用量）；
+//   - 错误文案里点名的目录（运维能直接定位）。
+func resolveDirectoryPolicyMatch(policies []conf.DirectoryPolicyConfig, absPath string) *conf.DirectoryPolicyConfig {
+	return matchDirectoryPolicy(resolveDirectoryPolicies(policies), resolveRealPath(absPath))
+}
+
+// checkDirectoryPolicyMatch 目录策略闸口（已匹配条目）：nil = 放行；非 nil =
+// 拒绝（错误文案定位到目录）。
 //
 // fail-closed：命中策略但 share_mode 是未知取值（拼错/未实现的新模式）⇒ 拒绝
 // 并点名配置错误——策略面宁可挡住也不静默放行（与审核 fail-closed 同哲学）。
-func checkDirectoryPolicy(policies []conf.DirectoryPolicyConfig, absPath string) error {
-	p := matchDirectoryPolicy(resolveDirectoryPolicies(policies), resolveRealPath(absPath))
+func checkDirectoryPolicyMatch(p *conf.DirectoryPolicyConfig) error {
 	if p == nil {
 		return nil
 	}
@@ -104,4 +118,10 @@ func checkDirectoryPolicy(policies []conf.DirectoryPolicyConfig, absPath string)
 	default:
 		return fmt.Errorf("目录策略 root=%s 的 share_mode 非法: %q（只允许 allow/deny）", p.Root, p.ShareMode)
 	}
+}
+
+// checkDirectoryPolicy 目录策略闸口：nil = 放行；非 nil = 拒绝（错误文案定位到目录）。
+// 入口即解析（策略 root 与待判定路径都走 EvalSymlinks），调用方不会漏解析。
+func checkDirectoryPolicy(policies []conf.DirectoryPolicyConfig, absPath string) error {
+	return checkDirectoryPolicyMatch(resolveDirectoryPolicyMatch(policies, absPath))
 }

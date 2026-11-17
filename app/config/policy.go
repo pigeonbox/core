@@ -249,6 +249,10 @@ func seedSectionsFromEffective(base, patch map[string]json.RawMessage) {
 			v = g.Security.OIDC
 		case "api_token":
 			v = g.Security.APIToken
+		case "share":
+			// 目录策略段（core#159）：当前无模板改它，但登记在此以防将来
+			// 模板动 share 时在全新站点上把它清零（本函数的既有契约）。
+			v = g.Share
 		default:
 			continue // 未登记的段不补种（保持既有行为），给模板作者显式扩展点
 		}

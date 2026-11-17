@@ -345,6 +345,21 @@ func NewTypedError(c *app.RequestContext, err error) {
 	NewInternalError(c, errcode.CodeInternal, "", err)
 }
 
+// NewTypedErrorOr 优先按 typed error 的业务码出网；非 typed error 走兜底码。
+//
+// 用途：某些端点既有 typed error（如目录配额超限 ⇒ errcode.CodeStorageQuota
+// ⇒ HTTP 507），又有大量「参数不合法」类普通 error（历史上统一回 400 +
+// 10001）。直接用 NewTypedError 会把普通 error 兜底成 500 脱敏（既有口径被
+// 改）⇒ 本函数保住「非 typed error 仍是兜底码 + 兜底 HTTP 状态」。
+func NewTypedErrorOr(c *app.RequestContext, err error, fallbackCode int) {
+	var coder interface{ ErrCode() int }
+	if stderrors.As(err, &coder) {
+		NewErrorWithMessage(c, coder.ErrCode(), err.Error())
+		return
+	}
+	NewErrorWithMessage(c, fallbackCode, err.Error())
+}
+
 func Page(c *app.RequestContext, list interface{}, total int64, page, pageSize int) {
 	Success(c, PageData{
 		List:     list,
