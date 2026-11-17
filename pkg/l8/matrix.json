@@ -1,0 +1,819 @@
+{
+  "schema_version": 1,
+  "layer": "L8",
+  "title": "PigeonBox core 安全测试层矩阵（L8）",
+  "owner": "pigeonbox/core",
+  "updated": "2026-11-18",
+  "description": "L8 = 安全层。六个威胁类为矩阵主键；本清单是机器可读的覆盖真相源，由 scripts/check-l8-security-matrix.sh 与 pkg/l8/matrix_guard_test.go 双向对账（清单里每条必须有仓内真实测试；仓内每个安全测试文件/函数必须登记进清单）。",
+  "classes": [
+    {
+      "id": "auth_bypass",
+      "title": "认证旁路",
+      "min_cases": 8
+    },
+    {
+      "id": "authz",
+      "title": "越权（横向/纵向）",
+      "min_cases": 5
+    },
+    {
+      "id": "ssrf",
+      "title": "SSRF",
+      "min_cases": 4
+    },
+    {
+      "id": "pickup_enum",
+      "title": "取件码枚举",
+      "min_cases": 5
+    },
+    {
+      "id": "path_escape",
+      "title": "路径逃逸",
+      "min_cases": 5
+    },
+    {
+      "id": "resource_exhaustion",
+      "title": "资源耗尽",
+      "min_cases": 6
+    }
+  ],
+  "discovery": {
+    "description": "「什么算 L8 安全测试文件」的识别规则（路径 glob，模块根相对）。命中任一 glob 且未登记进 cases 的文件 ⇒ 门禁判红（新安全测试必须登记进矩阵）。**/l8_*_test.go 覆盖全仓新增的 L8 用例文件。",
+    "globs": [
+      "**/l8_*_test.go",
+      "pkg/auth/*_test.go",
+      "pkg/authz/*_test.go",
+      "pkg/security/*_test.go",
+      "pkg/outbound/outbound_test.go",
+      "pkg/outbound/ssrf*_test.go",
+      "pkg/gate/*_test.go",
+      "pkg/totp/*_test.go",
+      "pkg/middleware/auth*_test.go",
+      "pkg/middleware/apikey*_test.go",
+      "pkg/middleware/lockout*_test.go",
+      "pkg/middleware/ratelimit*_test.go",
+      "pkg/middleware/security_test.go",
+      "transport/http/middleware/*_test.go",
+      "app/federation/*ssrf*_test.go",
+      "app/preview/enum_lockout_test.go",
+      "app/admin/auth_totp_test.go",
+      "app/admin/webauthn*_test.go",
+      "gen/handler/share/pickup_enum*_test.go",
+      "bootstrap/authn_entry_guard_test.go",
+      "bootstrap/authz_entry_guard_test.go",
+      "bootstrap/pickup_entry_guard_test.go",
+      "bootstrap/resource_entry_guard_test.go",
+      "bootstrap/router_auth_guard_test.go",
+      "bootstrap/admin_webauthn_http_test.go",
+      "gen/handler/admin/admin_webauthn_gate_http_test.go",
+      "transport/http/handler/share_reldir_test.go",
+      "transport/http/handler/localfiles_root_test.go",
+      "app/share/reldir_test.go",
+      "storage/opendal/resolve_path_guard_test.go",
+      "pkg/utils/security_test.go"
+    ]
+  },
+  "cases": [
+    {
+      "id": "AB-01",
+      "class": "auth_bypass",
+      "title": "JWT 签名算法白名单：alg=none 与非 HS256 一律拒绝",
+      "verdict": "只有 HS256 签名的令牌可被解析成身份；alg=none/HS384/HS512（含同一密钥签出的）一律判无效",
+      "tests": [
+        "pkg/auth/l8_jwt_algorithm_test.go::TestL8_JWTRejectsForeignSecret",
+        "pkg/auth/l8_jwt_algorithm_test.go::TestL8_JWTRejectsNonHS256Algorithm",
+        "pkg/auth/l8_jwt_algorithm_test.go::TestL8_JWTRejectsNoneAlgorithm",
+        "pkg/auth/l8_jwt_algorithm_test.go::TestL8_JWTValidHS256StillAccepted"
+      ]
+    },
+    {
+      "id": "AB-02",
+      "class": "auth_bypass",
+      "title": "二验半会话（pending-2FA）不得续签，且在一切认证面被拒",
+      "verdict": "半会话带 MFAPending 标记，RefreshToken 拒绝续签（ErrMFAPending），认证中间件一律 401",
+      "tests": [
+        "pkg/auth/l8_mfa_pending_test.go::TestL8_PendingMFATokenCannotBeRefreshed",
+        "pkg/auth/l8_mfa_pending_test.go::TestL8_PendingMFATokenIsMarked",
+        "pkg/middleware/auth_test.go::TestMFAPendingTokenRejectedByAuthMiddlewares"
+      ]
+    },
+    {
+      "id": "AB-03",
+      "class": "auth_bypass",
+      "title": "管理员令牌的角色声明必须是精确的 admin，且受签名保护",
+      "verdict": "GenerateAdminToken 产出 role=admin 的可验令牌；换密钥后旧令牌立即失效",
+      "tests": [
+        "pkg/auth/l8_mfa_pending_test.go::TestL8_AdminTokenCarriesAdminRole",
+        "pkg/auth/l8_mfa_pending_test.go::TestL8_AdminTokenRejectedByForeignSecret"
+      ]
+    },
+    {
+      "id": "AB-04",
+      "class": "auth_bypass",
+      "title": "JWT 密钥保管：不落明文、取用返回副本、支持热更",
+      "verdict": "密钥不以明文形态留存于内存（secretx 混淆），取用方拿到的是副本，热更改密钥即时生效",
+      "tests": [
+        "pkg/auth/jwt_secret_test.go::TestJWTSecret_GetReturnsCopy",
+        "pkg/auth/jwt_secret_test.go::TestJWTSecret_HotReload",
+        "pkg/auth/jwt_secret_test.go::TestJWTSecret_NotStoredInPlaintext"
+      ]
+    },
+    {
+      "id": "AB-05",
+      "class": "auth_bypass",
+      "title": "刷新令牌：已吊销的令牌不可续签，续签继承原会话标识",
+      "verdict": "吊销后的旧令牌刷新被拒（ErrTokenRevoked）；续签继承 sid，防「刷新一次洗掉会话归属」",
+      "tests": [
+        "pkg/auth/jwt_test.go::TestRefreshToken_Blacklist",
+        "pkg/auth/jwt_test.go::TestRefreshToken_InheritsSessionID",
+        "pkg/auth/jwt_test.go::TestRefreshToken_Invalid"
+      ]
+    },
+    {
+      "id": "AB-06",
+      "class": "auth_bypass",
+      "title": "吊销黑名单在并发读写下不分裂、不误判",
+      "verdict": "并发 revoke/check 下黑名单判定稳定，Redis 注入与读取并发无数据竞争",
+      "tests": [
+        "pkg/auth/blacklist_concurrency_test.go::TestBlacklist_ConcurrentRevokeAndCheck_Concurrent",
+        "pkg/auth/blacklist_concurrency_test.go::TestGetBlacklist_ConcurrentSameInstance",
+        "pkg/auth/blacklist_concurrency_test.go::TestSetBlacklistRedis_ConcurrentWithGet"
+      ]
+    },
+    {
+      "id": "AB-07",
+      "class": "auth_bypass",
+      "title": "会话有效期热更与签发并发不产生混合口径",
+      "verdict": "会话时长热更（原子量）与签发并发时，令牌过期时间口径一致（无 DATA RACE）",
+      "tests": [
+        "pkg/auth/session_expiry_race_test.go::TestSessionExpiryHotUpdateAndIssueConcurrent"
+      ]
+    },
+    {
+      "id": "AB-08",
+      "class": "auth_bypass",
+      "title": "JWT 判定链单一执行点：缺失/无效/半会话/吊销/CSRF/身份回查的拒绝分型",
+      "verdict": "EvaluateJWT 对六类拒绝给出稳定分型，窄入口（ClaimsOfToken 等）与主判定同序",
+      "tests": [
+        "pkg/middleware/authn_test.go::TestAuthnNarrowEntries",
+        "pkg/middleware/authn_test.go::TestEvaluateJWTRejectionKinds"
+      ]
+    },
+    {
+      "id": "AB-09",
+      "class": "auth_bypass",
+      "title": "管理面角色闸门在放行前判定；可选认证尊重吊销黑名单",
+      "verdict": "非管理员拿到 403 且业务 handler 不执行；已吊销令牌在可选认证面也不恢复身份",
+      "tests": [
+        "pkg/middleware/auth_test.go::TestAdminMiddlewareRoleGate",
+        "pkg/middleware/auth_test.go::TestOptionalAuthMiddlewareRespectsBlacklist"
+      ]
+    },
+    {
+      "id": "AB-10",
+      "class": "auth_bypass",
+      "title": "身份回查缓存：封禁/降权/改密即时生效（封禁、查询失败不缓存、30s TTL）",
+      "verdict": "状态非 active 或纪元不符即拒绝；loader 出错不写缓存；失效后立即生效不必等 TTL",
+      "tests": [
+        "pkg/middleware/auth_identity_test.go::TestIdentityOf_CacheHitAndInvalidation",
+        "pkg/middleware/auth_identity_test.go::TestIdentityOf_LoaderErrorNotCached",
+        "pkg/middleware/auth_identity_test.go::TestIdentityOf_LoaderNil_PureJWTSemantics",
+        "pkg/middleware/auth_identity_test.go::TestIdentityOf_TTLExpiry_FakeClock",
+        "pkg/middleware/auth_identity_test.go::TestInvalidateIdentity_LoadingNilSafe",
+        "pkg/middleware/auth_test.go::TestIdentityFreshEnforcement"
+      ]
+    },
+    {
+      "id": "AB-11",
+      "class": "auth_bypass",
+      "title": "会话回查闸门：带 sid 的令牌必须命中仍有效的会话行",
+      "verdict": "会话行已删则带 sid 令牌被拒；会话表未装配（nil）则跳过会话段但纪元段仍生效",
+      "tests": [
+        "pkg/middleware/auth_session_gate_test.go::TestIdentityFresh_EmptySessionsRejectsAll",
+        "pkg/middleware/auth_session_gate_test.go::TestIdentityFresh_SessionGate",
+        "pkg/middleware/auth_session_gate_test.go::TestIdentityFresh_SessionsNilSkipsGate"
+      ]
+    },
+    {
+      "id": "AB-12",
+      "class": "auth_bypass",
+      "title": "身份 ctx 槽位按类型隔离，直写绕过不被信任",
+      "verdict": "绕过 With 直写身份槽位的值一律按不存在处理；身份缓存用例互不串扰",
+      "tests": [
+        "pkg/middleware/auth_ctxscope_test.go::TestIdentityContextKeys_BypassWriteNotTrusted",
+        "pkg/middleware/auth_identity_isolation_test.go::TestIdentityCacheTestsMustBeIsolated"
+      ]
+    },
+    {
+      "id": "AB-13",
+      "class": "auth_bypass",
+      "title": "TOTP 二次验证：RFC6238 向量、容错窗口、恢复码归一",
+      "verdict": "TOTP 码按标准向量校验，畸形输入与越窗输入被拒；恢复码一次性且归一后比对",
+      "tests": [
+        "pkg/totp/totp_test.go::TestCode_NormalizesSecret",
+        "pkg/totp/totp_test.go::TestCode_RFC6238Vectors",
+        "pkg/totp/totp_test.go::TestCode_RejectsBadSecret",
+        "pkg/totp/totp_test.go::TestGenerateSecret_Shape",
+        "pkg/totp/totp_test.go::TestNormalizeRecoveryCode",
+        "pkg/totp/totp_test.go::TestProvisioningURL",
+        "pkg/totp/totp_test.go::TestRecoveryCodes",
+        "pkg/totp/totp_test.go::TestValidate_RejectsMalformed",
+        "pkg/totp/totp_test.go::TestValidate_Window"
+      ]
+    },
+    {
+      "id": "AB-14",
+      "class": "auth_bypass",
+      "title": "WebAuthn 登记/登录/凭据删除后立即失效",
+      "verdict": "凭据被删除后对应登录被拒；删除最后一个凭据后管理台门禁复位（管理员不再被锁在门外）",
+      "tests": [
+        "app/admin/webauthn_test.go::TestAdminLoginWebAuthnGate",
+        "app/admin/webauthn_test.go::TestResolveWebAuthnRP",
+        "app/admin/webauthn_test.go::TestWebAuthnCeremonyStore",
+        "app/admin/webauthn_test.go::TestWebAuthnCredentialListAndDelete",
+        "app/admin/webauthn_test.go::TestWebAuthnGateResetsAfterLastCredentialDeleted",
+        "app/admin/webauthn_test.go::TestWebAuthnLoginFlow",
+        "app/admin/webauthn_test.go::TestWebAuthnLoginRejectedAfterCredentialDelete",
+        "app/admin/webauthn_test.go::TestWebAuthnRegisterFlow"
+      ]
+    },
+    {
+      "id": "AB-15",
+      "class": "auth_bypass",
+      "title": "WebAuthn/TOTP 的 HTTP 门禁：未满足二验不得进管理台",
+      "verdict": "缺 WebAuthn 凭据或 TOTP 时管理台入口按 403/401 拒绝，不放行到业务 handler",
+      "tests": [
+        "app/admin/auth_totp_test.go::TestAdminLogin_TOTPEnforced",
+        "bootstrap/admin_webauthn_http_test.go::TestAdminWebAuthnCredentialManagementOverHTTP",
+        "bootstrap/admin_webauthn_http_test.go::TestAdminWebAuthnEndpointsOverHTTP",
+        "gen/handler/admin/admin_webauthn_gate_http_test.go::TestAdminLogin_WebAuthnGateOverHTTP"
+      ]
+    },
+    {
+      "id": "AB-16",
+      "class": "auth_bypass",
+      "title": "认证入口收口：新认证面必须走 pkg/middleware 判定核（结构守卫）",
+      "verdict": "路由链上的鉴权口径必须登记到执行点承载文件；出现裸解析/裸判定即红",
+      "tests": [
+        "bootstrap/authn_entry_guard_test.go::TestAuthnEntryGuardCoverage",
+        "bootstrap/authn_entry_guard_test.go::TestAuthnEntryGuardNegativeControl",
+        "bootstrap/router_auth_guard_test.go::TestDumpGeneratedRouteAuth",
+        "bootstrap/router_auth_guard_test.go::TestGeneratedRouteAuthContract",
+        "bootstrap/router_auth_guard_test.go::TestGeneratedRouteAuthEnforcedAtRuntime",
+        "bootstrap/router_auth_guard_test.go::TestIdlizedRouteContract"
+      ]
+    },
+    {
+      "id": "AB-17",
+      "class": "auth_bypass",
+      "title": "用户面 JWT 双通道：Cookie 会话放行、写请求要 CSRF 头、半会话被拒",
+      "verdict": "Cookie/Bearer 两条通道都能登录态；Cookie 写请求缺 CSRF 头 403；半会话与非 JWT 一律 401",
+      "tests": [
+        "transport/http/middleware/user_auth_test.go::TestUserAuthBearerStillWorks",
+        "transport/http/middleware/user_auth_test.go::TestUserAuthCookieSessionAccepted",
+        "transport/http/middleware/user_auth_test.go::TestUserAuthCookieWriteRequiresCSRFHeader",
+        "transport/http/middleware/user_auth_test.go::TestUserAuthRejectsMFAPendingSession",
+        "transport/http/middleware/user_auth_test.go::TestUserAuthRejectsMissingAndNonJWT"
+      ]
+    },
+    {
+      "id": "AB-18",
+      "class": "auth_bypass",
+      "title": "API Key 认证不依赖身份回查（纪元解耦）",
+      "verdict": "API Key 路径不查身份纪元（其归属状态由 API Key 自身的吊销/过期判定）",
+      "tests": [
+        "pkg/middleware/apikey_epoch_independence_test.go::TestAPIKeyAuth_DoesNotConsultIdentityGuard"
+      ]
+    },
+    {
+      "id": "AB-19",
+      "class": "auth_bypass",
+      "title": "API Key 生命周期与归属状态：无效/过期/已吊销/属主封禁/开关关闭一律 401",
+      "verdict": "五种失效形态都判 401，不得把失效 Key 降级成匿名身份",
+      "tests": [
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_BannedUser_401",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_DisabledSwitch_401",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_ExpiredKey_401",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_InvalidKey_401",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_RevokedKey_401"
+      ]
+    },
+    {
+      "id": "AB-20",
+      "class": "auth_bypass",
+      "title": "会话 Cookie 认证与 CSRF 门禁（pkg 栈）",
+      "verdict": "Cookie 认证的写请求缺 CSRF 头一律 403；Bearer 通道不受该门禁影响",
+      "tests": [
+        "pkg/middleware/auth_test.go::TestSessionCookieAuthAndCSRF"
+      ]
+    },
+    {
+      "id": "AZ-01",
+      "class": "authz",
+      "title": "角色/归属判定的单一执行点（pkg/authz）",
+      "verdict": "admin 角色判定精确相等；属主判定 nil 一律不匹配（匿名资源不归任何登录用户）；空 IP 不参与匹配",
+      "tests": [
+        "pkg/authz/authz_test.go::TestOwnedByIP",
+        "pkg/authz/authz_test.go::TestOwnedByUser",
+        "pkg/authz/authz_test.go::TestRoleJudgments"
+      ]
+    },
+    {
+      "id": "AZ-02",
+      "class": "authz",
+      "title": "API Key scope：按请求路径判定能力，缺能力 403（非 401），缺省=全量",
+      "verdict": "scope 不足返回 403 且带业务码；未声明 scope 视为全量；显式授权按 scope 放行",
+      "tests": [
+        "pkg/middleware/apikey_scope_test.go::TestAPIKeyScopeAllowed_ByScope",
+        "pkg/middleware/apikey_scope_test.go::TestAPIKeyScopeAllowed_EmptyMeansFull",
+        "pkg/middleware/apikey_scope_test.go::TestRequiredAPIKeyScope_PathMapping",
+        "pkg/middleware/apikey_scope_test.go::TestScopeError_StatusIs403",
+        "pkg/middleware/apikey_scope_test.go::TestValidateAPIKeyScopes",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_NoScopesMeansFullAccess",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_ScopeEnforcement"
+      ]
+    },
+    {
+      "id": "AZ-03",
+      "class": "authz",
+      "title": "用户面身份三选一：JWT / API Key / 匿名，缺凭据 401",
+      "verdict": "UserOrAPIKey 接受有效 JWT 或有效 Key，无凭据/无效 JWT 判 401；可选身份面按优先级取一个身份",
+      "tests": [
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_ApiKeyScheme",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_BearerPbSkPrefix",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_NoKey_Anonymous",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_QueryParamIgnored",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_ValidKey_InjectsIdentity",
+        "pkg/middleware/apikey_test.go::TestOptionalIdentity_MixedCredentials",
+        "pkg/middleware/apikey_test.go::TestUserOrAPIKey_InvalidJWT_401",
+        "pkg/middleware/apikey_test.go::TestUserOrAPIKey_NoCredentials_401",
+        "pkg/middleware/apikey_test.go::TestUserOrAPIKey_ValidJWT",
+        "pkg/middleware/apikey_test.go::TestUserOrAPIKey_ValidKey"
+      ]
+    },
+    {
+      "id": "AZ-04",
+      "class": "authz",
+      "title": "用户面角色闸门：未认证 401 / 角色不足 403 / 满足才放行",
+      "verdict": "RequireAdmin/RequireRole/RequireAnyRole 在业务 handler 之前止步；空角色列表一律拒；superadmin 不算 admin",
+      "tests": [
+        "transport/http/middleware/l8_role_gate_test.go::TestL8_IsAdminUsesAuthzExecutionPoint",
+        "transport/http/middleware/l8_role_gate_test.go::TestL8_RequireAdmin",
+        "transport/http/middleware/l8_role_gate_test.go::TestL8_RequireAdminRejectsRolePrefix",
+        "transport/http/middleware/l8_role_gate_test.go::TestL8_RequireAnyRole",
+        "transport/http/middleware/l8_role_gate_test.go::TestL8_RequireRole"
+      ]
+    },
+    {
+      "id": "AZ-05",
+      "class": "authz",
+      "title": "授权入口收口：新授权面必须走 pkg/authz（结构守卫）",
+      "verdict": "角色/归属判定只准出现在执行点与登记的承载文件里；出现裸判定即红",
+      "tests": [
+        "bootstrap/authz_entry_guard_test.go::TestAuthzEntryGuardCoverage",
+        "bootstrap/authz_entry_guard_test.go::TestAuthzEntryGuardNegativeControl"
+      ]
+    },
+    {
+      "id": "AZ-06",
+      "class": "authz",
+      "title": "管理面身份：admin Key 通过、非 admin Key 403、无凭据 401、admin JWT 通过",
+      "verdict": "AdminOrAdminKey 四态判对：管理面只认 admin 角色或 admin 级 Key",
+      "tests": [
+        "pkg/middleware/apikey_test.go::TestAdminOrAdminKey_AdminJWTPass",
+        "pkg/middleware/apikey_test.go::TestAdminOrAdminKey_AdminKeyPass",
+        "pkg/middleware/apikey_test.go::TestAdminOrAdminKey_NoCredentials401",
+        "pkg/middleware/apikey_test.go::TestAdminOrAdminKey_NonAdminKey403"
+      ]
+    },
+    {
+      "id": "AZ-07",
+      "class": "authz",
+      "title": "取件下载令牌绑定分享码：不可跨分享使用，篡改/过期/未启用一律无效",
+      "verdict": "下载令牌签名覆盖分享码，换码即失效；指纹单向且不含令牌明文；未注入密钥时不产出令牌",
+      "tests": [
+        "pkg/security/security_test.go::TestDownloadTokenFingerprintStable",
+        "pkg/security/security_test.go::TestDownloadTokenNonceUnique",
+        "pkg/security/security_test.go::TestDownloadTokenRoundTrip",
+        "pkg/security/security_test.go::TestDownloadTokenTTLFromConfig",
+        "pkg/security/security_test.go::TestDownloadTokenUnsigned"
+      ]
+    },
+    {
+      "id": "SS-01",
+      "class": "ssrf",
+      "title": "出站拨号时刻复判（防 DNS rebinding / TOCTOU）",
+      "verdict": "拨号时当场解析并逐 IP 过同一私网判据，被拒地址一个不落地不拨",
+      "tests": [
+        "pkg/outbound/ssrf_dial_test.go::TestSSRFDial_BlocksPrivateAtDialTime",
+        "pkg/outbound/ssrf_dial_test.go::TestSSRFDial_ExtendedTargetsGuardedAtDialTime"
+      ]
+    },
+    {
+      "id": "SS-02",
+      "class": "ssrf",
+      "title": "重定向逐跳复验：每一跳目标都过端点校验，超跳数中止",
+      "verdict": "恶意对端 302 到私网/元数据地址被拒；出站策略（通知/联邦/注册中心/OIDC）同款复验",
+      "tests": [
+        "pkg/outbound/outbound_test.go::TestFederationDeliveryPolicy",
+        "pkg/outbound/outbound_test.go::TestFederationFollowsRedirect",
+        "pkg/outbound/outbound_test.go::TestFederationRegistryRedirectGuard",
+        "pkg/outbound/outbound_test.go::TestNotifyRedirectGuard",
+        "pkg/outbound/ssrf_redirect_test.go::TestFederationOutboundPolicies",
+        "pkg/outbound/ssrf_redirect_test.go::TestOIDCOutboundPolicy",
+        "pkg/outbound/ssrf_redirect_test.go::TestSSRFRedirectGuard"
+      ]
+    },
+    {
+      "id": "SS-03",
+      "class": "ssrf",
+      "title": "联邦投递与目录/注册中心对端：跳私网被拒，全局开关放行",
+      "verdict": "联邦邀请推送、目录对端、注册中心重定向到私网一律拒绝；开启 allow_private_networks 后放行",
+      "tests": [
+        "app/federation/redirect_ssrf_test.go::TestDirectoryPeersRedirectToPrivateRejected",
+        "app/federation/redirect_ssrf_test.go::TestPushInviteRedirectAllowedUnderGlobalFlag",
+        "app/federation/redirect_ssrf_test.go::TestPushInviteRedirectToPrivateRejected",
+        "app/federation/registry_redirect_ssrf_test.go::TestRegistryRedirectAllowedUnderGlobalFlag",
+        "app/federation/registry_redirect_ssrf_test.go::TestRegistryRedirectToPrivateRejected"
+      ]
+    },
+    {
+      "id": "SS-04",
+      "class": "ssrf",
+      "title": "端点地址校验：URL 与裸主机同一判据；私网/回环/元数据地址一律拒",
+      "verdict": "scheme 白名单只放 http/https；裸主机（FTP/SFTP）同样拒私网与空 host；对端粒度放行不放松 scheme/host 校验",
+      "tests": [
+        "pkg/security/l8_endpoint_host_test.go::TestL8_ValidateEndpointHostAllowsPublicTarget",
+        "pkg/security/l8_endpoint_host_test.go::TestL8_ValidateEndpointHostRejectsEmpty",
+        "pkg/security/l8_endpoint_host_test.go::TestL8_ValidateEndpointHostRejectsPrivateTargets",
+        "pkg/security/l8_endpoint_host_test.go::TestL8_ValidateEndpointHostRespectsAllowPrivateFlag",
+        "pkg/security/l8_endpoint_host_test.go::TestL8_ValidateEndpointURLAllowPrivateKeepsSchemeGuard",
+        "pkg/security/security_test.go::TestBlockedIP",
+        "pkg/security/security_test.go::TestValidateEndpointURL"
+      ]
+    },
+    {
+      "id": "PE-01",
+      "class": "pickup_enum",
+      "title": "取件闸门判定序固定：过期 → 管控 → 就绪 → 锁定 → 密码",
+      "verdict": "四类状态各有唯一判定结果；无密码分享与持令牌跳过密码段；密码错误记账、密码正确清零",
+      "tests": [
+        "pkg/gate/pickup_test.go::TestCheckPickup_EnumLockoutBlocksPasswordlessShare",
+        "pkg/gate/pickup_test.go::TestCheckPickup_LockoutSharedAcrossEndpoints",
+        "pkg/gate/pickup_test.go::TestCheckPickup_MissingPasswordSemantics",
+        "pkg/gate/pickup_test.go::TestCheckPickup_NoAuthAndTokenBypass",
+        "pkg/gate/pickup_test.go::TestCheckPickup_SuccessResetsEnumCounter",
+        "pkg/gate/pickup_test.go::TestCheckPickup_VerdictOrder",
+        "pkg/gate/pickup_test.go::TestCheckPickup_WrongRightPassword",
+        "pkg/gate/pickup_test.go::TestPickupLockKeyHelpers"
+      ]
+    },
+    {
+      "id": "PE-02",
+      "class": "pickup_enum",
+      "title": "枚举锁定拦住 HTTP 取件与预览面（换码也逃不掉）",
+      "verdict": "同一 IP 连续试不同码达阈值后，取件/下载/预览入口一律 429",
+      "tests": [
+        "app/preview/enum_lockout_test.go::TestPreview_EnumLockoutAfterTenMisses",
+        "gen/handler/share/pickup_enum_lockout_entry_test.go::TestDownload_EnumLockoutAfterTenMisses",
+        "gen/handler/share/pickup_enum_lockout_entry_test.go::TestGetShare_EnumLockoutAfterTenMisses"
+      ]
+    },
+    {
+      "id": "PE-03",
+      "class": "pickup_enum",
+      "title": "枚举计账只记「码不存在」，过期与基础设施故障不计入",
+      "verdict": "过期分享与查询故障不写枚举计数（避免正常用户被连坐）；确实不存在才记",
+      "tests": [
+        "gen/handler/share/pickup_enum_accounting_test.go::TestDownload_CodeNotFound_StillRecordedIntoEnumLockBucket",
+        "gen/handler/share/pickup_enum_accounting_test.go::TestDownload_ExpiredShare_NotRecordedIntoEnumLockBucket",
+        "gen/handler/share/pickup_enum_accounting_test.go::TestGetShare_CodeNotFound_StillRecordedIntoEnumLockBucket",
+        "gen/handler/share/pickup_enum_accounting_test.go::TestGetShare_ExpiredShare_NotRecordedIntoEnumLockBucket",
+        "gen/handler/share/pickup_enum_accounting_test.go::TestGetShare_InfraFailure_NotRecordedIntoEnumLockBucket"
+      ]
+    },
+    {
+      "id": "PE-04",
+      "class": "pickup_enum",
+      "title": "锁定键的大小写折叠：变体轮换不得绕过失败计数",
+      "verdict": "折叠开启时 abc/ABC 共用一把计数键；scope/IP/码三维度互相区分；显式关闭折叠时行为随之改变",
+      "tests": [
+        "pkg/middleware/l8_lockout_enum_key_test.go::TestL8_LookupLockKeyFoldsCase",
+        "pkg/middleware/l8_lockout_enum_key_test.go::TestL8_LookupLockKeyRespectsFoldSwitch",
+        "pkg/middleware/l8_lockout_enum_key_test.go::TestL8_LookupLockKeySeparatesDimensions"
+      ]
+    },
+    {
+      "id": "PE-05",
+      "class": "pickup_enum",
+      "title": "取件入口统一预检：被锁定即拒，空 IP 不进枚举维度",
+      "verdict": "PrecheckPickup 在交付前返回带剩余秒数的锁定错误；空 IP 的来源不共用一把枚举键",
+      "tests": [
+        "pkg/l8/l8_gate_resource_test.go::TestL8_PrecheckPickupBlocksLockedCaller",
+        "pkg/l8/l8_gate_resource_test.go::TestL8_PrecheckPickupEmptyIPDoesNotLockEveryone"
+      ]
+    },
+    {
+      "id": "PE-06",
+      "class": "pickup_enum",
+      "title": "取件计次键：稳定、按 IP/码区分、两把键域分离且不含明文 IP",
+      "verdict": "文本面与文件面的计次键互不相同（域分离），落库的是单向键不含明文 IP；缺密钥/缺 IP 时不产出键",
+      "tests": [
+        "pkg/security/l8_download_token_key_test.go::TestL8_ChargeKeysDoNotLeakPlaintextIP",
+        "pkg/security/l8_download_token_key_test.go::TestL8_ChargeKeysEmptyWithoutSecretOrIP",
+        "pkg/security/l8_download_token_key_test.go::TestL8_DownloadSessionKeyDomainSeparated",
+        "pkg/security/l8_download_token_key_test.go::TestL8_DownloadSessionKeyIsStableAndPerIPCoded",
+        "pkg/security/l8_download_token_key_test.go::TestL8_TextViewKeyIsStableAndPerIPCoded"
+      ]
+    },
+    {
+      "id": "PE-07",
+      "class": "pickup_enum",
+      "title": "取件入口收口：新交付面必须走 pkg/gate 预检与记账（结构守卫）",
+      "verdict": "每个 HTTP 取件交付面都必须登记并真实调用 gate.PrecheckPickup/RecordPickupFailure，缺一即红",
+      "tests": [
+        "bootstrap/pickup_entry_guard_test.go::TestPickupEntryGuardCoverage"
+      ]
+    },
+    {
+      "id": "PX-01",
+      "class": "path_escape",
+      "title": "目录上传入参消毒：上跳段/绝对路径/盘符/UNC 一律拒（Zip Slip 前置）",
+      "verdict": "rel_dir 只接受相对路径；四类穿越形态与超长目录被拒并给出可自证的错误文案",
+      "tests": [
+        "transport/http/handler/share_reldir_test.go::TestSanitizeShareRelDir_Accepts",
+        "transport/http/handler/share_reldir_test.go::TestSanitizeShareRelDir_LengthBoundary",
+        "transport/http/handler/share_reldir_test.go::TestSanitizeShareRelDir_Rejects"
+      ]
+    },
+    {
+      "id": "PX-02",
+      "class": "path_escape",
+      "title": "zip 条目名不得逃逸解压目录（Zip Slip）",
+      "verdict": "zip 条目路径拒绝上跳段，保留目录结构且按完整路径去重；同名不同目录不互相覆盖",
+      "tests": [
+        "app/share/reldir_test.go::TestCreateMultiFileShare_DuplicatePathRejected",
+        "app/share/reldir_test.go::TestCreateMultiFileShare_RelDirRoundTrip",
+        "app/share/reldir_test.go::TestCreateMultiFileShare_SameNameDifferentDir",
+        "app/share/reldir_test.go::TestFileCodeFileFullName",
+        "app/share/reldir_test.go::TestZipPath_BlocksSlip",
+        "app/share/reldir_test.go::TestZipPath_DedupesByFullPath",
+        "app/share/reldir_test.go::TestZipStream_PreservesDirStructure"
+      ]
+    },
+    {
+      "id": "PX-03",
+      "class": "path_escape",
+      "title": "管理台本地文件根必须落在数据根内",
+      "verdict": "本地根解析越界（..、绝对路径逃逸）一律 400，不进入列目录/删文件",
+      "tests": [
+        "transport/http/handler/localfiles_root_test.go::TestAdminDeleteLocalFile_InvalidRoot400",
+        "transport/http/handler/localfiles_root_test.go::TestAdminListLocalFiles_InvalidRoot400",
+        "transport/http/handler/localfiles_root_test.go::TestParseLocalRoot"
+      ]
+    },
+    {
+      "id": "PX-04",
+      "class": "path_escape",
+      "title": "存储层路径守卫：fs 分支不得跳出 root，未知 scheme 拒绝",
+      "verdict": "opendal fs 算子对 .. 上跳段拒绝；未知 scheme 与缺 root 拒绝建实例",
+      "tests": [
+        "storage/opendal/resolve_path_guard_test.go::TestFSOperatorNormalPathsStillWork",
+        "storage/opendal/resolve_path_guard_test.go::TestFSOperatorRejectsTraversal",
+        "storage/opendal/resolve_path_guard_test.go::TestNewFSRequiresRoot",
+        "storage/opendal/resolve_path_guard_test.go::TestNewRejectsUnknownScheme"
+      ]
+    },
+    {
+      "id": "PX-05",
+      "class": "path_escape",
+      "title": "落盘相对路径由 UUID 生成：原始文件名不得影响路径结构",
+      "verdict": "落盘路径恒为 uploads/YYYY/MM/DD/<uuid><ext>；恶意原始名不改结构、不含分隔符；同名两次不撞路径",
+      "tests": [
+        "pkg/utils/l8_upload_path_escape_test.go::TestL8_NewUploadRelPathIgnoresHostileFileName",
+        "pkg/utils/l8_upload_path_escape_test.go::TestL8_NewUploadRelPathKeepsExtensionOnly",
+        "pkg/utils/l8_upload_path_escape_test.go::TestL8_UploadObjectRelPathIgnoresHostileFileName",
+        "pkg/utils/l8_upload_path_escape_test.go::TestL8_UploadRelPathIsUniquePerCall"
+      ]
+    },
+    {
+      "id": "PX-06",
+      "class": "path_escape",
+      "title": "用户文件名消毒：剥离目录成分与控制字符",
+      "verdict": "展示/存储用文件名去掉目录成分与控制字符，空名回退为 file",
+      "tests": [
+        "pkg/utils/security_test.go::TestSanitizeFileName"
+      ]
+    },
+    {
+      "id": "RE-01",
+      "class": "resource_exhaustion",
+      "title": "单文件/请求体/文本上限判定与业务码",
+      "verdict": "三个上限 0=不限；超限返回带 10010 业务码的 typed error；请求体预算取 max(上传上限, 单文件上限)",
+      "tests": [
+        "pkg/gate/resource_test.go::TestCheckFileSize",
+        "pkg/gate/resource_test.go::TestCheckTaskBudget",
+        "pkg/gate/resource_test.go::TestExceedsFileSize",
+        "pkg/gate/resource_test.go::TestExceedsRequestSize",
+        "pkg/gate/resource_test.go::TestExceedsTextShare",
+        "pkg/gate/resource_test.go::TestHTTPBodyLimit",
+        "pkg/gate/resource_test.go::TestResourceErrorsCarryTooLargeCode"
+      ]
+    },
+    {
+      "id": "RE-02",
+      "class": "resource_exhaustion",
+      "title": "上传/下载准入闸门（匿名开关、登录要求、总量上限）",
+      "verdict": "open_upload=false 拒匿名上传；require_login=true 拒匿名下载；用户级总量超限按 10010 拒",
+      "tests": [
+        "pkg/gate/gate_test.go::TestCheckDownloadLogin",
+        "pkg/gate/gate_test.go::TestCheckUploadAllowed",
+        "pkg/gate/gate_test.go::TestCheckUploadLogin",
+        "pkg/gate/gate_test.go::TestCheckUploadSizeCap"
+      ]
+    },
+    {
+      "id": "RE-03",
+      "class": "resource_exhaustion",
+      "title": "匿名日配额：次数/字节双维度与跨日翻篇",
+      "verdict": "匿名配额按次数与字节两个维度封顶；跨日重置；并发下计数不超发",
+      "tests": [
+        "pkg/gate/quota_test.go::TestCheckAnonymousQuota_BytesLimit",
+        "pkg/gate/quota_test.go::TestCheckAnonymousQuota_CountLimit",
+        "pkg/gate/quota_test.go::TestCheckAnonymousQuota_DateRollover",
+        "pkg/gate/quota_test.go::TestCheckAnonymousQuota_Disabled",
+        "pkg/gate/quota_test.go::TestDailyQuota_Concurrent",
+        "pkg/gate/quota_test.go::TestQuotaRedis_CountLimitReject",
+        "pkg/gate/quota_test.go::TestQuotaRedis_IncrWithTTLSemantics"
+      ]
+    },
+    {
+      "id": "RE-04",
+      "class": "resource_exhaustion",
+      "title": "容量不变量与直传策略闸门",
+      "verdict": "总量 < 单文件被判为矛盾（出厂默认自相矛盾事故形态）；直传三档策略 everyone/authenticated/disabled 判对",
+      "tests": [
+        "pkg/l8/l8_gate_resource_test.go::TestL8_BatchCapBelowFileCapDetectsContradiction",
+        "pkg/l8/l8_gate_resource_test.go::TestL8_CheckPresignPolicyGate"
+      ]
+    },
+    {
+      "id": "RE-05",
+      "class": "resource_exhaustion",
+      "title": "限流器：维度隔离、突发容量、周期配额、降级与并发",
+      "verdict": "按 IP/scope 维度计数；关闭即放行；周期配额用满写锁定标记；Redis 降级回落本地桶且可自动恢复",
+      "tests": [
+        "pkg/middleware/apikey_test.go::TestAllowPerKey_TokenBucket",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_LockoutAfterMaxFailures",
+        "pkg/middleware/apikey_test.go::TestOptionalAPIKey_PerKeyRateLimit_429",
+        "pkg/middleware/ratelimit_blockseconds_conf_test.go::TestRateLimitConfigFromConf_ExplicitZeroBlockSeconds",
+        "pkg/middleware/ratelimit_blockseconds_conf_test.go::TestRateLimitConfigFromConf_UnsetAndNegativeKeepDefault",
+        "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_FallbackObserved",
+        "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_FallbackUsesLocalBucketState",
+        "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_PeriodLimit_HitQuotaAndWindowReset",
+        "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_PeriodLimit_OverQuotaWritesBlock",
+        "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_PeriodLimit_QuotaHotUpdate",
+        "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_PeriodLimit_SetRedisDegradeAndRecover",
+        "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_PeriodLimit_UnknownFallsBackAndAutoRecovers",
+        "pkg/middleware/ratelimit_race_test.go::TestRateLimiter_UpdateConfigConcurrentWithAllow",
+        "pkg/middleware/ratelimit_test.go::TestClientIP_XForwardedFor",
+        "pkg/middleware/ratelimit_test.go::TestDefaultRateLimitConfig",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_Allow_DifferentIP",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_Allow_Disabled",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_Allow_IPDimension",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_Allow_ScopeDimension",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_BurstCapacity",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_Concurrent",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_GC_NoError",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_LoginQPS",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_Stop",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_UpdateConfig",
+        "pkg/middleware/ratelimit_test.go::TestRateLimiter_ZeroQPS"
+      ]
+    },
+    {
+      "id": "RE-06",
+      "class": "resource_exhaustion",
+      "title": "失败锁定器：并发安全、Redis 故障 fail-closed、关闭即失效",
+      "verdict": "并发下拿到同一实例；Redis 挂掉时按内存兜底判定（不放行）；显式关闭时不计数不锁定",
+      "tests": [
+        "pkg/middleware/l8_lockout_enum_key_test.go::TestL8_LockoutDisabledFailsOpenByConfig",
+        "pkg/middleware/l8_lockout_enum_key_test.go::TestL8_LockoutEnabledByDefault",
+        "pkg/middleware/lockout_concurrency_test.go::TestGetDefaultLockout_ConcurrentSameInstance",
+        "pkg/middleware/lockout_concurrency_test.go::TestGetDefaultLockout_ConcurrentWithInit",
+        "pkg/middleware/lockout_concurrency_test.go::TestGetDefaultRateLimiter_ConcurrentSameInstance",
+        "pkg/middleware/lockout_concurrency_test.go::TestGetDefaultRateLimiter_ConcurrentWithInit",
+        "pkg/middleware/lockout_failopen_test.go::TestLockout_MemoryModeUnaffected",
+        "pkg/middleware/lockout_failopen_test.go::TestLockout_RedisDownFailsClosed",
+        "pkg/middleware/lockout_failopen_test.go::TestLockout_RedisDownOtherKeyStillAllowed",
+        "pkg/middleware/lockout_failopen_test.go::TestLockout_RedisHealthyStillShortCircuits",
+        "pkg/middleware/lockout_test.go::TestFormatLockKey",
+        "pkg/middleware/lockout_test.go::TestLockoutLockAndReset",
+        "pkg/middleware/lockout_test.go::TestSetTrustedProxies"
+      ]
+    },
+    {
+      "id": "RE-07",
+      "class": "resource_exhaustion",
+      "title": "资源入口收口：容量判定只准走 pkg/gate（结构守卫）",
+      "verdict": "路由链上的容量面必须登记到执行点承载文件；出现裸比较即红",
+      "tests": [
+        "bootstrap/resource_entry_guard_test.go::TestResourceEntryGuardCoverage",
+        "bootstrap/resource_entry_guard_test.go::TestResourceEntryGuardNegativeControl"
+      ]
+    }
+  ],
+  "exemptions": [
+    {
+      "file": "pkg/outbound/outbound_test.go",
+      "func": "TestNew_Reuse",
+      "reason": "出站客户端构造与复用：属客户端资源治理，无攻击面判定，不属六类威胁"
+    },
+    {
+      "file": "pkg/outbound/outbound_test.go",
+      "func": "TestNew_UnknownTarget_Panics",
+      "reason": "未知目标名构造即 panic：属客户端契约，无攻击面判定，不属六类威胁"
+    },
+    {
+      "file": "pkg/outbound/outbound_test.go",
+      "func": "TestObserve",
+      "reason": "出站观测指标：可观测性面，不属六类威胁"
+    },
+    {
+      "file": "pkg/outbound/outbound_test.go",
+      "func": "TestTimeouts",
+      "reason": "出站超时设置：客户端参数面（SSRF 判定另有专门用例），不属六类威胁"
+    },
+    {
+      "file": "pkg/outbound/outbound_test.go",
+      "func": "TestOutboundClientExclusivity",
+      "reason": "同目标客户端互斥：属资源治理而非攻击面判定，不属六类威胁"
+    },
+    {
+      "file": "pkg/security/contentdisposition_test.go",
+      "func": "TestContentDispositionAttachment",
+      "reason": "Content-Disposition 响应头（XSS 防护）：属输出编码面，六类威胁里无对应项"
+    },
+    {
+      "file": "pkg/middleware/security_test.go",
+      "func": "TestSecurityHeadersStripsServerFingerprint",
+      "reason": "安全响应头基线（去指纹）：属加固面，六类威胁里无对应项"
+    },
+    {
+      "file": "pkg/middleware/security_test.go",
+      "func": "TestSecurityHeadersNoStore",
+      "reason": "安全响应头基线（no-store）：属加固面，六类威胁里无对应项"
+    },
+    {
+      "file": "pkg/middleware/security_test.go",
+      "func": "TestSecurityHeadersBaseline",
+      "reason": "安全响应头基线：属加固面，六类威胁里无对应项"
+    },
+    {
+      "file": "pkg/middleware/apikey_test.go",
+      "func": "TestTouchLastUsed_ThrottleWindow",
+      "reason": "API Key 最近使用时间戳的节流写：属审计埋点面，不属六类威胁"
+    },
+    {
+      "file": "pkg/middleware/apikey_test.go",
+      "func": "TestTouchLastUsed_WriteFailureRetriesImmediately",
+      "reason": "审计埋点写失败重试：属可靠性面，不属六类威胁"
+    },
+    {
+      "file": "pkg/middleware/apikey_test.go",
+      "func": "TestTouchLastUsed_PanicRollsBackStamp",
+      "reason": "审计埋点回滚：属可靠性面，不属六类威胁"
+    },
+    {
+      "file": "pkg/middleware/apikey_test.go",
+      "func": "TestOptionalAPIKey_TouchLastUsedThrottled",
+      "reason": "审计埋点节流：属审计埋点面，不属六类威胁"
+    },
+    {
+      "file": "pkg/middleware/apikey_test.go",
+      "func": "TestSanitizeHeaderValue",
+      "reason": "日志/响应头取值清洗（防注入）：属输出编码面，六类威胁里无对应项"
+    },
+    {
+      "file": "pkg/utils/security_test.go",
+      "func": "TestHashReaderAndBytes",
+      "reason": "文件哈希原语：属完整性工具面，六类威胁里无对应项"
+    },
+    {
+      "file": "pkg/utils/security_test.go",
+      "func": "TestMatchBlockedMagic",
+      "reason": "文件魔数拦截：属内容审核面（不是路径逃逸/资源耗尽），六类威胁里无对应项"
+    },
+    {
+      "file": "pkg/utils/security_test.go",
+      "func": "TestCheckUploadContentWhitelistPriority",
+      "reason": "上传内容白名单优先级：属内容审核面，六类威胁里无对应项"
+    }
+  ],
+  "helpers": [
+    {
+      "file": "app/admin/webauthn_simulator_test.go",
+      "reason": "WebAuthn 交互模拟器：本文件只提供构造仪式数据的辅助代码，不含独立用例"
+    }
+  ]
+}
