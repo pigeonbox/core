@@ -45,6 +45,26 @@ func (s *Service) SaveUploadFile(ctx context.Context, fh *multipart.FileHeader, 
 	return result.FilePath, result.FileSize, result.FileHash, nil
 }
 
+// RollbackUploadedFile 回滚删除**本请求刚落盘**的文件（best-effort）。
+//
+// 为什么需要（2026-11-18）：单文件直传通道的顺序是「落盘 → 建分享（内含配额闸）」，
+// 建分享失败（配额超限 / 审核拒绝 / 落库失败）时**文件已经躺在存储里**。
+// 而多文件通道在同位置有 cleanupStored 做失败回滚 ⇒ 单文件通道缺这一环 ⇒
+// 每次配额拒绝都留下一份孤儿文件。
+//
+// ⚠️ 危害不止「占磁盘」：物理用量口径是**按 file_codes 行的路径合计**
+// （GetPhysicalObjectUsage）⇒ 孤儿文件**不计入配额账本** ⇒ 磁盘占用可以
+// 无限超出 storage.quota（配额被绕过），直到 janitor 对账清理。
+//
+// 走引用保护删除（deletePhysicalIfUnreferenced）：若该路径已被别的分享引用
+// （秒传共享对象），**不删**（否则会删掉别人的文件）。
+func (s *Service) RollbackUploadedFile(ctx context.Context, relPath string) {
+	if relPath == "" {
+		return
+	}
+	s.deletePhysicalIfUnreferenced(ctx, relPath, 0)
+}
+
 // OpenShareDownload 单文件下载取流（鉴权与扣次由调用方先行完成）。
 func (s *Service) OpenShareDownload(ctx context.Context, filePath string) (*FilePayload, error) {
 	st, err := s.storageClient()

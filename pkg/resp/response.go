@@ -268,6 +268,38 @@ func httpStatusForCode(code int) int {
 		//「参数传错」，监控/网关按 4xx 记健康度、客户端按传参问题排查
 		//（core#114 修错误信封统一时暴露的映射缺陷）。
 		return consts.StatusInternalServerError
+	case code == errcode.CodeUnknown:
+		// 未知错误（10000）⇒ 500。
+		// ⚠️ 2026-11-18：10000 是 contracts/errcode 的**兜底码**（Message() 查不到
+		// 时就回退到它）⇒ 它天然表示「服务端没归类清楚的错误」⇒ 500。
+		// 此前它没有显式 case ⇒ 落 default ⇒ **HTTP 200**（业务错误进 200，
+		// core#114/#115 同族缺陷的漏网一族）。
+		return consts.StatusInternalServerError
+	case code == errcode.CodeUploadSessionGone:
+		// 上传会话不存在或已失效（20010）⇒ 404。
+		// 口径与本仓既有「不存在/已过期/被封禁 → 404」一致（同族的
+		// CodePresignExpired 用 410 是因为它是**凭证过期**、语义在「曾有效」）。
+		return consts.StatusNotFound
+	case code == errcode.CodeUserDisabled:
+		// 用户已禁用（40004）⇒ 403。
+		// ⚠️ 刻意不用 401：前端 axios 拦截器把 401 当会话失效 ⇒ 会误触发
+		// refresh/跳登录（同族口径见 CodeTotpRequired 的注释）。
+		return consts.StatusForbidden
+	case code == errcode.CodeAPIKeyInvalid:
+		// API Key 无效（40007）⇒ 401（认证凭证无效）。
+		// 与既有发射点 pkg/middleware/apikey.go 的手写 http.StatusUnauthorized 一致。
+		return consts.StatusUnauthorized
+	case code == errcode.CodeRegClosed:
+		// 注册已关闭（40009）⇒ 403（站点策略拒绝，与「上传已关闭」同族）。
+		return consts.StatusForbidden
+	case code == errcode.CodeEmailInvalid, code == errcode.CodePasswordWeak:
+		// 邮箱格式错误（40010）/ 密码强度不足（40011）⇒ 400（客户端可改正后重试）。
+		return consts.StatusBadRequest
+	case code == errcode.CodeThirdPartySMS, code == errcode.CodeThirdPartyEmail,
+		code == errcode.CodeThirdPartyAPI:
+		// 第三方服务失败（90001/90002/90003）⇒ 502 Bad Gateway
+		// （故障在下游，不在本站 ⇒ 与 500 区分：502 明确「上游挂了」）。
+		return consts.StatusBadGateway
 	case errcode.IsServerError(code):
 		return consts.StatusInternalServerError
 	case errcode.IsClientError(code):
