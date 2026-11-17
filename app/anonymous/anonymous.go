@@ -147,6 +147,9 @@ type CodeMeta struct {
 // GenerateCode 生成 6 位取件码：落库 file_codes.pickup_code（真相源，唯一索引
 // 防跨分享撞码），有 TTL 时另写 KV 映射加速解析。expireAt 零值=永久分享（不写
 // KV，取件走 DB 回退）；过期时间应与 DB 记录对齐，已过期则拒绝铸造。
+//
+// KV 写失败（Redis 故障）**不阻断出码**：保留 DB 取件码并照常返回该码
+// （真相源在 DB，取件走 DB 回源）；仅「KV 撞码」（redis.Nil）才回滚换码重试。
 func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time.Time) (string, error) {
 	if s.fileCodeRepo == nil {
 		return "", errors.New("fileCodeRepo 未注入，取件码无法落库")
@@ -187,13 +190,27 @@ func (s *Service) GenerateCode(ctx context.Context, meta CodeMeta, expireAt time
 		key := fmt.Sprintf(keyPickupCodeMapping, code)
 		_, err = s.rdb.SetArgs(ctx, key, meta.ShareCode, redis.SetArgs{TTL: ttl, Mode: "NX"}).Result()
 		if err != nil {
-			// KV 撞码（残留脏数据）或故障：回滚 DB 列后换码重试/报错，
-			// 防"DB 已落但 KV 指向他处"的错位映射
-			_ = s.fileCodeRepo.ClearPickupCode(ctx, code)
 			if errors.Is(err, redis.Nil) {
+				// KV 撞码（键已存在 ⇒ 残留脏数据/陈旧映射）：回滚 DB 取件码并换码重试，
+				// 防"DB 已落但 KV 指向他处"的错位映射
+				_ = s.fileCodeRepo.ClearPickupCode(ctx, code)
 				continue
 			}
-			return "", err
+			// KV 故障（连接失败/超时等）：**非致命** —— Redis 只是加速缓存，
+			// 真相源是已落库的 file_codes.pickup_code 列，取件经 DB 回源路径解析。
+			// ⇒ 保留 DB 取件码、**不回滚**、**不报错**（此前回滚 + 报错 ⇒ Redis 一抖
+			//   匿名取件面整体不可用，且调用方（CreateAnonymousShare）会把刚建的
+			//   分享行物理删掉 ⇒ 用户刚上传的分享凭空消失）。
+			//
+			// 为什么「KV 写失败时保留 DB 取件码」是安全的：
+			//   · SET NX 语义下，命令要么没生效、要么写入的是**本分享自己的**值，
+			//     绝不会把别的分享的值覆写进来 ⇒ KV 里不会出现"本码指向他处"的错位；
+			//   · KV 里若残留同码的陈旧映射（分享已删、键还在 TTL 内），健康连接下
+			//     SET NX 返回 redis.Nil ⇒ 被当作撞码换码重试（上面那条分支）；
+			//   · 连接中断导致的残留概率约 1e-9 量级（随机 6 位码 × 陈旧条目数），
+			//     可接受 ⇒ **不为此加额外的 Redis 往返**（多一次往返就多一个挂点）。
+			logger.CtxWarn(ctx, "redis 映射写入失败，保留 DB 取件码（降级：取件走 DB 回源）", "code", code, "err", err)
+			return code, nil
 		}
 		return code, nil
 	}
@@ -213,8 +230,14 @@ func (s *Service) lookupShareCode(ctx context.Context, code string) (string, err
 	if err == nil {
 		return shareCode, nil
 	}
+	// KV 故障（连接失败/超时等**非 redis.Nil** 错误）**不得早退**：Redis 在本域
+	// 只是「取件码→分享码」的**加速缓存**，真相源是 file_codes.pickup_code 列，
+	// 域内本就有 DB 回源路径（resolveShareCodeFromDB）⇒ 按「缓存未命中」处理，
+	// 继续走 DB 回源。
+	// 此前此处对非 redis.Nil 错误直接 return ⇒ Redis 一抖，整个匿名取件面不可用
+	// （取件/预查/占位解析全挂），尽管 DB 回源路径就在旁边。
 	if !errors.Is(err, redis.Nil) {
-		return "", err
+		logger.CtxWarn(ctx, "redis 映射查询失败，回落 DB 回源（KV 仅为加速缓存）", "code", trimmed, "err", err)
 	}
 	// 负缓存快速路径：近期已确认"映射与 DB 均无此码"
 	if _, err := s.rdb.Get(ctx, fmt.Sprintf(keyPickupCodeNeg, trimmed)).Result(); err == nil {
@@ -490,6 +513,9 @@ func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousSharePara
 	}, expireAt) // 零值 = 永久（不写 KV，取件走 DB 回退）
 	if err != nil {
 		// 回滚 DB 记录（物理文件未落库，无需清）
+		// ⚠️ 只有**真失败**（落库失败等）才走到这里：KV 写失败已按非致命处理
+		// （GenerateCode 保留 DB 取件码、照常返回该码）⇒ Redis 抖一下不会把用户
+		// 刚上传的分享删掉。
 		if dErr := s.fileCodeRepo.Delete(ctx, fc.ID); dErr != nil {
 			logger.CtxWarn(ctx, "rollback file_code on generate code failed", "id", fc.ID, "err", dErr)
 		}
@@ -507,7 +533,9 @@ func (s *Service) CreateAnonymousShare(ctx context.Context, p AnonymousSharePara
 // 真相源落 DB pickup_code 列；有 TTL 时另写 KV 映射加速解析：
 //   - expireAt nil（永久分享）→ 零值传入 GenerateCode：不写 KV（无 TTL 可言），
 //     取件经 lookupShareCode 的 pickup_code 列回退路径解析，重启不失联
-//   - KV 写失败返回错误但调用方应视为非致命（出码主流程不阻断）
+//   - KV 写失败（Redis 故障）**不阻断、不报错**：保留 DB 取件码（真相源）并照常
+//     返回该码，取件经 lookupShareCode 的 DB 回源路径解析（Redis 仅为加速缓存；
+//     详见 GenerateCode）
 func (s *Service) MintForShare(ctx context.Context, shareCode, fileName string, fileSize int64, requireAuth bool, expireAt *time.Time) (string, error) {
 	if s.rdb == nil {
 		return "", nil
