@@ -557,38 +557,24 @@ func TestErrcodeRegistry_AllContractCodesResolveToMessage(t *testing.T) {
 // 方向 ③：契约登记码必须有 HTTP 状态映射
 // =====================================================================
 
-// knownHTTPStatusGapCodes 审计快照（2026-11-17）：这些码在契约里登记了，
-// 但 core 的 httpStatusForCode 没有显式 case ⇒ 落 default ⇒ HTTP 200。
+// knownHTTPStatusGapCodes：**空**（2026-11-18 起零容忍）。
 //
-// 这是 core#115 / A6b 同族的遗留缺口（那批把 10016、10008、2xxxx 族逐个补进了
-// switch；剩下这批没被扫到）。
+// 历史：2026-11-17 审计快照曾登记 10 个「契约登记了、但 core 的 httpStatusForCode
+// 没有显式 case ⇒ 落 default ⇒ **HTTP 200**」的码（业务错误进 200，与 core#114/#115
+// 同族）。这 10 个已在同批次全部补上显式映射（见 pkg/resp/response.go）：
 //
-// 为什么它不让守卫当场变红：缺口在生产代码的映射表 pkg/resp/response.go 里，
-// 而守卫任务不碰生产代码 ⇒ 缺口如实登记在此，交主会话决策。最小修法：
-// 在 httpStatusForCode 里补 case，例如 CodeUserDisabled → 403、
-// CodeAPIKeyInvalid → 401、CodeUploadSessionGone → 404、CodeThirdParty* → 502。
+//	10000 CodeUnknown → 500 · 20010 CodeUploadSessionGone → 404
+//	40004 CodeUserDisabled → 403 · 40007 CodeAPIKeyInvalid → 401
+//	40009 CodeRegClosed → 403 · 40010/40011 → 400
+//	90001/90002/90003 CodeThirdParty* → 502
 //
-// 本清单不是「认可这些码返回 200」：
-//   - 守卫会核对「实际落 2xx 的登记码集合 ⊆ 本清单」⇒ 新增缺口（契约加码而
-//     core 没映射）仍然让守卫变红；
-//   - 修好一个码（映射补上）守卫仍绿 ⇒ 可以顺手把该条目从清单里删掉（删了
-//     不影响判定，但清单会重新与现状对齐）。
+// ⇒ 本清单清空，守卫升级为**零容忍**：此后任何「登记码落 2xx」都直接判红。
 //
-// 现状影响面（实测）：这批码里只有 CodeAPIKeyInvalid 被 core 真正发射，而它的
-// 发射点 pkg/middleware/apikey.go 手写 http.StatusUnauthorized ⇒ 线上行为正确；
-// 本缺口是潜在陷阱（哪天有人改走 resp.NewErrorByCode ⇒ 变 200）。
-var knownHTTPStatusGapCodes = map[int]string{
-	errcode.CodeUnknown:           "10000 未知错误",
-	errcode.CodeUploadSessionGone: "20010 上传会话不存在或已失效",
-	errcode.CodeUserDisabled:      "40004 用户已禁用",
-	errcode.CodeAPIKeyInvalid:     "40007 API Key 无效",
-	errcode.CodeRegClosed:         "40009 注册已关闭",
-	errcode.CodeEmailInvalid:      "40010 邮箱格式错误",
-	errcode.CodePasswordWeak:      "40011 密码强度不足",
-	errcode.CodeThirdPartySMS:     "90001 短信发送失败",
-	errcode.CodeThirdPartyEmail:   "90002 邮件发送失败",
-	errcode.CodeThirdPartyAPI:     "90003 第三方 API 失败",
-}
+// 机制保留（不是删掉判据）：若将来 contracts 新增一个码而 core 尚未决定它的
+// HTTP 语义，守卫会立刻变红并**点名**该码；此时**正确做法是补 httpStatusForCode 的
+// case**，而不是把码塞回本清单 —— 本清单只允许在「明确决定该码暂时应当落 2xx」时
+// 临时登记一条，且必须写清理由。
+var knownHTTPStatusGapCodes = map[int]string{}
 
 // TestErrcodeRegistry_HTTPStatusMappingCoversContractCodes 方向 ③。
 func TestErrcodeRegistry_HTTPStatusMappingCoversContractCodes(t *testing.T) {
