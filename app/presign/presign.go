@@ -27,11 +27,14 @@ import (
 
 	"github.com/oekit/kitx/uidgen"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 
 	"github.com/pigeonbox/core/internal/dblock"
 	"github.com/pigeonbox/core/internal/uploadlock"
 	"github.com/pigeonbox/core/pkg/baseurl"
+	pkgerrors "github.com/pigeonbox/core/pkg/errors"
 	"github.com/pigeonbox/core/pkg/gate"
+	"github.com/pigeonbox/core/pkg/logger"
 	"github.com/pigeonbox/core/pkg/utils"
 	"github.com/pigeonbox/core/repo/db/dao"
 	"github.com/pigeonbox/core/repo/db/model"
@@ -68,6 +71,29 @@ var (
 	ErrUploadExpired   = errors.New("upload expired")
 	ErrAlreadyComplete = errors.New("upload already completed")
 )
+
+// sessionStoreUnavailable 会话存储（Redis）不可用 ⇒ typed「服务不可用」错误
+// （errcode.CodeUnavailable 10006 ⇒ HTTP 503）。
+//
+// 为什么必须是 typed（core#630 L6 故障注入）：裸 error 上抛 ⇒ handler 兜底
+// NewInternalError(30008/10008) ⇒ HTTP 500「预签名生成失败」⇒ 前端**无法**
+// 分辨「服务暂时不可用（该退回普通上传通道 / 稍后重试）」与「你参数错了」——
+// 这两者的下一步动作完全不同。
+//
+// 口径三条（与 app/share「不把基建故障装成码不存在」同款纪律）：
+//   - **不伪装成「会话不存在」**：基建故障不是 10004；客户端据此重新 init
+//     会把已传的对象变成孤儿；
+//   - **不静默回落进程内内存 KV**：内存 KV 是「redis.host 为空」的**单机**
+//     语义（不跨副本共享、重启即失），运行期回落会破坏多副本一致性并掩盖故障；
+//   - **对外脱敏**：原始 Redis 文本（dial tcp / connect refused）只进服务端
+//     日志，不进响应体（typed error 的 Error() 是面向调用方的可操作文案，
+//     底层原因用 Unwrap 留在错误链里）。
+//
+// op 标注失败环节（init/complete/abort/get_meta），便于日志对账。
+func sessionStoreUnavailable(op string, err error) error {
+	logger.Error("presign session store unavailable", zap.String("op", op), zap.Error(err))
+	return pkgerrors.NewServiceUnavailable("会话存储暂时不可用，请稍后重试", err)
+}
 
 // redisKV presign 会话所需的最小 Redis 命令集（*redis.Client 天然满足；
 // 字段收窄为方法集以便注入内存 mock，构造函数仍收具体客户端）。
@@ -411,7 +437,10 @@ func (s *Service) Init(ctx context.Context, meta InitMeta) (*InitResult, error) 
 	}
 	metaJSON, _ := json.Marshal(meta)
 	if err := s.rdb.Set(ctx, fmt.Sprintf(keyUploadMeta, uploadID), metaJSON, metaTTL).Err(); err != nil {
-		return nil, err
+		// 会话存储不可用 ⇒ typed error（10006 ⇒ HTTP 503）。
+		// 裸 error 上抛会被 handler 兜底成 30008「预签名生成失败」/HTTP 500，
+		// 前端无从分辨「服务暂时不可用（该退回普通上传通道）」与「参数非法」。
+		return nil, sessionStoreUnavailable("init", err)
 	}
 
 	// 账本 pending 落行（core#172 第三片）：会话已建、写未开始。best-effort。
@@ -477,7 +506,9 @@ func (s *Service) Complete(ctx context.Context, uploadID, token, ownerIP string)
 		return nil, ErrUploadNotFound
 	}
 	if err != nil {
-		return nil, err
+		// 基建故障 ≠「会话不存在」：报 not found 会让客户端以为上传丢了、
+		// 重新 init ⇒ 已传对象成孤儿。⇒ 以「服务不可用」形态上抛。
+		return nil, sessionStoreUnavailable("complete", err)
 	}
 
 	var meta InitMeta
@@ -727,7 +758,7 @@ func (s *Service) Abort(ctx context.Context, uploadID, token string) error {
 		return ErrUploadNotFound
 	}
 	if err != nil {
-		return err
+		return sessionStoreUnavailable("abort", err)
 	}
 	var meta InitMeta
 	if err := json.Unmarshal([]byte(metaJSON), &meta); err != nil {
@@ -752,7 +783,7 @@ func (s *Service) GetMeta(ctx context.Context, uploadID string) (*InitMeta, erro
 		return nil, ErrUploadNotFound
 	}
 	if err != nil {
-		return nil, err
+		return nil, sessionStoreUnavailable("get_meta", err)
 	}
 	var meta InitMeta
 	if err := json.Unmarshal([]byte(metaJSON), &meta); err != nil {
