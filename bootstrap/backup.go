@@ -103,3 +103,13 @@ func (a storageTypeAdapter) EffectiveType() string { return string(a.svc.Effecti
 func (a storageTypeAdapter) FileExists(ctx context.Context, p string) bool {
 	return a.svc.FileExists(ctx, p)
 }
+
+// ObjectExists 透传存储层的**错误可见**存在性探测（备份域的可选能力
+// ObjectExistsProbe，见 app/backup/export.go）。
+//
+// 装配方一旦提供它，备份导出就直接用它的权威答案（对象真不存在 vs 后端故障
+// 分得开），不必再走「FileExists + 读一次确认」的兜底（后者每个对象多一次
+// Stat，且 FileExists 对任何 Stat 错误都返回 false ⇒ 后端一挂就误判 missing）。
+func (a storageTypeAdapter) ObjectExists(ctx context.Context, p string) (bool, error) {
+	return a.svc.ObjectExists(ctx, p)
+}

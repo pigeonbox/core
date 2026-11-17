@@ -43,6 +43,12 @@ func (d diskStore) SaveStream(ctx context.Context, p string, r io.Reader, size i
 }
 func (d diskStore) FileExists(ctx context.Context, p string) bool { return d.s.FileExists(ctx, p) }
 
+// ObjectExists 错误可见的存在性探测（转发真实存储层：缺失 ⇒ (false, nil)，
+// 后端故障 ⇒ 如实报错）。
+func (d diskStore) ObjectExists(ctx context.Context, p string) (bool, error) {
+	return d.s.ObjectExists(ctx, p)
+}
+
 // TestRestore_IsolatedDir_PerFileSHA256 恢复到隔离临时目录 + 逐文件 sha256。
 func TestRestore_IsolatedDir_PerFileSHA256(t *testing.T) {
 	ctx := context.Background()

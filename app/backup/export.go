@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,9 +43,36 @@ type ObjectStore interface {
 	EffectiveType() string
 	// SaveStream 把 reader 写入相对路径（路径逃逸由存储层自防）。
 	SaveStream(ctx context.Context, savePath string, r io.Reader, expectedSize int64) (int64, error)
-	// FileExists 对象是否已存在（**存量数据缺失**的判定：读之前先问一句，
-	// 免得把「文件本来就没了」与「存储后端出故障」混为一谈）。
+	// FileExists 对象是否已存在。
+	//
+	// ⚠️ **它吞错**：存储层的实现对**任何** Stat 错误都返回 false ⇒ 分不清
+	// 「对象真的不存在」与「存储后端出故障」。导出**不用**它直接判存在性
+	// （见 ObjectExistsProbe 与 Service.objectExists）；它只作为「探测能力
+	// 缺失」时兜底路径的第一步。
 	FileExists(ctx context.Context, filePath string) bool
+}
+
+// ObjectExistsProbe **可选能力**：存在性探测，且**错误可见**。
+//
+// # 契约（缺一不可）
+//
+//   - (true, nil)  ⇒ 对象存在；
+//   - (false, nil) ⇒ 对象**真的不存在**（记 missing，导出继续）；
+//   - (false, err) ⇒ **存储后端故障**（Stat 失败 / 连接断 / 5xx）⇒ 导出**必须失败**。
+//
+// ⚠️ 绝不把「后端故障」报成 (false, nil)：那会让灾备包在**最需要它的时候**
+// 静默漏对象（2026-11-18 缺陷：后端一挂 ⇒ 每个对象都被记成 missing ⇒ 导出
+// 「成功」产出一个空 objects/ 目录 ⇒ 恢复后指向的对象全不在包里）。
+//
+// # 为什么是**可选**能力（而不是 ObjectStore 的必选方法）
+//
+// 备份域的 ObjectStore 由装配层适配（bootstrap 的 storageTypeAdapter 只转发
+// 既有 4 个方法）⇒ 加成必选方法会连带改装配层。
+// 而「探测能力缺失」也不能退化成吞错 ⇒ 兜底走 Service.objectExists 的
+// 「读一次看错误」路径（同样分得清真缺失与后端故障）。
+type ObjectExistsProbe interface {
+	// ObjectExists 探测对象是否存在；存储后端故障必须**如实返回错误**。
+	ObjectExists(ctx context.Context, filePath string) (bool, error)
 }
 
 // Service 备份包服务。
@@ -52,6 +80,8 @@ type Service struct {
 	db      *gorm.DB
 	objects ObjectLister
 	store   ObjectStore
+	// probe 存储层的错误可见存在性探测（**可选能力**：装配方转发时才有）。
+	probe ObjectExistsProbe
 	// dbType 数据库类型（默认取自方言；单测可改 ⇒ 覆盖「非 SQLite 明确报错」分支）。
 	dbType string
 }
@@ -61,7 +91,13 @@ type Service struct {
 // 依赖都是**窄接口**（对象清单 / 对象读写 / DB）⇒ 备份域不直接依赖任何业务域，
 // 装配在 bootstrap 完成（与「存储域不直接碰 DB」同款纪律）。
 func NewService(db *gorm.DB, objects ObjectLister, store ObjectStore) *Service {
-	return &Service{db: db, objects: objects, store: store, dbType: db.Name()}
+	s := &Service{db: db, objects: objects, store: store, dbType: db.Name()}
+	// 存储层给了错误可见的存在性探测 ⇒ 用它（后端故障能如实上抛，不被吞成
+	// 「对象不存在」）。没给 ⇒ 导出走 Service.objectExists 的兜底路径。
+	if p, ok := store.(ObjectExistsProbe); ok {
+		s.probe = p
+	}
+	return s
 }
 
 // Export 把「DB 快照 + 文件清单 + 存储对象 + 校验」导出成一个 tar.gz 包。
@@ -105,13 +141,20 @@ func (s *Service) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 
 	// 1) 对象：边写边算 sha256（只读一遍）。
 	for _, p := range paths {
-		// 存量缺失（DB 有引用、磁盘上已没有）⇒ 跳过并**如实记账**。
+		// 存量缺失（DB 有引用、磁盘上已没有）⇒ 跳过并**如实记账**；
+		// 存储后端故障 ⇒ **整体失败**（不得产出「看着成功、实际缺对象」的包）。
 		//
-		// 为什么不能整体失败：真机实录（2026-10-31，10.10.10.3）里这台实例的 DB
-		// 有 300+ 条分享记录，其中若干对象文件早被清理 ⇒ 「读不到就整体失败」⇒
-		// **备份包在这台实例上根本导不出来** ⇒ 灾备能力在最需要它的机器上失效。
-		// 而「存储后端真出故障」仍会报错（下面的读失败分支）⇒ 不吞真故障。
-		if !s.store.FileExists(ctx, p) {
+		// 为什么「真缺失」不能整体失败：真机实录（2026-10-31，10.10.10.3）里这台
+		// 实例的 DB 有 300+ 条分享记录，其中若干对象文件早被清理 ⇒
+		// 「读不到就整体失败」⇒ **备份包在这台实例上根本导不出来** ⇒
+		// 灾备能力在最需要它的机器上失效。
+		// 而「存储后端真出故障」必须整体失败（objectExists 把错误上抛）⇒
+		// 不吞真故障、也不把基建故障装成「存量缺失」（2026-11-18 缺陷）。
+		exists, err := s.objectExists(ctx, p)
+		if err != nil {
+			return nil, fmt.Errorf("探测对象失败 %q: %w", p, err)
+		}
+		if !exists {
 			manifest.MissingObjects = append(manifest.MissingObjects, p)
 			continue
 		}
@@ -146,6 +189,40 @@ func (s *Service) Export(ctx context.Context, w io.Writer) (*Manifest, error) {
 		return nil, fmt.Errorf("备份包压缩结束失败: %w", err)
 	}
 	return manifest, nil
+}
+
+// objectExists 判定对象是否存在，并区分「真·存量缺失」与「存储后端故障」。
+//
+// # 三条判据
+//
+//  1. 存储层给了错误可见的探测（ObjectExistsProbe）⇒ 直接用它的答案：
+//     (false, nil) = 真缺失；(false, err) = 后端故障 ⇒ 上抛。
+//  2. 没给（装配方只转发既有 4 个方法）⇒ 兜底：FileExists 说「在」就当在；
+//     说「不在」再**读一次**看真实原因（os.ErrNotExist = 真缺失；其它错误 =
+//     后端故障 ⇒ 上抛）。
+//  3. **后端故障一律上抛**（导出失败）——绝不记成 missing。
+//
+// # 为什么不能直接用 FileExists
+//
+// 存储层的 FileExists 对**任何** Stat 错误都返回 false（吞错）⇒ 后端一挂，
+// 全部对象被判成「真的不存在」⇒ 灾备包**看着成功、实际缺对象**。
+func (s *Service) objectExists(ctx context.Context, path string) (bool, error) {
+	if s.probe != nil {
+		return s.probe.ObjectExists(ctx, path)
+	}
+	if s.store.FileExists(ctx, path) {
+		return true, nil
+	}
+	// FileExists 说「不在」⇒ 必须读一次确认（它可能只是把后端故障吞了）。
+	rc, _, err := s.store.GetFileReader(ctx, path)
+	if err == nil {
+		_ = rc.Close()
+		return true, nil // 竞态：其实在（FileExists 的答案不可信）
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil // 真·存量缺失 ⇒ 记 missing，导出继续
+	}
+	return false, err // 后端故障 ⇒ 上抛（导出失败）
 }
 
 // writeObject 把一个对象写进包并算出摘要。
