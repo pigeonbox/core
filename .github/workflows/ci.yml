@@ -46,6 +46,15 @@ jobs:
         if: always()
         run: go test -race ./...
 
+      # L8 安全矩阵门禁自证（注入坏形态必须判红）。
+      # 判定层（pkg/l8 的 AST 双向对账）已随上面的 `go test -race ./...` 自动生效；
+      # 这一步补的是**入口层的负对照**——证明「清单 ↔ 仓内真实测试」的对账判据
+      # 不是恒绿（否则清单可以随便写，门禁永远绿）。
+      # 挂进既有 test job 的一个 step ⇒ **不改 required checks 名单**。
+      - name: L8 安全矩阵门禁自证（注入坏形态必须判红）
+        if: always()
+        run: bash scripts/check-l8-security-matrix.sh --selfcheck
+
       # 依赖漏洞门禁（govulncheck）：可达漏洞即红；修复策略=升依赖地板，不许注释绕过
       - name: Govulncheck
         if: always()

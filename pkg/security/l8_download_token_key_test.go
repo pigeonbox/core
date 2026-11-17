@@ -24,7 +24,7 @@ import (
 func l8SetTokenSecret(t *testing.T) {
 	t.Helper()
 	SetDownloadTokenSecret("l8-download-token-secret-32chars!!")
-	t.Cleanup(func() { downloadTokenSecret = nil })
+	t.Cleanup(func() { downloadTokenSecretPtr.Store(nil) })
 }
 
 // TestL8_TextViewKeyIsStableAndPerIPCoded 文本计次键：稳定、按 IP/码区分。
@@ -90,7 +90,7 @@ func TestL8_ChargeKeysEmptyWithoutSecretOrIP(t *testing.T) {
 	assert.Empty(t, TextViewKey("AbCd1234", ""), "取不到 IP 时不得产出计次键（否则全网共用一把）")
 	assert.Empty(t, DownloadSessionKey("AbCd1234", ""))
 
-	downloadTokenSecret = nil
+	downloadTokenSecretPtr.Store(nil)
 	assert.Empty(t, TextViewKey("AbCd1234", "1.2.3.4"), "未注入密钥时不得产出计次键")
 	assert.Empty(t, DownloadSessionKey("AbCd1234", "1.2.3.4"))
 }

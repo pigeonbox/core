@@ -21,8 +21,25 @@ import (
 // （2026-10-24：此前配置项存在但**从未被读取**，运维改配置无效 —— 硬编码常量）。
 const defaultDownloadTokenTTL = 1000 * time.Second
 
-// downloadTokenSecret 令牌签名密钥（bootstrap 注入，默认复用 jwt_secret）。
-var downloadTokenSecret []byte
+// downloadTokenSecretPtr 令牌签名密钥（bootstrap 注入，默认复用 jwt_secret）。
+//
+// ⚠️ 曾经是**裸切片**（L8 安全矩阵查出的真实数据竞争）：SetDownloadTokenSecret
+// 的写与请求处理路径的读并发 ⇒ `go test -race` 报 DATA RACE（切片头撕裂）
+// ⇒ 令牌签名/校验结果不可预期。现实里密钥多在启动期注入一次 ⇒ 属**潜伏**竞态，
+// 但密钥热更（管理台改密）与请求处理并发时就会被触发。
+//
+// ⇒ 改为 atomic.Pointer[[]byte]：写侧**整体替换**、读侧**原子取快照**
+// （与同文件的 downloadTokenTTLSec / atomic.Int64 同款口径，无新依赖）。
+var downloadTokenSecretPtr atomic.Pointer[[]byte]
+
+// downloadTokenSecretBytes 取密钥快照（nil = 未注入）。
+func downloadTokenSecretBytes() []byte {
+	p := downloadTokenSecretPtr.Load()
+	if p == nil {
+		return nil
+	}
+	return *p
+}
 
 // downloadTokenTTLSec 令牌有效期（秒），可由配置注入。
 var downloadTokenTTLSec atomic.Int64
@@ -36,7 +53,8 @@ func SetDownloadTokenSecret(secret string) {
 	if secret == "" {
 		return
 	}
-	downloadTokenSecret = []byte(secret)
+	b := []byte(secret)
+	downloadTokenSecretPtr.Store(&b)
 }
 
 // SetDownloadTokenTTL 设置令牌有效期（秒）；<=0 时回落到默认值。
@@ -74,7 +92,7 @@ func randomNonce() string {
 }
 
 func sign(payload string) string {
-	mac := hmac.New(sha256.New, downloadTokenSecret)
+	mac := hmac.New(sha256.New, downloadTokenSecretBytes())
 	mac.Write([]byte(payload))
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -89,7 +107,7 @@ func sign(payload string) string {
 // 现在是 "exp.nonce.sig"（载荷 `code.exp.nonce`）。旧令牌在升级后校验失败
 // （窗口 ≤ TTL，取件页重新取一次即可）。
 func GenerateDownloadToken(code string) string {
-	if len(downloadTokenSecret) == 0 {
+	if len(downloadTokenSecretBytes()) == 0 {
 		return ""
 	}
 	exp := time.Now().Add(DownloadTokenTTL()).Unix()
@@ -110,7 +128,7 @@ func VerifyDownloadToken(code, token string) bool {
 // 指纹 = HMAC(secret, "fp|" + 令牌)：单向，**不是令牌本身** —— 计次记录要落库，
 // 若直接存签名段，DB 泄漏即等于泄漏可直接下载的凭证。
 func VerifyDownloadTokenFingerprint(code, token string) string {
-	if len(downloadTokenSecret) == 0 {
+	if len(downloadTokenSecretBytes()) == 0 {
 		return ""
 	}
 	parts := strings.SplitN(token, ".", 3)
@@ -130,7 +148,7 @@ func VerifyDownloadTokenFingerprint(code, token string) string {
 
 // tokenFingerprint 计算令牌的单向计次指纹（与有效性校验分离，便于单独复用）。
 func tokenFingerprint(token string) string {
-	mac := hmac.New(sha256.New, downloadTokenSecret)
+	mac := hmac.New(sha256.New, downloadTokenSecretBytes())
 	mac.Write([]byte("fp|" + token))
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -149,10 +167,10 @@ func tokenFingerprint(token string) string {
 // 单向（HMAC）⇒ 落库的不是明文 IP。与 DownloadSessionKey 的域不同（"text|" vs
 // "ip|"）⇒ 两类键不会互相撞。
 func TextViewKey(code, clientIP string) string {
-	if len(downloadTokenSecret) == 0 || clientIP == "" {
+	if len(downloadTokenSecretBytes()) == 0 || clientIP == "" {
 		return ""
 	}
-	mac := hmac.New(sha256.New, downloadTokenSecret)
+	mac := hmac.New(sha256.New, downloadTokenSecretBytes())
 	mac.Write([]byte("text|" + code + "|" + clientIP))
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -167,10 +185,10 @@ func TextViewKey(code, clientIP string) string {
 //
 // 单向（HMAC）⇒ 落库的不是明文 IP。域不同（"ip|" vs "fp|"）⇒ 不会与令牌指纹撞键。
 func DownloadSessionKey(code, clientIP string) string {
-	if len(downloadTokenSecret) == 0 || clientIP == "" {
+	if len(downloadTokenSecretBytes()) == 0 || clientIP == "" {
 		return ""
 	}
-	mac := hmac.New(sha256.New, downloadTokenSecret)
+	mac := hmac.New(sha256.New, downloadTokenSecretBytes())
 	mac.Write([]byte("ip|" + code + "|" + clientIP))
 	return hex.EncodeToString(mac.Sum(nil))
 }
@@ -180,7 +198,7 @@ func DownloadSessionKey(code, clientIP string) string {
 // 签发方用它在签发的同一刻算计次键（文本分享在 select 交付正文时计次）；
 // 校验方用 VerifyDownloadTokenFingerprint（校验 + 指纹一体）。
 func DownloadTokenFingerprint(token string) string {
-	if len(downloadTokenSecret) == 0 || token == "" {
+	if len(downloadTokenSecretBytes()) == 0 || token == "" {
 		return ""
 	}
 	return tokenFingerprint(token)

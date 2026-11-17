@@ -308,6 +308,15 @@
       ]
     },
     {
+      "id": "AB-21",
+      "class": "auth_bypass",
+      "title": "下载令牌密钥的并发热更与签发/校验不得有数据竞争",
+      "verdict": "SetDownloadTokenSecret 与令牌签发/校验并发时无 DATA RACE（密钥以 atomic.Pointer 整体替换、读侧取快照）；撕裂的密钥会让令牌校验结果不可预期（潜伏竞态：密钥热更时触发）",
+      "tests": [
+        "pkg/security/downloadtoken_concurrent_test.go::TestDownloadTokenSecretConcurrentSetAndUse"
+      ]
+    },
+    {
       "id": "AZ-01",
       "class": "authz",
       "title": "角色/归属判定的单一执行点（pkg/authz）",
