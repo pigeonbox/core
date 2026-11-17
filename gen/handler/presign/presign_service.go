@@ -341,7 +341,17 @@ func Abort(ctx context.Context, c *app.RequestContext) {
 		case presignapp.ErrTokenInvalid:
 			resp.NewErrorByCode(c, errcode.CodePresignToken)
 		default:
-			resp.NewInternalError(c, errcode.CodeInternal, "中止上传", err)
+			// typed error（实现 ErrCode()）按业务码透传：会话存储不可用
+			// （errcode.CodeUnavailable 10006）⇒ HTTP 503 ⇒ 前端能分辨
+			// 「服务暂时不可用（稍后重试）」与「参数非法」，而不是笼统 500。
+			// 未实现 ErrCode 的错误仍走内部错误出口（脱敏 + 进日志），并保留
+			// 「中止上传」文案。口径与 Init/Complete 分支的 resp.NewTypedError 对齐。
+			var coder interface{ ErrCode() int }
+			if errors.As(err, &coder) {
+				resp.NewTypedError(c, err)
+			} else {
+				resp.NewInternalError(c, errcode.CodeInternal, "中止上传", err)
+			}
 		}
 		return
 	}
