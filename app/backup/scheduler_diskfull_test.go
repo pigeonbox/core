@@ -84,6 +84,12 @@ func (s *diskFullStore) FileExists(_ context.Context, p string) bool {
 	return ok
 }
 
+// ObjectExists 错误可见的存在性探测（故障注在读流上，这里只有「在 / 不在」）。
+func (s *diskFullStore) ObjectExists(_ context.Context, p string) (bool, error) {
+	_, ok := s.data[p]
+	return ok, nil
+}
+
 // halfFailReader 读到一半报错的流（模拟写盘失败）。
 type halfFailReader struct {
 	data []byte

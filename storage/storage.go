@@ -335,6 +335,45 @@ func (s *StorageService) FileExists(ctx context.Context, filePath string) bool {
 	return !os.IsNotExist(err)
 }
 
+// ObjectExists 存在性探测（**错误可见**）：对象真的不存在 ⇒ (false, nil)；
+// 存储后端故障 ⇒ (false, err)（错误**原样上抛**，不吞）。
+//
+// # 为什么不能复用 FileExists
+//
+// FileExists 对**任何** Stat 错误都返回 false（吞错）⇒ 调用方分不清
+// 「对象不存在」与「后端挂了」。备份域踩过这个坑：后端一挂 ⇒ 每个对象都被
+// 记成 missing ⇒ 灾备包**看着成功、实际缺对象**（2026-11-18）。
+//
+// # 口径
+//
+//   - 远端：opendal 各驱动已把「真 404」归一为 os.ErrNotExist、其余错误原样
+//     上抛（见 storage/BEHAVIOR-MATRIX.md）⇒ 用 errors.Is 判定；
+//   - 本地：os.Stat 返回 *os.PathError ⇒ 用 os.IsNotExist 判定（不解包 %w 链，
+//     与 FileExists 的本地分支同款）。
+func (s *StorageService) ObjectExists(ctx context.Context, filePath string) (bool, error) {
+	_, op := s.current()
+	if op != nil {
+		if _, err := op.Stat(ctx, filePath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
+	fullPath, err := s.localContain(filePath)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(fullPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // boolPtr bool 取指针
 func boolPtr(b bool) *bool { return ptrx.Of(b) }
 
