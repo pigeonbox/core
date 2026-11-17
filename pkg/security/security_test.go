@@ -40,9 +40,9 @@ func TestDownloadTokenRoundTrip(t *testing.T) {
 
 func TestDownloadTokenUnsigned(t *testing.T) {
 	// 未注入密钥：生成返回空串，校验恒 false（调用方按未启用处理）
-	saved := downloadTokenSecret
-	downloadTokenSecret = nil
-	defer func() { downloadTokenSecret = saved }()
+	saved := downloadTokenSecretPtr.Load()
+	downloadTokenSecretPtr.Store(nil)
+	defer func() { downloadTokenSecretPtr.Store(saved) }()
 
 	assert.Empty(t, GenerateDownloadToken("AbCd1234"))
 	assert.False(t, VerifyDownloadToken("AbCd1234", "1.aa"))
