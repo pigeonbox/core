@@ -164,122 +164,37 @@ jobs:
         if: always()
         run: bash scripts/live-storage-gate.sh
 
-      # ── L3 集成层：远端存储真后端验收（MinIO / S3 兼容）──
-      #
-      # # 为什么必须有这一层（L3 = 集成层）
+      # ── L3 集成层：远端存储真后端验收（S3 兼容）──
       #
       # 生态质量矩阵 L1–L8 里 L3 是集成层。本仓现状：
       #   · **WebDAV**：进程内真 WebDAV 服务（golang.org/x/net/webdav），
-      #     已在普通 `go test ./...` 里真跑（storage/webdav_integration_test.go，
-      #     不需要容器、不需要外部服务）；
+      #     已在普通 `go test ./...` 里真跑（storage/webdav_integration_test.go）；
       #   · **S3 兼容驱动（minio-go）**：此前只有单测级覆盖 + 管理端 probe，
       #     而 probe 只验「桶在不在、凭据对不对」，**从不读写对象** ⇒
       #     真后端的 PUT/GET/DELETE/覆盖写/分片合并/预签名直传直下**从未跑过**。
       # 2026-11-02 Azure Blob + HDFS 真机联调实测出 4 个「单测全绿、真机不可用」
       # 的缺陷（core#36 族）⇒ 同族后端必须有常态化真后端用例。
       #
-      # # 为什么并进 test job 而不是另开一个 job
+      # # 真后端选型：RustFS（MinIO 兼容的 S3 服务端），不是 MinIO 容器
       #
-      # 沿用本仓既有结论（见上面「换库真库验收」步的注释）：独立 job 连续多次在
-      # 「Set up job」阶段就红（action 解析抖动），而 test job 解析稳定
-      # ⇒ 不新增一条 action 解析路径。
+      # 2026-11-18 实测（不是猜测）：MinIO 官方三条分发路径现已**不可匿名获取**
+      #   · Docker Hub `minio/minio:<tag>` ⇒ 「pull access denied ... repository does not exist」；
+      #   · quay.io/minio/minio:<tag>      ⇒ 匿名取 manifest 401 UNAUTHORIZED
+      #     （连 `latest` 与 2024 年旧 tag 也一样 ⇒ 仓库级鉴权，非 tag 缺失）；
+      #   · dl.min.io/server/minio/...     ⇒ 410 Gone（官方归档已清空）。
+      # ⇒ 继续钉在 MinIO 容器上，这一步只会恒红；而恒红等于没有门禁。
+      # RustFS 是 MinIO 兼容的**真实** S3 服务端（Rust 实现），其 GitHub Release
+      # 资产带**官方 sha256**（GitHub API asset.digest）⇒ 可完全钉版、不碰镜像仓库、
+      # 不依赖匿名拉取权限。**被测面不变**：core 的 S3 驱动走 minio-go（S3 协议面）。
       #
-      # # 真服务不可达 ⇒ **红**（不是跳过）
-      #
-      # 跳过 = 假绿 = 真机验收形同虚设（同「换库真库验收」步的纪律）：
-      #   · 镜像拉取 / 摘要核对失败 ⇒ 红；
-      #   · 容器起不来或不就绪 ⇒ 红；
-      #   · 用例走 SKIP 分支 ⇒ 红（grep 断言没跳过）；
-      #   · env 缺失 ⇒ 红（PB_REQUIRE_REMOTE_STORAGE=1，与 hub 仓
-      #     REQUIRE_SOURCE_METRICS=1 同款纪律：「没扫到」≠「扫过且通过」）。
-      #
-      # # 镜像钉版
-      #
-      # tag 钉死（不用 :latest）+ **registry manifest digest 逐字比对**。
-      # 为什么不是 `sha256sum -c`：OCI 镜像没有可校验的「单文件」——
-      # `docker save` 出来的 tar 摘要随 docker 版本/平台漂移 ⇒ 用 registry
-      # manifest digest 比对（与 gitleaks 段「固定期望值比对」的纪律同款；
-      # docker pull 本身也按摘要校验过内容）。
-      #
-      # **镜像源 = quay.io/minio/minio**（MinIO 官方主仓）。2026-11-17 实录：
-      # Docker Hub 的 `minio/minio` 已不再提供该 release tag，runner 拉取直接报
-      # 「pull access denied for minio/minio, repository does not exist or may
-      # require 'docker login'」⇒ 钉在 Docker Hub 上等于这步恒红。
-      #
-      # **摘要 bootstrap 纪律**：MINIO_SHA_INDEX / MINIO_SHA_AMD64 是**仓内钉版值**；
-      # 两者皆空 ⇒ 本步打印实际摘要并**判红**（「没钉版」不许看起来像「钉过了」）
-      # ⇒ 首次换镜像源时据此回填，回填后即为逐字比对（供应链门禁）。
-      # 两个值分别是多架构 index 与 linux/amd64 单平台 manifest，任一命中即通过。
-      - name: L3 远端存储真后端验收（MinIO）
+      # 门禁逻辑（起服务 → 跑用例 → 判红 → 负对照自检）全在仓内脚本：
+      # scripts/l3-s3-backend.sh（`--selfcheck` 跑 8 项负对照，纯本地不联网）。
+      # 为什么并进 test job 而不是另开一个 job：本仓既有结论（见上面
+      # 「换库真库验收」步注释）——独立 job 连续多次在「Set up job」阶段就红，
+      # 而 test job 解析稳定 ⇒ 不新增一条 action 解析路径。
+      - name: L3 远端存储真后端验收（S3 兼容真后端）
         if: always()
-        env:
-          PB_TEST_MINIO_ENDPOINT: "127.0.0.1:9000"
-          PB_TEST_MINIO_ACCESS_KEY: "pbminio"
-          PB_TEST_MINIO_SECRET_KEY: "pbminio123"
-          PB_TEST_MINIO_BUCKET: "pigeonbox-l3-test"
-          PB_REQUIRE_REMOTE_STORAGE: "1"
-        run: |
-          set -uo pipefail
-          echo "拉 MinIO 镜像（钉版 tag）…"
-          docker rm -f pb-minio >/dev/null 2>&1 || true
-          MINIO_IMAGE="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
-          MINIO_SHA_INDEX=""
-          MINIO_SHA_AMD64=""
-          if ! docker pull "$MINIO_IMAGE"; then
-            echo "✗ MinIO 镜像拉取失败：$MINIO_IMAGE"; exit 1
-          fi
-          actual_sha="$(docker image inspect --format '{{index .RepoDigests 0}}' "$MINIO_IMAGE" | sed 's/.*@sha256://')"
-          ok_pin=0
-          for pin in "$MINIO_SHA_INDEX" "$MINIO_SHA_AMD64"; do
-            [ -n "$pin" ] || continue
-            [ "$actual_sha" = "$pin" ] && ok_pin=1
-          done
-          if [ "$ok_pin" != "1" ]; then
-            if [ -z "$MINIO_SHA_INDEX" ] && [ -z "$MINIO_SHA_AMD64" ]; then
-              echo "✗ 镜像摘要尚未钉版（bootstrap）：实际=sha256:$actual_sha"
-              echo "  请把该值填回本步的 MINIO_SHA_INDEX（多架构 index 口径）后重跑——钉版即供应链门禁"
-            else
-              echo "✗ 镜像摘要与钉版不符：实际=sha256:$actual_sha"
-              echo "  （期望 多架构 index=$MINIO_SHA_INDEX 或 linux/amd64 manifest=$MINIO_SHA_AMD64）"
-            fi
-            exit 1
-          fi
-          echo "✓ 镜像摘要核对通过：sha256:$actual_sha"
-
-          echo "起 MinIO 容器…"
-          docker run -d --name pb-minio \
-            -e MINIO_ROOT_USER=pbminio -e MINIO_ROOT_PASSWORD=pbminio123 \
-            -p 9000:9000 "$MINIO_IMAGE" server /data >/dev/null
-
-          echo "等待 MinIO 就绪…"
-          minio_ok=0
-          n=0
-          while [ "$n" -lt 60 ]; do
-            n=$((n + 1))
-            if curl -fsS -o /dev/null "http://127.0.0.1:9000/minio/health/live"; then minio_ok=1; break; fi
-            sleep 2
-          done
-          if [ "$minio_ok" != "1" ]; then
-            echo "✗ MinIO 未就绪（:9000）"
-            docker logs pb-minio 2>&1 | tail -20 || true
-            exit 1
-          fi
-          echo "✓ MinIO 就绪"
-
-          go test ./storage/ -run 'TestMinIOIntegration' -v -count=1 2>&1 | tee /tmp/pb-minio-l3.log
-          rc=${PIPESTATUS[0]}
-
-          # 「没扫到」不许看起来像「扫过且通过」：服务已就绪 ⇒ 用例不许走 SKIP。
-          if grep -q '^--- SKIP:' /tmp/pb-minio-l3.log; then
-            echo "✗ 真机用例被 SKIP（服务已就绪却跳过 ⇒ 判据没真正执行）"
-            exit 1
-          fi
-          if ! grep -qE '^--- PASS: TestMinIOIntegration' /tmp/pb-minio-l3.log; then
-            echo "✗ 未发现真机用例的执行记录（判据没被执行）"
-            exit 1
-          fi
-          [ "$rc" = "0" ] || { echo "✗ 真机用例失败（rc=$rc）"; exit 1; }
-          echo "✓ MinIO 真后端验收通过"
+        run: bash scripts/l3-s3-backend.sh
 
   # 生成物对账（CHECK=1）：沙箱里从 IDL 再生成 gen/ 并与提交物比对，IDL 改了没跑
   # gen-router.sh（或生成物被手改/多出杂散文件）即红。IDL 真相源=contracts，按

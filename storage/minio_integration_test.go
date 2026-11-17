@@ -7,6 +7,12 @@
 //   - 2026-11-02 Azure Blob + HDFS 的真机联调实测出 4 个「单测全绿、真机不可用」
 //     的缺陷 ⇒ 同族后端必须有常态化真后端用例。
 //
+// 真后端是谁：CI 里由 scripts/l3-s3-backend.sh 起 **RustFS**（MinIO 兼容的
+// 真实 S3 服务端，GitHub Release 资产 sha256 钉版）。2026-11-18 实测：MinIO 官方
+// 三条分发路径（Docker Hub / quay.io / dl.min.io）已不可匿名获取，继续钉 MinIO
+// 容器会让这步恒红（恒红 = 没门禁）。**被测面不变**：驱动走 minio-go（S3 协议面）。
+// 本机想用真 MinIO：把同样这四个 env 指到自己的 MinIO 端点即可跑同一批用例。
+//
 // 门控（env 四件套 + 强制开关）：
 //
 //	PB_TEST_MINIO_ENDPOINT     必填，例：127.0.0.1:9000（可带 http:// / https:// 前缀）
