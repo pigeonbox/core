@@ -26,7 +26,7 @@ import (
 
 // l8RelPathPattern 落盘相对路径的形态：uploads/<4位年>/<2位月>/<2位日>/<uuid><ext>
 var l8RelPathPattern = regexp.MustCompile(
-	"^uploads/\\d{4}/\\d{2}/\\d{2}/[0-9a-fA-F-]{36}(\\.[^/\\\\]*)?$")
+	`^uploads/\d{4}/\d{2}/\d{2}/[0-9a-fA-F-]{36}(\.[^/\\]*)?$`)
 
 // l8AssertNoEscape 断言路径结构合法且不逃逸 uploads 根。
 func l8AssertNoEscape(t *testing.T, rel, diskName string) {
