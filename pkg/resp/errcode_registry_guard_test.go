@@ -133,7 +133,7 @@ func contractsErrcodeSource(t *testing.T) string {
 func contractsErrcodeSourceByGoList(t *testing.T) (string, bool) {
 	t.Helper()
 	goBin := "go"
-	if rt := runtime.GOROOT(); rt != "" {
+	if rt := goEnvGOROOT(); rt != "" {
 		if _, err := os.Stat(filepath.Join(rt, "bin", "go")); err == nil {
 			goBin = filepath.Join(rt, "bin", "go")
 		}
@@ -154,6 +154,19 @@ func contractsErrcodeSourceByGoList(t *testing.T) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+// goEnvGOROOT 用 `go env GOROOT` 问出当前工具链的 GOROOT。
+//
+// 为什么不用 runtime.GOROOT()：Go 1.24 起该函数被标记废弃（staticcheck SA1019），
+// 官方口径是「用 `go env GOROOT` 找 GOROOT、用系统路径找 go 可执行文件」。
+// 语义与废弃前一致：拿到的是**同一个 go 工具链**的 GOROOT。
+func goEnvGOROOT() string {
+	out, err := exec.Command("go", "env", "GOROOT").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // contractsErrcodeSourceByBuildInfo 不起子进程的兜底：版本号取自
