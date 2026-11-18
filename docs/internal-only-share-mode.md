@@ -55,6 +55,14 @@
 代价（明确边界）：策略改成 `internal_only` **不追溯存量**（与 `deny` 同款口径：
 `deny` 只拦创建、不追溯存量）。
 
+**存量库升级**：`file_codes.internal_only` 列由 `model.AutoMigrateModels()`（清单含
+`FileCode`）在启动时自动补齐（GORM AutoMigrate 加缺失列）⇒ **无需手工迁移**；
+换库路径（`app/dbmigrate`）走同一份清单 ⇒ 目标库建表即带该列。
+
+**铸码面已核**：`app/share/service.go` 与 `app/share/multifile.go` 共三处铸码点，
+只有 `CreateShare` 这一处（本地导入链必经）会被 internal_only 拦下；文本分享与
+多文件通道无「来源目录」归因 ⇒ InternalOnly 恒 false ⇒ 铸码行为不变（无绕过面）。
+
 ## 错误码
 
 复用 `errcode.CodeUnauthorized`（10002），**不新增 contracts 码位** ⇒
