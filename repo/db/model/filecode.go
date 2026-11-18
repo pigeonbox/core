@@ -46,8 +46,21 @@ type FileCode struct {
 	// 多次导入落同一个值，用量才能按 dir_root 精确聚合（macOS 上 /var →
 	// /private/var 这类软链目录不归因分裂）。
 	DirRoot string `gorm:"size:255;index" json:"dir_root"`
-	Size    int64  `gorm:"default:0" json:"size"`
-	Text    string `gorm:"type:text" json:"text"`
+	// InternalOnly 仅站内标记（core#233 目录策略 share_mode=internal_only）。
+	//
+	// **建行时定型**：本地导入命中 internal_only 策略时置 true，此后**不再随策略
+	// 改动**——与 deny 同款口径（deny 只拦创建、不追溯存量）。
+	//
+	// 为什么存标记而不是取件时按 dir_root 查当前配置：
+	//   - 零 I/O：取件热路径不做 EvalSymlinks（策略目录可能被删/改名）；
+	//   - 零 fail-open：查配置时若策略目录不可达 ⇒ 解析失败 ⇒ 条目被跳过 ⇒
+	//     「仅站内」会退化成公开；存标记则不受文件系统状态影响；
+	//   - 与目录配额维度同款形态（都把目录维度的判定结果固化在行上）。
+	//
+	// json:"-"：服务端内部标记，**不进任何 API 响应**（避免改动既有响应形状）。
+	InternalOnly bool   `gorm:"default:false;not null" json:"-"`
+	Size         int64  `gorm:"default:0" json:"size"`
+	Text         string `gorm:"type:text" json:"text"`
 	// Note 文件备注（可空）：随分享展示给取件人（2026-10-12，文件+文本一并投递）
 	Note         string     `gorm:"type:text" json:"note"`
 	ExpiredAt    *time.Time `gorm:"index:idx_file_codes_status_expired,priority:2" json:"expired_at"`

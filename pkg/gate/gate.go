@@ -6,6 +6,8 @@
 //   - open_upload=false：拒绝全部匿名上传（登录用户不受影响）
 //   - upload.require_login=true：拒绝匿名上传（含 chunk/presign 等纯匿名通道）
 //   - download.require_login=true：拒绝匿名取件/下载
+//   - 目录策略 share_mode=internal_only（core#233）：该目录的分享**仅站内可取**
+//     ⇒ 内容交付面强制登录（匿名一律拒；已登录用户正常取件）
 package gate
 
 import (
@@ -125,4 +127,29 @@ func CheckDownloadLogin(userID *uint) error {
 		return ErrLoginRequired
 	}
 	return nil
+}
+
+// ErrInternalOnly 仅站内分享被匿名取件（core#233 目录策略 internal_only）。
+//
+// 复用 CodeUnauthorized（与 download.require_login 同一业务码）：前端据此弹
+// 「登录后取件」的口径已存在（全局 require_login 走同一码）⇒ 不新增错误码、
+// 不动 contracts 的码位表（新增码要走 contracts 发版链）。
+var ErrInternalOnly = newGateErr(errcode.CodeUnauthorized, "该分享仅限站内取件，请登录后重试")
+
+// CheckInternalOnlyLogin 目录策略「仅站内」的取件闸口（core#233 取件环）。
+//
+// internalOnly = 分享行的 model.FileCode.InternalOnly 标记（**建行时定型**：
+// 本地导入命中 internal_only 策略时置 true；其它通道恒 false ⇒ 不受约束）。
+// userID = 请求携带的已认证身份（nil = 匿名）。
+//
+// 口径：
+//   - 匿名（userID == nil）⇒ 拒（ErrInternalOnly，CodeUnauthorized ⇒ HTTP 401）；
+//   - 已登录 ⇒ 放行（站内专享：登录用户正常取件）；
+//   - 判定读**行上标记**而非当前配置 ⇒ 热路径零 I/O，且策略目录被删/改名时
+//     不会把「仅站内」退化成公开（fail-open）。
+func CheckInternalOnlyLogin(userID *uint, internalOnly bool) error {
+	if userID != nil || !internalOnly {
+		return nil
+	}
+	return ErrInternalOnly
 }

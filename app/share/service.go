@@ -75,6 +75,10 @@ type ShareFileReq struct {
 	// root（EvalSymlinks 形态）⇒ 同一策略的多次导入聚合到同一个目录。
 	// 其它通道恒为空串 ⇒ 不计入任何目录的用量。
 	DirRoot string
+	// InternalOnly 仅站内（core#233）：建行时定型——本地导入命中
+	// share_mode=internal_only 的策略时置 true ⇒ 该分享不铸公网取件码，
+	// 且内容交付面强制登录。其它通道恒 false（没有目录归因）。
+	InternalOnly bool
 }
 
 type ShareResp struct {
@@ -732,6 +736,7 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 			WrappedKey:   req.WrappedKey,
 			Note:         req.Note,
 			DirRoot:      req.DirRoot,
+			InternalOnly: req.InternalOnly,
 		}
 	})
 	if err != nil {
@@ -792,7 +797,11 @@ func (s *Service) CreateShare(ctx context.Context, req *ShareFileReq) (*ShareRes
 	resp := s.modelToResp(ctx, fileCode)
 	resp.Deduped = deduped
 	// 6 位取件码铸造（2026-10-07）：非致命——失败仅少一个快捷码，8 位分享码不受影响
-	if s.pickupMinter != nil {
+	//
+	// core#233 环一（仅站内）：internal_only 的分享**不铸公网取件码**——
+	// 6 位码是「拿到就能匿名取」的公网凭证；仅站内分享只保留 8 位分享码
+	// 作站内入口（取件强制登录见 pkg/gate.CheckInternalOnlyLogin）。
+	if s.pickupMinter != nil && !req.InternalOnly {
 		if pickup, err := s.pickupMinter.MintForShare(ctx, fileCode.Code, req.Text, req.Size, req.RequireAuth, req.ExpiredAt); err != nil {
 			logger.CtxWarn(ctx, "mint pickup code failed (non-fatal)",
 				"code", fileCode.Code, "err", err)
@@ -836,6 +845,27 @@ func (s *Service) GetFileByCode(ctx context.Context, code string) (*model.FileCo
 		return nil, err
 	}
 	return s.validateShareRecord(fileCode)
+}
+
+// GetFileByCodeFor 带身份的取件入口（core#233 取件环）：解析 + 校验 +
+// 「仅站内」闸口。
+//
+// userID = 请求携带的已认证身份（nil = 匿名）。目录策略 share_mode=internal_only
+// 的分享 ⇒ 匿名一律拒（gate.ErrInternalOnly ⇒ CodeUnauthorized ⇒ HTTP 401），
+// 已登录用户正常取件。
+//
+// 为什么单独一个入口而不是给 GetFileByCode 加参数：GetFileByCode 的调用方里
+// 有「无身份能力」的面（/share/download、/anonymous/*）——它们按「下载令牌即
+// 已认证」的口径单独判定（见 gen/handler/share 的 authorizeDownload）。
+func (s *Service) GetFileByCodeFor(ctx context.Context, code string, userID *uint) (*model.FileCode, error) {
+	fileCode, err := s.GetFileByCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	if err := gate.CheckInternalOnlyLogin(userID, fileCode.InternalOnly); err != nil {
+		return nil, err
+	}
+	return fileCode, nil
 }
 
 // ErrShareGone 取件码**确证不存在**（枚举防护记账的唯一正判据）。

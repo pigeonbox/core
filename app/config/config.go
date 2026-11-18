@@ -257,8 +257,10 @@ func validateSystemConfig(cfg *SystemConfig) error {
 	//   - root 必须是绝对路径（相对路径会按 CWD 解析成错误的绝对路径 ⇒ 策略
 	//     永不命中 ⇒ 静默失效——策略面最典型的坏法）；
 	//   - quota_bytes 不能为负（负数没有语义，且会让"超限"判定恒真）；
-	//   - share_mode 只允许 allow/deny（空串=allow）——与运行期闸口同款
-	//     fail-closed：拼错的新模式在**保存时**就被拒，不等到导入时才炸。
+	//   - share_mode 只允许 allow/deny/internal_only（空串=allow）——与运行期闸口
+	//     同款 fail-closed：拼错的新模式在**保存时**就被拒，不等到导入时才炸。
+	//     internal_only（core#233）=「仅站内」：不铸公网取件码 + 取件强制登录
+	//     （语义与不变量见 docs/internal-only-share-mode.md）。
 	// 校验失败 ⇒ ErrSharePolicyInvalid（handler 回 400 + 10001 + 点名字段）。
 	if cfg.Share != nil {
 		for i, p := range cfg.Share.DirectoryPolicies {
@@ -273,9 +275,9 @@ func validateSystemConfig(cfg *SystemConfig) error {
 				return fmt.Errorf("%w: share.directory_policies[%d].quota_bytes 不能为负（0=不限）", ErrSharePolicyInvalid, i)
 			}
 			switch strings.ToLower(strings.TrimSpace(p.ShareMode)) {
-			case "", "allow", "deny":
+			case "", conf.ShareModeAllow, conf.ShareModeDeny, conf.ShareModeInternalOnly:
 			default:
-				return fmt.Errorf("%w: share.directory_policies[%d].share_mode 非法: %q（只允许 allow/deny）",
+				return fmt.Errorf("%w: share.directory_policies[%d].share_mode 非法: %q（只允许 allow/deny/internal_only）",
 					ErrSharePolicyInvalid, i, p.ShareMode)
 			}
 		}

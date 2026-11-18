@@ -122,8 +122,12 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 	// DirRoot：命中目录策略时写**解析后的策略 root**（用量归因 + 运维可定位）；
 	// 未命中任何策略 ⇒ 空串（该行不计入任何目录的用量）。
 	dirRoot := ""
+	internalOnly := false
 	if matched != nil {
 		dirRoot = matched.Root
+		// core#233：命中「仅站内」策略 ⇒ 该分享**定型**为仅站内
+		//（不出公网取件码 + 取件强制登录）。建行时定型，与 deny 同款口径。
+		internalOnly = matched.IsInternalOnly()
 	}
 	share, serr := s.CreateShare(ctx, &ShareFileReq{
 		Channel:      channel,
@@ -131,6 +135,7 @@ func (s *Service) ImportLocalFile(ctx context.Context, opts ImportLocalOpts) (*S
 		Size:         written,
 		Text:         name,
 		DirRoot:      dirRoot,
+		InternalOnly: internalOnly,
 		ExpiredAt:    utils.CalculateExpireTime(opts.ExpireValue, opts.ExpireStyle),
 		ExpiredCount: utils.CalculateExpireCount(opts.ExpireStyle, opts.ExpireValue),
 		RequireAuth:  opts.RequireAuth,

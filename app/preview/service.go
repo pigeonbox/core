@@ -190,6 +190,11 @@ func (s *Service) authorizePickup(ctx context.Context, req GetReq) (*model.FileC
 		}
 		return nil, ErrShareNotFound
 	}
+	// core#233 取件环（仅站内）：预览是「拿内容」的面 ⇒ 与 select/download
+	// 同口径（鉴权先于业务状态判定：不该向未授权方泄露「存在/过期/次数耗尽」）。
+	if err := gate.CheckInternalOnlyLogin(req.UserID, fileCode.InternalOnly); err != nil {
+		return nil, err
+	}
 	// 统一取件闸门（pkg/gate.CheckPickup）：过期/管控/密码/防爆破锁定与
 	// select/download/匿名取件面同规格、同 (IP, code) 失败计数（此前本域
 	// 独立 scope "preview" 且用 FormatLockKey 不折叠取件码大小写，存在

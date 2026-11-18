@@ -656,8 +656,15 @@ type ShareConfig struct {
 //     覆盖面与既有账本同款：进程内互斥；**跨副本同刻并发不在此原语覆盖内**
 //     （与 core#151 uploadlock 同一边界，勿吹成跨副本安全）。
 //   - 边界：QuotaBytes=0 ⇒ 该目录不限额（只受 share_mode 约束）。
-//   - TODO：share_mode 扩展 internal_only（仅站内/强制登录取件，对应 issue 的
-//     「只许站内分享、不许生成公网取件码」）待拍板。
+//   - 已接线：ShareMode=internal_only ⇒ **仅站内**（core#233；语义两环都约束）：
+//     ① 生成环：本地导入命中该目录的分享**不铸造 6 位公网取件码**
+//     （只留 8 位分享码作站内入口；铸码收口在 app/share/service.go 的 CreateShare）；
+//     ② 取件环：该分享的**内容交付面**（取件查询/下载/预览/匿名取件）强制登录
+//     ——匿名一律拒，登录用户正常取件（闸口在 pkg/gate.CheckInternalOnlyLogin）。
+//     判定基准：**建行时定型**（model.FileCode.InternalOnly）⇒ 取件热路径零 I/O、
+//     不受策略目录被删/改名影响（按当前配置查会有 fail-open：目录不可达 ⇒ 条目
+//     被跳过 ⇒「仅站内」退化成公开）；与 deny 同款口径（只约束创建、不追溯存量——
+//     core#233 正文第 3 条「策略变更即刻生效于存量分享」明确不在本单范围）。
 type DirectoryPolicyConfig struct {
 	// Root 目录前缀（绝对路径，与 upload.local_import.roots 同形态）。
 	// 分隔符感知的前缀匹配：/data/music 匹配其自身与子路径，不匹配 /data/music2；
@@ -666,9 +673,26 @@ type DirectoryPolicyConfig struct {
 	// QuotaBytes 目录配额（字节，0=不限）。语义见类型注释（core#159 已接线）：
 	// 该目录下**存活**分享总字节超限 ⇒ 本地导入在落盘前被拒（30002/507）。
 	QuotaBytes int64 `mapstructure:"quota_bytes" json:"quota_bytes"`
-	// ShareMode 分享策略：""/allow（默认，放行）| deny（该目录禁止生成分享）。
+	// ShareMode 分享策略：""/allow（默认，放行）| deny（该目录禁止生成分享）
+	// | internal_only（仅站内：不铸公网取件码 + 内容交付面强制登录，core#233）。
 	// 其余取值 fail-closed（配置拼错不得静默放行）。
 	ShareMode string `mapstructure:"share_mode" json:"share_mode"`
+}
+
+// 目录策略的 share_mode 封闭词表（三档）。
+const (
+	// ShareModeAllow 放行（默认；空串等价于 allow）。
+	ShareModeAllow = "allow"
+	// ShareModeDeny 该目录禁止生成分享（本地导入在落盘前拒收）。
+	ShareModeDeny = "deny"
+	// ShareModeInternalOnly 仅站内：不铸公网取件码 + 内容交付面强制登录（core#233）。
+	ShareModeInternalOnly = "internal_only"
+)
+
+// IsInternalOnly 该策略是否为「仅站内」（internal_only）。
+// 大小写与首尾空白不敏感（与策略层的取值归一口径一致）。
+func (p DirectoryPolicyConfig) IsInternalOnly() bool {
+	return strings.EqualFold(strings.TrimSpace(p.ShareMode), ShareModeInternalOnly)
 }
 
 // DownloadConfig 下载配置

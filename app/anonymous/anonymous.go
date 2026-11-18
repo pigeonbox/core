@@ -329,6 +329,11 @@ func (s *Service) Retrieve(ctx context.Context, code, password, clientIP string)
 		return nil, ErrCodeNotFound
 	}
 	enrichMetaFromDB(meta, fc)
+	// core#233 取件环（仅站内）：匿名域**没有身份能力** ⇒ 仅站内分享一律拒
+	// （登录用户请走取件查询面 /share/select/，那里带可选身份）。
+	if err := gate.CheckInternalOnlyLogin(nil, fc.InternalOnly); err != nil {
+		return nil, err
+	}
 
 	// 4. 统一取件闸门（pkg/gate.CheckPickup）：过期（时间）→ 管控
 	// （blocked/pending_review）→ 未完成登记（FilePath 空且非文本，此前会先扣
@@ -422,6 +427,13 @@ func (s *Service) Peek(ctx context.Context, code string) (*CodeMeta, *model.File
 		return nil, nil, ErrCodeNotFound
 	}
 	enrichMetaFromDB(meta, fc)
+	// core#233 取件环（仅站内）：/anonymous/download 与 /anonymous/search 共用
+	// 本 Peek ⇒ 闸口放这里，两面一次拦住。
+	// ⚠️ 必须拦：匿名下载面会给「存在/未过期/未管控/无密码」的分享**签发下载
+	// 令牌** ⇒ 令牌反手解锁 /share/download ⇒ 不拦就是旁路。
+	if err := gate.CheckInternalOnlyLogin(nil, fc.InternalOnly); err != nil {
+		return nil, nil, err
+	}
 	// 过期分享与不存在同语义（统一 404 防探测），与 /share/metadata、Retrieve
 	// 对齐——此前仅查封禁不查过期，过期分享的元数据经本端点永久可查
 	// （v0.11.1 修复）。

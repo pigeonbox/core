@@ -485,7 +485,8 @@ func GetShare(ctx context.Context, c *app.RequestContext) {
 	// 指向同一条分享，锁定/失败记账统一在规范码上 ⇒ 同一把钥匙、爆破预算不翻倍。
 	// 此前预检用原始入参、记账用规范码 ⇒ 6 位码入口的 429 预检**恒不命中**
 	//（用户在 6 位码入口看不到预检触发的 429，只有深层闸门才拦）。
-	fileCode, err := getShareService().GetFileByCode(ctx, code)
+	// core#233 取件环（仅站内）：本面带可选身份 ⇒ 匿名取件被拒、登录用户放行。
+	fileCode, err := getShareService().GetFileByCodeFor(ctx, code, pickupUserID)
 	if err != nil {
 		var blocked *shareService.ShareBlockedError
 		if errors.As(err, &blocked) {
@@ -778,6 +779,13 @@ func authorizeDownload(ctx context.Context, c *app.RequestContext, code, token s
 		tokenValid = fingerprint != ""
 	}
 	if !tokenValid {
+		// core#233 取件环（仅站内）：没有有效下载令牌 ⇒ 本次是**匿名取件** ⇒
+		// 仅站内分享一律拒。（有有效令牌 ⇒ 放行：令牌只能由**已登录用户**在取件
+		// 查询面取得 ⇒ 等价已认证，与口令保护分享同款口径。）
+		if err := gate.CheckInternalOnlyLogin(nil, fileCode.InternalOnly); err != nil {
+			resp.NewTypedError(c, err)
+			return nil, "", false
+		}
 		// 密码保护分享：无有效令牌一律拒绝（令牌未启用的部署也拦下并明示，
 		// 不再提供 ?password= 旁路）
 		if fileCode.RequireAuth {
