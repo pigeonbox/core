@@ -142,3 +142,27 @@ func TestUpdateConfigJSON_ShareSegmentInvalidRejected(t *testing.T) {
 		})
 	}
 }
+
+// TestUpdateConfigJSON_ShareSegmentInternalOnlyAccepted internal_only 档位
+// 可经管理台保存（core#233）。
+//
+// 为什么要有这条：保存期校验此前只放行 allow/deny ⇒ internal_only 只能靠 yaml
+// 落库 ⇒ 「仅站内」在管理台不可达（功能半残：管理员在目录策略里看得见这一档
+// 的语义，却选不出来）。
+// 未知档位仍然 fail-closed（由 TestUpdateConfigJSON_ShareSegmentInvalidRejected
+// 钉住：拼错的 "dny" 保存即拒，不静默放行）。
+func TestUpdateConfigJSON_ShareSegmentInternalOnlyAccepted(t *testing.T) {
+	svc := newTestConfigService(t)
+	ctx := context.Background()
+	withYAMLShare(t)
+
+	require.NoError(t, svc.UpdateConfigJSON(ctx,
+		[]byte(`{"share":{"directory_policies":[{"root":"/data/secret","share_mode":"internal_only"}]}}`)))
+
+	got, err := svc.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, got.Share)
+	require.Len(t, got.Share.DirectoryPolicies, 1)
+	assert.Equal(t, "/data/secret", got.Share.DirectoryPolicies[0].Root)
+	assert.Equal(t, conf.ShareModeInternalOnly, got.Share.DirectoryPolicies[0].ShareMode)
+}

@@ -409,6 +409,32 @@
       ]
     },
     {
+      "id": "AZ-08",
+      "class": "authz",
+      "title": "目录策略 internal_only（仅站内）·生成环：命中该目录的分享不铸公网取件码，档位词表封闭",
+      "verdict": "internal_only 命中 ⇒ 6 位公网取件码不产出（只留 8 位分享码）；allow/空串仍照铸；档位取值归一（大小写/空白不敏感）；管理台保存期放行 internal_only 而未知档位仍 fail-closed",
+      "tests": [
+        "app/share/internalonly_test.go::TestImportLocalFile_InternalOnly_NoPublicPickupCode",
+        "app/share/internalonly_test.go::TestImportLocalFile_Allow_StillMintsPickupCode",
+        "conf/dirpolicy_test.go::TestDirectoryPolicyConfig_IsInternalOnly",
+        "app/config/share_segment_test.go::TestUpdateConfigJSON_ShareSegmentInternalOnlyAccepted"
+      ]
+    },
+    {
+      "id": "AZ-09",
+      "class": "authz",
+      "title": "目录策略 internal_only（仅站内）·取件环：匿名四面一律拒，登录身份放行",
+      "verdict": "闸口以建行时定型的行上标记为准：匿名（无身份）在闸口被拒（CodeUnauthorized ⇒ 401），已登录身份放行；非 internal_only 分享不受影响（不误伤）",
+      "tests": [
+        "pkg/gate/gate_internal_test.go::TestCheckInternalOnlyLogin",
+        "app/share/internalonly_test.go::TestGetFileByCodeFor_InternalOnly_RequiresLogin",
+        "app/share/internalonly_test.go::TestGetFileByCodeFor_NonInternalOnly_AnonymousAllowed",
+        "app/anonymous/internalonly_test.go::TestPeek_InternalOnly_Rejected",
+        "app/anonymous/internalonly_test.go::TestRetrieve_InternalOnly_Rejected",
+        "app/anonymous/internalonly_test.go::TestPeek_NonInternalOnly_Allowed"
+      ]
+    },
+    {
       "id": "SS-01",
       "class": "ssrf",
       "title": "出站拨号时刻复判（防 DNS rebinding / TOCTOU）",

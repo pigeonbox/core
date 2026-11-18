@@ -10,6 +10,15 @@
 // quota_bytes 已接线（core#159）：本地导入命中某条策略时，用量按
 // file_codes.dir_root 归因到该策略的 root，判定在**落盘前**做（见
 // app/share/quota_reserve.go 的 reserveDirectoryQuota）。
+//
+// internal_only 已接线（core#233）：语义**两环都约束**——
+// ① 生成环：不铸造 6 位公网取件码（收口在 app/share/service.go 的 CreateShare）；
+// ② 取件环：内容交付面强制登录（闸口在 pkg/gate.CheckInternalOnlyLogin）。
+// ⇒ 创建面（这里）**放行** internal_only：它不是「不许分享」，而是「分享仅站内可取」。
+//
+// 判定基准：命中与否在**创建时**定型，标记落在分享行上
+// （model.FileCode.InternalOnly，core#233）⇒ 取件热路径零 I/O、零 fail-open；
+// 与 deny 同款口径（只约束创建，不追溯存量）。
 package share
 
 import (
@@ -106,17 +115,23 @@ func resolveDirectoryPolicyMatch(policies []conf.DirectoryPolicyConfig, absPath 
 //
 // fail-closed：命中策略但 share_mode 是未知取值（拼错/未实现的新模式）⇒ 拒绝
 // 并点名配置错误——策略面宁可挡住也不静默放行（与审核 fail-closed 同哲学）。
+//
+// internal_only（core#233）**放行创建**：它是「仅站内可取」而不是「不许分享」；
+// 其约束落在铸码（生成环）与取件（取件环）两处，不在创建面。
 func checkDirectoryPolicyMatch(p *conf.DirectoryPolicyConfig) error {
 	if p == nil {
 		return nil
 	}
 	switch strings.ToLower(strings.TrimSpace(p.ShareMode)) {
-	case "", "allow":
+	case "", conf.ShareModeAllow:
 		return nil
-	case "deny":
+	case conf.ShareModeDeny:
 		return fmt.Errorf("该目录已禁止生成分享（目录策略 root=%s）", p.Root)
+	case conf.ShareModeInternalOnly:
+		// 仅站内：允许创建，但不出公网取件码 + 取件强制登录（core#233）。
+		return nil
 	default:
-		return fmt.Errorf("目录策略 root=%s 的 share_mode 非法: %q（只允许 allow/deny）", p.Root, p.ShareMode)
+		return fmt.Errorf("目录策略 root=%s 的 share_mode 非法: %q（只允许 allow/deny/internal_only）", p.Root, p.ShareMode)
 	}
 }
 
