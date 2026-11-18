@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "layer": "L6",
+  "title": "PigeonBox core 故障注入测试层矩阵（L6）",
+  "owner": "pigeonbox/core",
+  "updated": "2026-11-18",
+  "description": "L6 = 故障注入整层。本清单是机器可读的覆盖真相源：每个故障点一行（故障类型 / 注入点 / 必须成立的期望语义 / 归属测试），由 scripts/check-l6-fault-matrix.sh 与 pkg/l6/matrix_guard_test.go 双向对账（清单里的每条必须有仓内真实测试；仓内每个故障注入测试文件/函数必须登记进清单）。期望语义用受控词表（degrade / typed_error / no_half_state / recover / reject_clean），词表真相源在 internal/l6（Kind/Mode）；typed_error 必须同时声明业务码，且该码必须在 contracts/errcode 登记且映射到非 2xx HTTP 状态。注入工具箱（可注入存储 / Redis 宕机夹具 / typed error 断言）同在 internal/l6。",
+  "kinds": [
+    {"id": "storage_unreachable", "title": "存储失联（后端不可达 / 连接失败）", "min_cases": 3},
+    {"id": "storage_write_fail", "title": "写失败（磁盘满 ENOSPC 等价；用可控写失败模拟，不真填满磁盘）", "min_cases": 3},
+    {"id": "remote_unavailable", "title": "远端后端不可用（5xx / 后端进程停）", "min_cases": 3},
+    {"id": "redis_down", "title": "Redis 失联（宕机 / 连接失败）", "min_cases": 5},
+    {"id": "db_unavailable", "title": "数据库不可用（写入报错 / 连接断）", "min_cases": 1}
+  ],
+  "discovery": {
+    "description": "「什么算 L6 故障注入测试文件」的识别规则（路径 glob，模块根相对）。命中任一 glob 且未登记进 cases 的文件 ⇒ 门禁判红（新的故障注入用例必须登记进矩阵）。**/l6_*_test.go 覆盖全仓新增的 L6 用例文件；其余为既有故障注入文件（显式登记）。",
+    "globs": [
+      "**/l6_*_test.go",
+      "app/anonymous/redis_degrade_test.go",
+      "app/backup/export_backend_down_test.go",
+      "app/backup/export_probe_test.go",
+      "app/backup/scheduler_backend_down_test.go",
+      "app/backup/scheduler_diskfull_test.go",
+      "app/chunk/write_fail_test.go",
+      "app/presign/redis_degrade_test.go",
+      "app/presign/redis_unavailable_test.go",
+      "bootstrap/gcjobs_worker_fault_test.go",
+      "gen/handler/presign/abort_unavailable_test.go",
+      "pkg/gate/quota_redis_fault_test.go",
+      "pkg/middleware/lockout_failopen_test.go",
+      "pkg/middleware/ratelimit_periodlimit_test.go",
+      "storage/fault_driver_test.go",
+      "storage/object_exists_test.go",
+      "storage/opendal/recover_test.go"
+    ]
+  },
+  "cases": [
+    {"id": "FI-01", "kind": "redis_down", "point": "app/anonymous：取件码→分享码的 Redis 映射（加速缓存；真相源是 file_codes.pickup_code 列）", "title": "匿名取件面 Redis 失联 ⇒ 回落 DB 回源，铸造不回滚、分享不被误删，恢复后自动切回 Redis 路径", "verdict": "Redis 在本域的定位是「加速缓存」⇒ 失联时取件/铸造必须仍可用（回源 DB），不得整面不可用；铸造失败不得回滚 DB 取件码、不得物理删除刚建的分享行；Redis 恢复后自动切回 Redis 路径。", "expect": {"modes": ["degrade", "no_half_state", "recover"], "code": 0}, "tests": ["app/anonymous/redis_degrade_test.go::TestAnonymous_RedisOutage_RetrieveFallsBackToDB", "app/anonymous/redis_degrade_test.go::TestAnonymous_RedisOutage_MintStaysUsable", "app/anonymous/redis_degrade_test.go::TestAnonymous_RedisOutage_ShareCreationNotRolledBack", "app/anonymous/redis_degrade_test.go::TestAnonymous_RedisOutageThenRestart_ResumesRedisPath"]},
+    {"id": "FI-02", "kind": "redis_down", "point": "app/presign：直传会话（meta / 状态）的 Redis 存取", "title": "直传会话面 Redis 失联 ⇒ 失败不留半成品、不伪装成「会话不存在」、错误必须带 10006（服务不可用）", "verdict": "会话存储失联属「可恢复的基建故障」⇒ 错误必须是 pkg/errors.ServiceUnavailableError（业务码 10006 ⇒ HTTP 503），不得落成裸错误/500（前端无法区分「服务不可用」与「参数非法」）；Complete 不得把失联伪装成「会话不存在」；恢复后自动切回 Redis 路径。", "expect": {"modes": ["typed_error", "no_half_state", "recover"], "code": 10006}, "tests": ["app/presign/redis_degrade_test.go::TestPresign_RedisOutage_InitFailsWithoutHalfSession", "app/presign/redis_degrade_test.go::TestPresign_RedisOutage_InitErrorCarriesUnavailableCode", "app/presign/redis_degrade_test.go::TestPresign_RedisOutage_CompleteNotDisguisedAsNotFound", "app/presign/redis_degrade_test.go::TestPresign_RedisOutageThenRestart_RecoversRedisPath", "app/presign/redis_unavailable_test.go::TestPresign_RedisOutage_InitErrorContract"]},
+    {"id": "FI-03", "kind": "redis_down", "point": "gen/handler/presign：直传会话中止（Abort）面", "title": "Abort 面 Redis 失联 ⇒ 回 503（10006），不得回 500 或「会话不存在」", "verdict": "HTTP 面必须把「会话存储不可用」映射成 503 + 业务码 10006 ⇒ 客户端可区分「稍后重试」与「参数/状态错误」。", "expect": {"modes": ["typed_error"], "code": 10006}, "tests": ["gen/handler/presign/abort_unavailable_test.go::TestAbort_RedisOutage_Returns503Unavailable"]},
+    {"id": "FI-04", "kind": "redis_down", "point": "pkg/gate：匿名访客日配额计数器（Redis 计数）", "title": "匿名日配额 Redis 失联 ⇒ fail-open 降级、不误伤其它 IP、恢复后计数写回且不丢", "verdict": "配额是治理项不是安全项 ⇒ Redis 失联时 fail-open（放行并告警），不得把计数写坏（字节计数器不得被并发/失联写歪）；Redis 恢复后计数真的写回 Redis，额度不因降级而重置。", "expect": {"modes": ["degrade", "recover"], "code": 0}, "tests": ["pkg/gate/quota_redis_fault_test.go::TestQuotaRedis_OutageDegradesAndRecovers", "pkg/gate/quota_redis_fault_test.go::TestQuotaRedis_OutageKeepsOtherIPsCounting", "pkg/gate/quota_redis_fault_test.go::TestQuotaRedis_OutageDoesNotCorruptByteCounter"]},
+    {"id": "FI-05", "kind": "redis_down", "point": "pkg/middleware：登录/取件失败锁定计数器（Redis 计数 + TTL）", "title": "锁定计数器 Redis 失联 ⇒ fail-closed（不放行）且回落进程内存兜底，不得因 Redis 报错直接放行", "verdict": "失败锁定是**安全**闸门 ⇒ Redis 失联时必须 fail-closed（宁可多拒不可放行），同时把计数落到进程内存兜底；「Redis 说没锁就放行」是 2026-11-06 修过的 fail-open 缺陷，本组用例锁住该口径。", "expect": {"modes": ["reject_clean", "degrade"], "code": 0}, "tests": ["pkg/middleware/lockout_failopen_test.go::TestLockout_RedisDownFailsClosed", "pkg/middleware/lockout_failopen_test.go::TestLockout_RedisDownOtherKeyStillAllowed", "pkg/middleware/lockout_failopen_test.go::TestLockout_RedisHealthyStillShortCircuits", "pkg/middleware/lockout_failopen_test.go::TestLockout_MemoryModeUnaffected"]},
+    {"id": "FI-06", "kind": "redis_down", "point": "pkg/middleware：请求限流器（Redis 固定窗口计数）", "title": "限流器 Redis 失联 ⇒ 回落本地桶继续限流（不得变成不限流），恢复后自动切回 Redis 路径", "verdict": "Redis 固定窗口不可用时必须降级到进程本地桶（仍限流、仍用同一套令牌语义）；「回落」必须是**可观测**的（判定依据可查），不得静默变成「无限流」；Redis 恢复后自动切回共享窗口。", "expect": {"modes": ["degrade", "recover"], "code": 0}, "tests": ["pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_PeriodLimit_SetRedisDegradeAndRecover", "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_PeriodLimit_UnknownFallsBackAndAutoRecovers", "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_FallbackObserved", "pkg/middleware/ratelimit_periodlimit_test.go::TestRateLimiter_FallbackUsesLocalBucketState"]},
+    {"id": "FI-07", "kind": "storage_unreachable", "point": "storage：统一存储层（远端后端不可达）", "title": "存储后端失联 ⇒ 错误如实上抛，不得伪装成「对象不存在」", "verdict": "FileExists/ObjectExists 契约：真不存在 ⇒ (false, nil)；后端失联 ⇒ (false, err)。吞错成「不存在」会让排障面失真（运维看到「文件没了」而不是「后端挂了」），也让「真 404」与「后端失联」不可区分。", "expect": {"modes": ["reject_clean"], "code": 0}, "tests": ["storage/fault_driver_test.go::TestStorage_BackendDown_DoesNotDisguiseAsNotFound", "storage/object_exists_test.go::TestObjectExists_RemoteBackendDown_PropagatesError"]},
+    {"id": "FI-08", "kind": "storage_unreachable", "point": "app/share：取件/下载面的存储读取（GetFileReader）", "title": "取件面遇存储失联 ⇒ 错误如实上抛，不得被吞成「分享不存在/文件不存在」（404 语义）", "verdict": "「基建故障」与「资源不存在」必须可区分：存储失联时不得回 404 语义（否则运维按「文件丢了」排查，且存在性探测面失真）；本组用例锁住「错误原样上抛」这一层事实（HTTP 层的错误码映射见 known_gaps KG-01）。", "expect": {"modes": ["reject_clean"], "code": 0}, "tests": ["app/share/l6_storage_fault_test.go::TestL6_StorageUnreachable_ShareDomainDoesNotDisguiseAsNotFound"]},
+    {"id": "FI-09", "kind": "storage_write_fail", "point": "storage：分片写入 / 分片合并（磁盘满 ENOSPC 等价）", "title": "写失败（磁盘满）⇒ 不留半成品对象、分片不丢、同一 upload_id 可续传（不重新 init）", "verdict": "写失败必须不留半成品（对象要么完整要么不存在）；分片数据不得丢（续传铁律：upload_id 由 file_hash 派生，重新 init 会另起新会话使旧位图作废 ⇒ 只能对既有会话补片）。", "expect": {"modes": ["no_half_state"], "code": 0}, "tests": ["storage/fault_driver_test.go::TestStorage_ChunkWriteFailure_NoPartialObject", "storage/fault_driver_test.go::TestStorage_MergeFailureLeavesNoObject"]},
+    {"id": "FI-10", "kind": "storage_write_fail", "point": "app/chunk：分片写入与合并（磁盘满等价写失败）", "title": "分片写失败 ⇒ 上传进度不虚高、同一 upload_id 续传成功、合并失败不留半状态", "verdict": "写失败后进度必须不虚高（否则客户端以为传完了）；续传必须针对既有会话；合并失败不得留下「看起来成功」的物理对象。", "expect": {"modes": ["no_half_state"], "code": 0}, "tests": ["app/chunk/write_fail_test.go::TestChunk_StorageWriteFailure_NoHalfState", "app/chunk/write_fail_test.go::TestChunk_ResumeSameUploadIDAfterWriteFailure", "app/chunk/write_fail_test.go::TestChunk_MergeFailureLeavesNoHalfState"]},
+    {"id": "FI-11", "kind": "storage_write_fail", "point": "app/backup：备份包落盘（磁盘满等价写失败）", "title": "备份写失败（磁盘满）⇒ 旧包一个不删、不产生「看起来成功」的包、失败后仍到期重试", "verdict": "备份是「出事时的最后退路」⇒ 写失败时绝不能先删旧包（删了就等于没有备份）；失败必须被记录且下一轮到期自动重试。", "expect": {"modes": ["no_half_state", "recover"], "code": 0}, "tests": ["app/backup/scheduler_diskfull_test.go::TestScheduler_DiskFullKeepsOldBackups", "app/backup/scheduler_diskfull_test.go::TestScheduler_TempFileUnwritable_KeepsOldBackups", "app/backup/scheduler_diskfull_test.go::TestScheduler_RecoveredAfterWriteFailure"]},
+    {"id": "FI-12", "kind": "storage_write_fail", "point": "app/presign：直传会话的对象写入（SaveStream）", "title": "直传写失败（磁盘满）⇒ 对象账本不得推进到 committed、会话保持可重试", "verdict": "写失败后不得出现「账本已提交但对象没落盘」的假成功（blob 账本不得推进到 committed）；会话必须保持可重试（meta 不置 Complete ⇒ 客户端可重传同一 upload_id）。", "expect": {"modes": ["no_half_state"], "code": 0}, "tests": ["app/presign/l6_storage_fault_test.go::TestL6_StorageWriteFailure_PresignLedgerNotCommitted"]},
+    {"id": "FI-13", "kind": "remote_unavailable", "point": "storage/opendal：远端后端（503 → 直接停进程 → 恢复）", "title": "远端后端 503 / 停服 ⇒ 取件错误不伪装 404、真 404 仍判「不存在」、恢复后可继续", "verdict": "远端 5xx 与「对象不存在」必须可区分（否则线上会大面积假报 404）；后端恢复后读写恢复正常；真 404 仍判不存在。", "expect": {"modes": ["reject_clean", "recover"], "code": 0}, "tests": ["storage/opendal/recover_test.go::TestOperator_RemoteBackend503ThenRecovery", "storage/opendal/recover_test.go::TestOperator_RemoteBackendDeadThenRecovery", "storage/opendal/recover_test.go::TestOperator_RemoteBackend404IsStillNotFound"]},
+    {"id": "FI-14", "kind": "remote_unavailable", "point": "app/backup：导出（遍历后端对象生成备份包）", "title": "后端不可达 ⇒ 导出必须失败，不得静默把对象记成「缺失」", "verdict": "FileExists 吞错会把「后端宕机」记成「对象缺失」⇒ 产出一个「看起来成功」却缺对象的备份包（与备份的兜底定位直接冲突）。真缺失仍照记（缺失与故障是两回事）。", "expect": {"modes": ["reject_clean"], "code": 0}, "tests": ["app/backup/export_backend_down_test.go::TestExport_BackendDown_MustFailNotSilentlyOmitObjects", "app/backup/export_backend_down_test.go::TestExport_ObjectGenuinelyMissing_StillRecorded", "app/backup/export_probe_test.go::TestExport_BackendDown_WithoutProbe_FallbackStillFails", "app/backup/export_probe_test.go::TestExport_MissingObject_WithoutProbe_FallbackRecordsMissing", "app/backup/export_probe_test.go::TestExport_ProbeError_FailsExport", "app/backup/export_probe_test.go::TestExport_ProbeWinsOverSwallowingFileExists"]},
+    {"id": "FI-15", "kind": "remote_unavailable", "point": "app/backup：备份调度（后端不可达时的出包与轮转）", "title": "后端不可达 ⇒ 不出包、不轮转（旧包保留）", "verdict": "出包失败时不得轮转旧包（轮转即删除 ⇒ 一次故障把历史备份清空）。", "expect": {"modes": ["no_half_state"], "code": 0}, "tests": ["app/backup/scheduler_backend_down_test.go::TestScheduler_BackendDown_NoPackageNoPrune"]},
+    {"id": "FI-16", "kind": "remote_unavailable", "point": "bootstrap：GC 后台任务（存储不可用时的任务状态机）", "title": "GC 任务遇存储不可用 ⇒ 失败被记录、下一轮自动恢复、同一任务不重复执行（租约 CAS）", "verdict": "后台任务的失败必须被记录（不得静默吞掉变成「成功清理」）；失败后下一轮到期自动重试；租约 CAS 保证同一任务不并发重复执行。", "expect": {"modes": ["recover", "no_half_state"], "code": 0}, "tests": ["bootstrap/gcjobs_worker_fault_test.go::TestGCJobsWorker_StorageUnavailable_FailsThenRecovers", "bootstrap/gcjobs_worker_fault_test.go::TestGCJobsWorker_ConcurrentWorkerDoesNotDuplicate"]},
+    {"id": "FI-17", "kind": "db_unavailable", "point": "bootstrap：GC 后台任务的状态落库（DB 写入报错）", "title": "DB 写入报错 ⇒ 任务状态不得被改坏（错误上抛、状态保持原样）", "verdict": "DB 故障时后台任务必须如实报错并保持任务状态原样（不得把「写状态失败」记成「任务已完成」）。", "expect": {"modes": ["reject_clean"], "code": 0}, "tests": ["bootstrap/gcjobs_worker_fault_test.go::TestGCJobsWorker_DBBroken_ReportsErrorAndKeepsTaskState"]},
+    {"id": "FI-18", "kind": "storage_unreachable", "point": "app/chunk：合并产物的读取（OpenMerged / GetFileReader，哈希计算与魔数复检阶段）", "title": "分片合并产物读取时遇存储失联 ⇒ 错误如实上抛，不得伪装成「文件为空/校验通过」或「文件不存在」", "verdict": "合并后的对象要重开读流做哈希计算与魔数复检；此时后端失联必须如实上抛——吞成空流会让魔数复检放行任意内容（安全洞），吞成「不存在」会让运维按「文件丢了」排查。", "expect": {"modes": ["reject_clean"], "code": 0}, "tests": ["app/chunk/l6_storage_fault_test.go::TestL6_StorageUnreachable_ChunkMergedReadDoesNotDisguiseAsEmpty"]}
+  ],
+  "out_of_layer": [
+    {"id": "OO-01", "title": "Pod Kill（进程被 SIGKILL / 容器被杀）", "reason": "进程被杀时**没有任何 Go 代码能执行** ⇒ core 内无法注入该故障（只能测「被杀之后」的状态，由下一轮恢复逻辑兜底）。「被杀前如何收尾」（优雅停机 SIGTERM drain、就绪探针先摘流量、终止宽限期）属编排层。", "owner": "charts 侧（K8s Deployment 的 liveness/readiness 探针 + terminationGracePeriodSeconds + preStop）+ hub 的部署模板；core 侧只负责「被 SIGTERM 时把在途请求做完」。"},
+    {"id": "OO-02", "title": "断网（网络分区 / NetworkPolicy 拦截 / 防火墙丢包）", "reason": "core 内能注入的是**依赖不可达**（连接被拒/超时）＝本层的 storage_unreachable / redis_down 两类；真正的网络分区（包被静默丢弃、连接既不建立也不失败）需要 eBPF/netem 级别的网络编排，进程内无法构造。", "owner": "charts 侧（NetworkPolicy / 云厂商安全组）+ 部署环境的网络策略；core 侧以 storage_unreachable / redis_down 覆盖等价的「依赖失联」语义。"},
+    {"id": "OO-03", "title": "磁盘满（物理盘真实写满）", "reason": "真实写满会污染整机（含构建缓存、临时目录、其它仓的 checkout），不可复现且无法回收 ⇒ 本层用**可控写失败**模拟（ENOSPC 等价哨兵错误，internal/l6.ErrNoSpace）。物理容量治理（PVC 配额、扩容策略）属部署层。", "owner": "charts 侧（PVC requests/limits + 扩容策略）+ 运维容量巡检；core 侧以 storage_write_fail 覆盖等价的「写失败」语义。"},
+    {"id": "OO-04", "title": "数据库整机不可用（Postgres/MySQL 进程挂掉）", "reason": "core 内注入的是**等价故障面**（DB 写入报错 ⇒ dao 层返回 error），已在 db_unavailable 一类登记；整机故障的恢复（重启、复制切换、连接池重建）属数据库与部署层。", "owner": "部署层（数据库高可用/备份恢复演练）；core 侧以 db_unavailable 覆盖等价的「DB 报错」语义。"}
+  ],
+  "known_gaps": [
+    {"id": "KG-01", "title": "取件/下载面遇存储失联仍落 500 + CodeInternal，未复用 10006（与 presign 面口径不一致）", "detail": "gen/handler/share/download_range.go 的下载分支在 OpenShareDownload 失败时回 500 + errcode.CodeInternal，并把底层错误原文拼进 message；同仓 presign 面已按 pkg/errors.ServiceUnavailableError（10006 ⇒ 503）口径处理（见 FI-02/FI-03）。本 PR 只落测试框架与清单，不改生产代码 ⇒ 登记为已知缺口。", "owner": "后续单独提 PR 收口（把存储失联映射到 10006，并停止把底层错误原文回给客户端）。"}
+  ],
+  "exemptions": [
+    {"file": "pkg/middleware/ratelimit_periodlimit_test.go", "func": "TestRateLimiter_PeriodLimit_OverQuotaWritesBlock", "reason": "限流窗口的正常路径用例（配额命中写封禁），不是故障注入用例。"},
+    {"file": "pkg/middleware/ratelimit_periodlimit_test.go", "func": "TestRateLimiter_PeriodLimit_HitQuotaAndWindowReset", "reason": "限流窗口的正常路径用例（窗口重置），不是故障注入用例。"},
+    {"file": "pkg/middleware/ratelimit_periodlimit_test.go", "func": "TestRateLimiter_PeriodLimit_QuotaHotUpdate", "reason": "限流配额热更用例（正常路径），不是故障注入用例。"}
+  ],
+  "helpers": [
+  ]
+}
