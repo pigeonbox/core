@@ -645,8 +645,11 @@
       "id": "RE-03",
       "class": "resource_exhaustion",
       "title": "匿名日配额：次数/字节双维度与跨日翻篇",
-      "verdict": "匿名配额按次数与字节两个维度封顶；跨日重置；并发下计数不超发",
+      "verdict": "匿名配额按次数与字节两个维度封顶；跨日重置；并发下计数不超发（内存面与 Redis 面各自恰好放行上限个数，字节计数一条不丢）",
       "tests": [
+        "pkg/gate/quota_concurrent_test.go::TestCheckAnonymousQuota_ConcurrentBytesNotLost",
+        "pkg/gate/quota_concurrent_test.go::TestCheckAnonymousQuota_ConcurrentExactlyMaxCountAllowed",
+        "pkg/gate/quota_concurrent_test.go::TestCheckAnonymousQuota_ConcurrentRedisExactlyMaxCountAllowed",
         "pkg/gate/quota_test.go::TestCheckAnonymousQuota_BytesLimit",
         "pkg/gate/quota_test.go::TestCheckAnonymousQuota_CountLimit",
         "pkg/gate/quota_test.go::TestCheckAnonymousQuota_DateRollover",
