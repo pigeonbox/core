@@ -408,7 +408,12 @@ func (f *RedisFixture) Miniredis() *miniredis.Miniredis { return f.mr }
 func (f *RedisFixture) Down() { f.mr.Close() }
 
 // Up 制造 Redis 恢复（重启同一实例，数据保留）。
-func (f *RedisFixture) Up() { f.mr.Restart() }
+//
+// **返回 error 而不是静默忽略**：miniredis 的 Restart 在端口仍被占用等情形下
+// 会失败 ⇒ 若把错误吞掉，用例会看到「恢复后仍然失败」，而真因其实是
+// 「Redis 根本没恢复」⇒ 断言从「恢复语义」退化成「启动失败」，是假绿。
+// ⇒ 恢复失败必须让用例**显式红**，而不是伪装成业务语义不成立。
+func (f *RedisFixture) Up() error { return f.mr.Restart() }
 
 // ==================== 断言词汇 ====================
 
